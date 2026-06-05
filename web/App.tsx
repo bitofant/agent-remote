@@ -22,6 +22,8 @@ export function App() {
   const [newFolder, setNewFolder] = useState("");
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  // Off-canvas sidebar drawer (mobile only; ignored on desktop via CSS).
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const knownIds = useRef<Set<string>>(new Set());
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -77,6 +79,7 @@ export function App() {
   const openFolder = (path: string) => {
     setActiveFolder(path);
     setSelectorOpen(false);
+    setSidebarOpen(false);
     client.addFolder(path); // bump recency
   };
 
@@ -86,6 +89,7 @@ export function App() {
     client.addFolder(path);
     setActiveFolder(path);
     setNewFolder("");
+    setSidebarOpen(false);
   };
 
   const sessionsInFolder = sessions.filter((s) => s.cwd === activeFolder);
@@ -98,7 +102,20 @@ export function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      <button
+        className="menu-toggle"
+        onClick={() => setSidebarOpen(true)}
+        aria-label="Open menu"
+      >
+        ☰
+      </button>
+      {sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <h1>agent-remote</h1>
 
         <section>
