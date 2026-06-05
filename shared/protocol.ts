@@ -19,12 +19,21 @@ export interface SessionInfo {
   createdAt: number;
 }
 
+/** A working directory the user has launched sessions in, remembered across
+ * restarts and ordered by most recent use. */
+export interface FolderInfo {
+  path: string;
+  lastUsedAt: number;
+}
+
 /** Messages the browser sends to the backend. */
 export type ClientMessage =
   | { type: "start"; harnessId: string; cwd?: string }
   | { type: "input"; sessionId: string; data: string }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
-  | { type: "stop"; sessionId: string };
+  | { type: "stop"; sessionId: string }
+  | { type: "addFolder"; path: string }
+  | { type: "removeFolder"; path: string };
 
 /** Messages the backend sends to the browser. */
 export type ServerMessage =
@@ -32,4 +41,5 @@ export type ServerMessage =
   | { type: "started"; session: SessionInfo }
   | { type: "output"; sessionId: string; data: string }
   | { type: "exit"; sessionId: string; exitCode: number | null }
+  | { type: "folders"; folders: FolderInfo[] }
   | { type: "error"; message: string; sessionId?: string };

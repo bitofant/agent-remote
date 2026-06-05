@@ -19,6 +19,7 @@ export interface Config {
   harnesses: {
     claude: HarnessConfig;
     pi: HarnessConfig;
+    terminal: HarnessConfig;
   };
   llm: LlmConfig;
   server?: {

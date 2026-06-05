@@ -60,6 +60,12 @@ if [ "$PI_ENABLED" = "true" ]; then
   PI_COMMAND="$(ask "  Command to launch pi" "pi")"
 fi
 
+TERMINAL_ENABLED="$(ask_yn "Expose a plain terminal (shell)?" "y")"
+TERMINAL_COMMAND="${SHELL:-bash}"
+if [ "$TERMINAL_ENABLED" = "true" ]; then
+  TERMINAL_COMMAND="$(ask "  Shell to launch for terminal sessions" "${SHELL:-bash}")"
+fi
+
 # --- LLM provider ----------------------------------------------------------
 
 echo
@@ -91,6 +97,10 @@ cat > "$CONFIG_FILE" <<EOF
     "pi": {
       "enabled": $PI_ENABLED,
       "command": "$(json_escape "$PI_COMMAND")"
+    },
+    "terminal": {
+      "enabled": $TERMINAL_ENABLED,
+      "command": "$(json_escape "$TERMINAL_COMMAND")"
     }
   },
   "llm": {
