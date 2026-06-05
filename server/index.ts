@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { loadConfig } from "./config.js";
 import { buildAdapters } from "./adapters/registry.js";
 import { SessionManager } from "./sessions/manager.js";
+import { listFolders, upsertFolder, removeFolder } from "./db.js";
 import type {
   ClientMessage,
   HarnessInfo,
@@ -61,10 +62,21 @@ server.on("upgrade", (req, socket, head) => {
   // Other upgrades (e.g. Vite HMR) are handled by Vite's own upgrade listener.
 });
 
+// All live connections, so folder changes can be broadcast to every browser
+// (folder history is server-owned, shared state — not per-connection).
+const connections = new Set<WebSocket>();
+function broadcastFolders(): void {
+  const msg: ServerMessage = { type: "folders", folders: listFolders() };
+  const raw = JSON.stringify(msg);
+  for (const ws of connections) ws.send(raw);
+}
+
 wss.on("connection", (ws: WebSocket) => {
   const send = (msg: ServerMessage) => ws.send(JSON.stringify(msg));
+  connections.add(ws);
 
-  // Bring the new client up to date: current sessions, then replay scrollback.
+  // Bring the new client up to date: folders, current sessions, then scrollback.
+  send({ type: "folders", folders: listFolders() });
   send({ type: "sessions", sessions: manager.list() });
   for (const session of manager.list()) {
     const buffer = manager.buffer(session.id);
@@ -86,9 +98,14 @@ wss.on("connection", (ws: WebSocket) => {
     }
     try {
       switch (msg.type) {
-        case "start":
-          manager.start(msg.harnessId, { cwd: msg.cwd || process.cwd() });
+        case "start": {
+          const cwd = msg.cwd || process.cwd();
+          manager.start(msg.harnessId, { cwd });
+          // Launching a session registers/bumps its folder for everyone.
+          upsertFolder(cwd);
+          broadcastFolders();
           break;
+        }
         case "input":
           manager.input(msg.sessionId, msg.data);
           break;
@@ -98,13 +115,24 @@ wss.on("connection", (ws: WebSocket) => {
         case "stop":
           manager.stop(msg.sessionId);
           break;
+        case "addFolder":
+          upsertFolder(msg.path);
+          broadcastFolders();
+          break;
+        case "removeFolder":
+          removeFolder(msg.path);
+          broadcastFolders();
+          break;
       }
     } catch (err) {
       send({ type: "error", message: (err as Error).message });
     }
   });
 
-  ws.on("close", unsubscribe);
+  ws.on("close", () => {
+    unsubscribe();
+    connections.delete(ws);
+  });
 });
 
 // --- Static serving of the built frontend (production) ---------------------

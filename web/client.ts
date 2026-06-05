@@ -1,10 +1,12 @@
 import type {
   ClientMessage,
+  FolderInfo,
   ServerMessage,
   SessionInfo,
 } from "../shared/protocol";
 
 type SessionsListener = (sessions: SessionInfo[]) => void;
+type FoldersListener = (folders: FolderInfo[]) => void;
 type OutputListener = (data: string) => void;
 
 // Single WebSocket connection multiplexing every session. Output is buffered
@@ -13,8 +15,10 @@ type OutputListener = (data: string) => void;
 export class Client {
   private ws?: WebSocket;
   private sessions: SessionInfo[] = [];
+  private folders: FolderInfo[] = [];
   private buffers = new Map<string, string>();
   private sessionsListeners = new Set<SessionsListener>();
+  private foldersListeners = new Set<FoldersListener>();
   private outputListeners = new Map<string, Set<OutputListener>>();
 
   connect(): void {
@@ -56,6 +60,10 @@ export class Client {
         );
         this.emitSessions();
         break;
+      case "folders":
+        this.folders = msg.folders;
+        this.emitFolders();
+        break;
       case "error":
         console.error("agent-remote backend error:", msg.message);
         break;
@@ -82,6 +90,12 @@ export class Client {
   stop(sessionId: string): void {
     this.send({ type: "stop", sessionId });
   }
+  addFolder(path: string): void {
+    this.send({ type: "addFolder", path });
+  }
+  removeFolder(path: string): void {
+    this.send({ type: "removeFolder", path });
+  }
 
   // --- subscriptions -------------------------------------------------------
 
@@ -89,6 +103,12 @@ export class Client {
     this.sessionsListeners.add(cb);
     cb(this.sessions);
     return () => this.sessionsListeners.delete(cb);
+  }
+
+  onFolders(cb: FoldersListener): () => void {
+    this.foldersListeners.add(cb);
+    cb(this.folders);
+    return () => this.foldersListeners.delete(cb);
   }
 
   /**
@@ -115,5 +135,9 @@ export class Client {
 
   private emitSessions(): void {
     for (const cb of this.sessionsListeners) cb(this.sessions);
+  }
+
+  private emitFolders(): void {
+    for (const cb of this.foldersListeners) cb(this.folders);
   }
 }
