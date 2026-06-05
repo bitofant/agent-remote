@@ -12,6 +12,11 @@ fi
 
 # Run the server directly via tsx (single node process for a clean pid). Serves
 # the prebuilt dist/web, so run ./rebuild.sh first.
-nohup node --import tsx server/index.ts >> "$LOGFILE" 2>&1 &
+CMD="node --import tsx server/index.ts"
+if [ "${1:-}" = "dev" ]; then
+  CMD="./node_modules/.bin/tsx watch server/index.ts --dev"
+fi
+
+nohup $CMD >> "$LOGFILE" 2>&1 &
 echo $! > "$PIDFILE"
-echo "agent-remote started (pid $!, log: $LOGFILE)"
+echo "agent-remote started (pid $!, log: $LOGFILE)$([ "${1:-}" = "dev" ] && echo " in dev mode")"
