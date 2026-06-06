@@ -8,35 +8,60 @@ import type {
 type SessionsListener = (sessions: SessionInfo[]) => void;
 type FoldersListener = (folders: FolderInfo[]) => void;
 type OutputListener = (data: string) => void;
+type ResetListener = () => void;
+
+interface OutputSubscriber {
+  onData: OutputListener;
+  onReset: ResetListener;
+}
 
 // Single WebSocket connection multiplexing every session. Output is buffered
 // per session so a terminal mounting late (e.g. after switching tabs, or on
 // reconnect) can be replayed without losing or duplicating bytes.
 export class Client {
   private ws?: WebSocket;
+  private shouldReconnect = false;
   private sessions: SessionInfo[] = [];
   private folders: FolderInfo[] = [];
   private buffers = new Map<string, string>();
   private sessionsListeners = new Set<SessionsListener>();
   private foldersListeners = new Set<FoldersListener>();
-  private outputListeners = new Map<string, Set<OutputListener>>();
+  private outputListeners = new Map<string, Set<OutputSubscriber>>();
 
   connect(): void {
+    this.shouldReconnect = true;
+    // Idempotent: never run a second socket alongside an existing one (e.g.
+    // React StrictMode invoking the connect effect twice), or the same messages
+    // get handled twice and terminals duplicate every byte.
+    if (this.ws) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     this.ws = ws;
     ws.onmessage = (e) => this.handle(JSON.parse(e.data) as ServerMessage);
     ws.onclose = () => {
+      // Ignore a stale socket's close once a newer one has superseded it.
+      if (this.ws !== ws) return;
       this.ws = undefined;
-      setTimeout(() => this.connect(), 1000);
+      if (this.shouldReconnect) setTimeout(() => this.connect(), 1000);
     };
+  }
+
+  disconnect(): void {
+    this.shouldReconnect = false;
+    const ws = this.ws;
+    this.ws = undefined;
+    ws?.close();
   }
 
   private handle(msg: ServerMessage): void {
     switch (msg.type) {
       case "sessions":
-        // Fresh connection: drop stale client buffers, server will replay.
+        // Fresh connection (incl. reconnect): drop stale client buffers and
+        // reset mounted terminals before the server replays scrollback, so the
+        // replay rebuilds each terminal rather than duplicating its contents.
         this.buffers.clear();
+        for (const set of this.outputListeners.values())
+          set.forEach((sub) => sub.onReset());
         this.sessions = msg.sessions;
         this.emitSessions();
         break;
@@ -49,7 +74,9 @@ export class Client {
       case "output": {
         const prev = this.buffers.get(msg.sessionId) ?? "";
         this.buffers.set(msg.sessionId, prev + msg.data);
-        this.outputListeners.get(msg.sessionId)?.forEach((cb) => cb(msg.data));
+        this.outputListeners
+          .get(msg.sessionId)
+          ?.forEach((sub) => sub.onData(msg.data));
         break;
       }
       case "exit":
@@ -115,10 +142,13 @@ export class Client {
    * Subscribe to a session's output. Returns the buffered scrollback so far
    * plus an unsubscribe; reading the buffer and registering the listener
    * happens synchronously, so no bytes are dropped or doubled in between.
+   * `onReset` fires when the server is about to replay scrollback (on
+   * reconnect) and the terminal should clear itself first.
    */
   subscribeOutput(
     sessionId: string,
-    cb: OutputListener,
+    onData: OutputListener,
+    onReset: ResetListener,
   ): { initial: string; unsubscribe: () => void } {
     const initial = this.buffers.get(sessionId) ?? "";
     let set = this.outputListeners.get(sessionId);
@@ -126,10 +156,11 @@ export class Client {
       set = new Set();
       this.outputListeners.set(sessionId, set);
     }
-    set.add(cb);
+    const sub: OutputSubscriber = { onData, onReset };
+    set.add(sub);
     return {
       initial,
-      unsubscribe: () => set!.delete(cb),
+      unsubscribe: () => set!.delete(sub),
     };
   }
 

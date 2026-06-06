@@ -38,6 +38,7 @@ export function App() {
     return () => {
       offSessions();
       offFolders();
+      client.disconnect();
     };
   }, [client]);
 
