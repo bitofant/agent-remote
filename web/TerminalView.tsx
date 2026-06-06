@@ -31,8 +31,10 @@ export function TerminalView({
     term.loadAddon(fit);
     term.open(container);
 
-    const { initial, unsubscribe } = client.subscribeOutput(sessionId, (data) =>
-      term.write(data),
+    const { initial, unsubscribe } = client.subscribeOutput(
+      sessionId,
+      (data) => term.write(data),
+      () => term.reset(),
     );
     if (initial) term.write(initial);
 
