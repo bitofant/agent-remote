@@ -7,6 +7,7 @@ import { loadConfig } from "./config.js";
 import { buildAdapters } from "./adapters/registry.js";
 import { SessionManager } from "./sessions/manager.js";
 import { listFolders, upsertFolder, removeFolder } from "./db.js";
+import { authedUser, handleAuthRoute } from "./auth.js";
 import type {
   ClientMessage,
   HarnessInfo,
@@ -36,7 +37,21 @@ type Middleware = (
 let viteMiddlewares: Middleware | undefined;
 
 const server = createHttpServer((req, res) => {
+  // Auth routes (login/register/logout/me) are always reachable.
+  void handleAuthRoute(req, res, config).then((handled) => {
+    if (handled) return;
+    routeAfterAuth(req, res);
+  });
+});
+
+function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
   if (req.method === "GET" && req.url === "/api/harnesses") {
+    if (!authedUser(req, config)) {
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "Not logged in." }));
+      return;
+    }
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(harnesses));
     return;
@@ -49,7 +64,7 @@ const server = createHttpServer((req, res) => {
     return;
   }
   serveStatic(req.url ?? "/", res);
-});
+}
 
 // --- WebSocket (/ws) -------------------------------------------------------
 // noServer + manual upgrade routing so our /ws coexists with Vite's HMR socket
@@ -57,6 +72,13 @@ const server = createHttpServer((req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
   if (req.url === "/ws") {
+    // The core security boundary: no PTY is reachable without a valid session.
+    // Cookies ride along on the upgrade request (same-origin) automatically.
+    if (!authedUser(req, config)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
   }
   // Other upgrades (e.g. Vite HMR) are handled by Vite's own upgrade listener.

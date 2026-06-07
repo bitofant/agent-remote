@@ -85,6 +85,21 @@ done
 LLM_BASE_URL="$(ask "  $provider base URL (OpenAI-compatible)" "$default_url")"
 LLM_MODEL="$(ask "  Model name" "")"
 
+# --- users -----------------------------------------------------------------
+# Enabled usernames. Registering an account is allowed for anyone, but it stays
+# unusable until its name appears here.
+
+echo
+USERS_RAW="$(ask "Enabled usernames (comma-separated)" "")"
+USERS_JSON=""
+IFS=',' read -ra _users <<< "$USERS_RAW"
+for u in "${_users[@]}"; do
+  u="$(printf '%s' "$u" | sed 's/^ *//;s/ *$//')"  # trim
+  [ -z "$u" ] && continue
+  [ -n "$USERS_JSON" ] && USERS_JSON="$USERS_JSON, "
+  USERS_JSON="$USERS_JSON\"$(json_escape "$u")\""
+done
+
 # --- write config.json -----------------------------------------------------
 
 cat > "$CONFIG_FILE" <<EOF
@@ -107,7 +122,8 @@ cat > "$CONFIG_FILE" <<EOF
     "provider": "$(json_escape "$provider")",
     "baseUrl": "$(json_escape "$LLM_BASE_URL")",
     "model": "$(json_escape "$LLM_MODEL")"
-  }
+  },
+  "users": [$USERS_JSON]
 }
 EOF
 
