@@ -16,6 +16,10 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  /* Lock the document: all scrolling happens inside the session content,
+     never the page itself (keeps title bar/menu fixed when the mobile
+     keyboard is up). */
+  overflow: hidden;
 }
 
 body {
@@ -26,7 +30,12 @@ body {
 
 .app {
   display: flex;
+  /* Track the *visible* viewport so the layout shrinks to fit above the
+     mobile keyboard instead of letting the page scroll. dvh falls back to
+     the static 100% on browsers without dynamic-viewport support. */
   height: 100%;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -436,6 +445,36 @@ body {
   height: 100%;
   color: var(--muted);
   font-size: 14px;
+}
+
+/* --- terminal key bar (shown above the mobile keyboard) ------------------ */
+
+.key-bar {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  overflow-x: auto;
+}
+
+.key-button {
+  flex: 1 0 auto;
+  min-width: 44px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: ui-monospace, monospace;
+  cursor: pointer;
+}
+
+.key-button:active {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* --- mobile: sidebar becomes an off-canvas drawer ------------------------ */
