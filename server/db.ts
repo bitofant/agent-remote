@@ -114,3 +114,16 @@ export function getAuthSession(token: string): string | undefined {
 export function deleteAuthSession(token: string): void {
   deleteAuthSessionStmt.run(token);
 }
+
+// --- shutdown --------------------------------------------------------------
+
+/** Flush the WAL back into the main .db file and close. Without this, a dev
+ * server that is only ever SIGKILLed leaves every write stranded in the WAL
+ * and the .db file empty — recoverable, but the file is not self-sufficient. */
+export function closeDb(): void {
+  try {
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } finally {
+    db.close();
+  }
+}

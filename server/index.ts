@@ -6,7 +6,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { loadConfig } from "./config.js";
 import { buildAdapters } from "./adapters/registry.js";
 import { SessionManager } from "./sessions/manager.js";
-import { listFolders, upsertFolder, removeFolder } from "./db.js";
+import { listFolders, upsertFolder, removeFolder, closeDb } from "./db.js";
 import { authedUser, handleAuthRoute } from "./auth.js";
 import type {
   ClientMessage,
@@ -199,6 +199,37 @@ if (DEV) {
     appType: "spa",
   });
   viteMiddlewares = vite.middlewares as unknown as Middleware;
+}
+
+// Fail loudly on a port collision instead of letting the process linger idle.
+// (A stranded older dev server holding the port is how stale code keeps serving
+// while every "restart" silently fails to bind.)
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `Port ${PORT} is already in use — another agent-remote server is ` +
+        `probably still running. Stop it first:\n` +
+        `  pkill -f "tsx watch server/index.ts"`,
+    );
+  } else {
+    console.error("Server error:", err);
+  }
+  process.exit(1);
+});
+
+// Checkpoint the WAL and close the DB cleanly on shutdown (tsx watch sends
+// SIGTERM on each reload; Ctrl-C sends SIGINT).
+let shuttingDown = false;
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close();
+  closeDb();
+  console.log(`\nagent-remote stopped (${signal}).`);
+  process.exit(0);
+}
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => shutdown(sig));
 }
 
 server.listen(PORT, () => {

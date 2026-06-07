@@ -13,6 +13,34 @@ function folderName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
+// True while the on-screen keyboard is up, detected by the visual viewport
+// shrinking well below the layout viewport. Stays false on desktop (no
+// visualViewport keyboard), so keyboard-gated UI never shows there.
+function useKeyboardOpen(): boolean {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => setOpen(window.innerHeight - vv.height > 120);
+    onResize();
+    vv.addEventListener("resize", onResize);
+    return () => vv.removeEventListener("resize", onResize);
+  }, []);
+  return open;
+}
+
+// Keys a mobile keyboard usually lacks but terminals need. Each sends a raw
+// byte sequence to the active session's PTY.
+const KEY_BUTTONS: { label: string; seq: string }[] = [
+  { label: "Esc", seq: "\x1b" },
+  { label: "Tab", seq: "\t" },
+  { label: "Ctrl-C", seq: "\x03" },
+  { label: "↑", seq: "\x1b[A" },
+  { label: "↓", seq: "\x1b[B" },
+  { label: "←", seq: "\x1b[D" },
+  { label: "→", seq: "\x1b[C" },
+];
+
 export function App() {
   // Auth gate: undefined = still checking, null = logged out, string = username.
   const [user, setUser] = useState<string | null | undefined>(undefined);
@@ -47,6 +75,7 @@ function Workspace({
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   // Off-canvas sidebar drawer (mobile only; ignored on desktop via CSS).
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const keyboardOpen = useKeyboardOpen();
   const knownIds = useRef<Set<string>>(new Set());
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -284,6 +313,22 @@ function Workspace({
                 />
               ))}
             </div>
+
+            {activeSessionId !== null && keyboardOpen && (
+              <div className="key-bar">
+                {KEY_BUTTONS.map((k) => (
+                  <button
+                    key={k.label}
+                    className="key-button"
+                    // Keep focus on the terminal so the mobile keyboard stays up.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => client.input(activeSessionId, k.seq)}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </>
         )}
       </main>
