@@ -48,6 +48,125 @@ body {
   color: var(--accent);
 }
 
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.logout-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.logout-button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* --- login / register gate ----------------------------------------------- */
+
+.login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 16px;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 320px;
+  gap: 6px;
+  padding: 24px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.login-card h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: var(--accent);
+  text-align: center;
+}
+
+.login-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.login-tabs button {
+  flex: 1;
+  padding: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.login-tabs button.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.login-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.login-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.login-submit {
+  margin-top: 8px;
+  padding: 9px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.login-error {
+  color: #e06c75;
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.login-message {
+  color: #7fd962;
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
 /* Hamburger + backdrop are mobile-only; hidden on desktop. */
 .menu-toggle {
   display: none;

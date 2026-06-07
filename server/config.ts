@@ -22,6 +22,9 @@ export interface Config {
     terminal: HarnessConfig;
   };
   llm: LlmConfig;
+  /** Usernames allowed to log in. A registered account stays unusable until its
+   * name appears here. */
+  users: string[];
   server?: {
     port?: number;
   };
@@ -37,7 +40,10 @@ export function loadConfig(): Config {
     );
   }
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Config;
+    const config = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Config;
+    // Tolerate an older config.json with no users list; nobody is enabled.
+    config.users ??= [];
+    return config;
   } catch (err) {
     throw new Error(
       `Failed to parse config.json: ${(err as Error).message}`,

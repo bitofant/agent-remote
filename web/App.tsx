@@ -6,12 +6,35 @@ import type {
 } from "../shared/protocol";
 import { Client } from "./client";
 import { TerminalView } from "./TerminalView";
+import { Login } from "./Login";
+import { fetchMe, logout } from "./auth";
 
 function folderName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
 export function App() {
+  // Auth gate: undefined = still checking, null = logged out, string = username.
+  const [user, setUser] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    fetchMe().then(setUser);
+  }, []);
+
+  if (user === undefined) return <div className="app loading" />;
+  if (user === null) {
+    return <Login onAuthed={() => fetchMe().then(setUser)} />;
+  }
+  return <Workspace username={user} onLogout={() => setUser(null)} />;
+}
+
+function Workspace({
+  username,
+  onLogout,
+}: {
+  username: string;
+  onLogout: () => void;
+}) {
   const client = useMemo(() => new Client(), []);
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -93,6 +116,12 @@ export function App() {
     setSidebarOpen(false);
   };
 
+  const handleLogout = async () => {
+    await logout();
+    client.disconnect();
+    onLogout();
+  };
+
   const sessionsInFolder = sessions.filter((s) => s.cwd === activeFolder);
   const activeSessionId =
     activeFolder !== null
@@ -117,7 +146,16 @@ export function App() {
         />
       )}
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
-        <h1>agent-remote</h1>
+        <div className="sidebar-header">
+          <h1>agent-remote</h1>
+          <button
+            className="logout-button"
+            onClick={handleLogout}
+            title={`Log out ${username}`}
+          >
+            Log out
+          </button>
+        </div>
 
         <section>
           <label className="field-label">Add folder</label>
