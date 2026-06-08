@@ -450,24 +450,43 @@ body {
 /* --- terminal key bar (shown above the mobile keyboard) ------------------ */
 
 .key-bar {
+  /* Pinned to the bottom of the visual viewport (just above the keyboard);
+     `bottom` is set inline from the measured keyboard inset. */
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 20;
   display: flex;
-  gap: 6px;
-  flex-shrink: 0;
+  gap: 8px;
   padding: 8px;
   border-top: 1px solid var(--border);
   background: var(--panel);
+}
+
+/* The switchable keys scroll horizontally; the toggle stays pinned left. */
+.key-group {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
   overflow-x: auto;
 }
 
+.key-bar-toggle {
+  flex-shrink: 0;
+}
+
 .key-button {
-  flex: 1 0 auto;
-  min-width: 44px;
-  padding: 10px 12px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text);
-  font-size: 14px;
+  font-size: 12px;
   font-family: ui-monospace, monospace;
   cursor: pointer;
 }
@@ -475,6 +494,19 @@ body {
 .key-button:active {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* Sticky modifier (Ctrl) armed for one keystroke: outlined accent. */
+.key-button.armed {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--panel);
+}
+
+/* Locked (caps-lock style) until turned off: filled accent. */
+.key-button.armed.lock {
+  background: var(--accent);
+  color: var(--bg);
 }
 
 /* --- mobile: sidebar becomes an off-canvas drawer ------------------------ */

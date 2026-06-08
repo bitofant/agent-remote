@@ -21,9 +21,13 @@ export function TerminalView({
     const container = containerRef.current;
     if (!container) return;
 
+    // Slightly smaller on mobile so terminal text matches the surrounding UI.
+    const mobile = window.matchMedia("(max-width: 640px)");
+    const fontSize = () => (mobile.matches ? 12 : 13);
+
     const term = new Terminal({
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      fontSize: 13,
+      fontSize: fontSize(),
       cursorBlink: true,
       theme: { background: "#0b0e14", foreground: "#bfbdb6" },
     });
@@ -54,8 +58,16 @@ export function TerminalView({
     const observer = new ResizeObserver(syncSize);
     observer.observe(container);
 
+    // Re-apply the font size when crossing the mobile breakpoint (e.g. rotate).
+    const onBreakpoint = () => {
+      term.options.fontSize = fontSize();
+      syncSize();
+    };
+    mobile.addEventListener("change", onBreakpoint);
+
     return () => {
       observer.disconnect();
+      mobile.removeEventListener("change", onBreakpoint);
       unsubscribe();
       term.dispose();
     };
