@@ -476,34 +476,40 @@ body {
   flex-shrink: 0;
 }
 
+/* Ghost buttons: no chrome at rest, fill + spring on press. */
 .key-button {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 36px;
   padding: 6px 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
   color: var(--text);
   font-size: 12px;
   font-family: ui-monospace, monospace;
   cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
 }
 
 .key-button:active {
-  border-color: var(--accent);
+  background: var(--bg);
   color: var(--accent);
+  transform: scale(0.92);
 }
 
-/* Sticky modifier (Ctrl) armed for one keystroke: outlined accent. */
+/* Sticky modifier (Ctrl) armed for one keystroke: subtle filled accent. */
 .key-button.armed {
-  border-color: var(--accent);
+  background: var(--bg);
   color: var(--accent);
-  background: var(--panel);
 }
 
-/* Locked (caps-lock style) until turned off: filled accent. */
+/* Locked (caps-lock style) until turned off: solid accent. */
 .key-button.armed.lock {
   background: var(--accent);
   color: var(--bg);
