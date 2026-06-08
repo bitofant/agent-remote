@@ -18,8 +18,8 @@ function folderName(path: string): string {
 // fixed bar above it (the layout viewport itself doesn't shrink for the
 // keyboard on most browsers). `open` stays false on desktop, so keyboard-gated
 // UI never shows there.
-function useKeyboard(): { open: boolean; inset: number } {
-  const [state, setState] = useState({ open: false, inset: 0 });
+function useKeyboard(): { open: boolean; inset: number; height: number } {
+  const [state, setState] = useState({ open: false, inset: 0, height: 0 });
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
@@ -33,7 +33,7 @@ function useKeyboard(): { open: boolean; inset: number } {
       const inset = open
         ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
         : 0;
-      setState({ open, inset });
+      setState({ open, inset, height: Math.round(vv.height) });
     };
     onChange();
     vv.addEventListener("resize", onChange);
@@ -230,7 +230,13 @@ function Workspace({
       : null;
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      // While the keyboard is up, pin the app to the visible (visual viewport)
+      // height so its content can't be panned under the keyboard. dvh alone
+      // doesn't shrink for the keyboard, which let the title bar scroll away.
+      style={keyboard.open ? { height: keyboard.height } : undefined}
+    >
       <button
         className="menu-toggle"
         onClick={() => setSidebarOpen(true)}
