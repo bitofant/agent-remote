@@ -18,6 +18,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm start` — run server serving the prebuilt `dist/web`.
 - `npm run typecheck` — `tsc --noEmit` for web (`tsconfig.json`) + server (`tsconfig.server.json`).
 - Requires `config.json` (run `./config-gen.sh`); the agent CLIs (`claude`, `pi`) must be on `PATH`.
+- Server is **never compiled** — `npm start` runs `tsx server/index.ts` directly. Only the frontend is built (`dist/web`).
+
+## Deployment (systemd user service)
+
+- `./install-service.sh` — one-time: writes/enables `~/.config/systemd/user/agent-remote.service` (runs `npm start`), builds `dist/web` if missing, enables linger. User service (not system): agent CLIs live in per-user paths.
+- `./start.sh` / `./stop.sh` / `./restart.sh` wrap `systemctl --user` as the canonical prod runner. `./restart.sh` rebuilds frontend then restarts.
+- `./start.sh dev` is the exception: runs the `tsx watch` HMR server directly (pidfile + `setsid`, not systemd). `./stop.sh` prioritizes that pidfile if present, else stops the service.
+- `./rebuild.sh` builds frontend only. Frontend change → rebuild + restart; server-only change → plain `systemctl --user restart agent-remote` (no build needed).
 
 ## Layout
 
