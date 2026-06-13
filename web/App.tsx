@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   FolderInfo,
   HarnessInfo,
   SessionInfo,
 } from "../shared/protocol";
-import { Client } from "./client";
+import { Client, type CtrlMode } from "./client";
 import { TerminalView } from "./TerminalView";
 import { Login } from "./Login";
 import { fetchMe, logout } from "./auth";
@@ -13,33 +13,99 @@ function folderName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
-// True while the on-screen keyboard is up, detected by the visual viewport
-// shrinking well below the layout viewport. Stays false on desktop (no
-// visualViewport keyboard), so keyboard-gated UI never shows there.
-function useKeyboardOpen(): boolean {
-  const [open, setOpen] = useState(false);
+// Tracks the on-screen keyboard via the visual viewport. `inset` is how many
+// px the keyboard covers at the bottom of the layout viewport, used to lift a
+// fixed bar above it (the layout viewport itself doesn't shrink for the
+// keyboard on most browsers). `open` stays false on desktop, so keyboard-gated
+// UI never shows there.
+function useKeyboard(): { open: boolean; inset: number; height: number } {
+  const [state, setState] = useState({ open: false, inset: 0, height: 0 });
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    const onResize = () => setOpen(window.innerHeight - vv.height > 120);
-    onResize();
-    vv.addEventListener("resize", onResize);
-    return () => vv.removeEventListener("resize", onResize);
+    // Largest viewport height seen = the no-keyboard height; compare against it
+    // so detection works whether the keyboard shrinks the visual or the layout
+    // viewport.
+    let maxHeight = Math.max(vv.height, window.innerHeight);
+    const onChange = () => {
+      maxHeight = Math.max(maxHeight, vv.height);
+      const open = maxHeight - vv.height > 120;
+      const inset = open
+        ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+        : 0;
+      setState({ open, inset, height: Math.round(vv.height) });
+    };
+    onChange();
+    vv.addEventListener("resize", onChange);
+    vv.addEventListener("scroll", onChange);
+    return () => {
+      vv.removeEventListener("resize", onChange);
+      vv.removeEventListener("scroll", onChange);
+    };
   }, []);
-  return open;
+  return state;
 }
 
-// Keys a mobile keyboard usually lacks but terminals need. Each sends a raw
-// byte sequence to the active session's PTY.
-const KEY_BUTTONS: { label: string; seq: string }[] = [
-  { label: "Esc", seq: "\x1b" },
-  { label: "Tab", seq: "\t" },
-  { label: "Ctrl-C", seq: "\x03" },
-  { label: "↑", seq: "\x1b[A" },
-  { label: "↓", seq: "\x1b[B" },
-  { label: "←", seq: "\x1b[D" },
-  { label: "→", seq: "\x1b[C" },
-];
+// Material Design `keyboard_arrow_*` icon paths (24x24 viewBox). Drawn with
+// `currentColor` so they inherit the button's text/accent color.
+const ARROW_PATHS = {
+  up: "M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z",
+  down: "M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z",
+  left: "M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6z",
+  right: "M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z",
+} as const;
+
+// Material icons used on the group toggle: a d-pad (positional keys) and a
+// keyboard (everything else).
+const NAV_ICON =
+  "M10 9h4V6h3l-5-5-5 5h3v3zm-1 1H6V7l-5 5 5 5v-3h3v-4zm14 2l-5-5v3h-3v4h3v3l5-5zm-9 3h-4v3H8l5 5 5-5h-3v-3z";
+const KEYBOARD_ICON =
+  "M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm9 7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z";
+
+function Icon({ path }: { path: string }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      style={{ display: "block" }}
+    >
+      <path d={path} />
+    </svg>
+  );
+}
+
+function Arrow({ dir }: { dir: keyof typeof ARROW_PATHS }) {
+  return <Icon path={ARROW_PATHS[dir]} />;
+}
+
+// Keys a mobile keyboard usually lacks but terminals need, split into two
+// switchable groups: positional (arrows) and everything else. A plain key sends
+// its `seq`; the `toggle` key (Ctrl) instead arms a sticky modifier applied to
+// the next keystroke (from the keyboard or another on-screen key).
+type KeyDef = { label: ReactNode; aria: string; seq?: string; toggle?: boolean };
+
+type KeyGroup = "keys" | "arrows";
+
+const KEY_GROUPS: Record<KeyGroup, KeyDef[]> = {
+  keys: [
+    { label: "Esc", aria: "Escape", seq: "\x1b" },
+    { label: "Tab", aria: "Tab", seq: "\t" },
+    { label: "Ctrl", aria: "Control", toggle: true },
+    { label: "/", aria: "Slash", seq: "/" },
+    { label: "`", aria: "Backtick", seq: "`" },
+  ],
+  arrows: [
+    { label: <Arrow dir="up" />, aria: "Up arrow", seq: "\x1b[A" },
+    { label: <Arrow dir="down" />, aria: "Down arrow", seq: "\x1b[B" },
+    { label: <Arrow dir="left" />, aria: "Left arrow", seq: "\x1b[D" },
+    { label: <Arrow dir="right" />, aria: "Right arrow", seq: "\x1b[C" },
+    { label: "Home", aria: "Home", seq: "\x1b[H" },
+    { label: "End", aria: "End", seq: "\x1b[F" },
+  ],
+};
 
 export function App() {
   // Auth gate: undefined = still checking, null = logged out, string = username.
@@ -75,7 +141,9 @@ function Workspace({
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   // Off-canvas sidebar drawer (mobile only; ignored on desktop via CSS).
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const keyboardOpen = useKeyboardOpen();
+  const keyboard = useKeyboard();
+  const [ctrlMode, setCtrlMode] = useState<CtrlMode>("off");
+  const [keyGroup, setKeyGroup] = useState<KeyGroup>("keys");
   const knownIds = useRef<Set<string>>(new Set());
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -87,9 +155,11 @@ function Workspace({
       .catch(() => setHarnesses([]));
     const offSessions = client.onSessions(setSessions);
     const offFolders = client.onFolders(setFolders);
+    const offCtrl = client.onCtrl(setCtrlMode);
     return () => {
       offSessions();
       offFolders();
+      offCtrl();
       client.disconnect();
     };
   }, [client]);
@@ -160,7 +230,13 @@ function Workspace({
       : null;
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      // While the keyboard is up, pin the app to the visible (visual viewport)
+      // height so its content can't be panned under the keyboard. dvh alone
+      // doesn't shrink for the keyboard, which let the title bar scroll away.
+      style={keyboard.open ? { height: keyboard.height } : undefined}
+    >
       <button
         className="menu-toggle"
         onClick={() => setSidebarOpen(true)}
@@ -314,19 +390,41 @@ function Workspace({
               ))}
             </div>
 
-            {activeSessionId !== null && keyboardOpen && (
-              <div className="key-bar">
-                {KEY_BUTTONS.map((k) => (
-                  <button
-                    key={k.label}
-                    className="key-button"
-                    // Keep focus on the terminal so the mobile keyboard stays up.
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => client.input(activeSessionId, k.seq)}
-                  >
-                    {k.label}
-                  </button>
-                ))}
+            {activeSessionId !== null && keyboard.open && (
+              <div className="key-bar" style={{ bottom: keyboard.inset }}>
+                <button
+                  className="key-button key-bar-toggle"
+                  aria-label={
+                    keyGroup === "keys" ? "Show arrow keys" : "Show other keys"
+                  }
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() =>
+                    setKeyGroup((g) => (g === "keys" ? "arrows" : "keys"))
+                  }
+                >
+                  <Icon path={keyGroup === "keys" ? NAV_ICON : KEYBOARD_ICON} />
+                </button>
+                <div className="key-group">
+                  {KEY_GROUPS[keyGroup].map((k) => (
+                    <button
+                      key={k.aria}
+                      className={`key-button ${
+                        k.toggle && ctrlMode !== "off" ? `armed ${ctrlMode}` : ""
+                      }`}
+                      aria-label={k.aria}
+                      aria-pressed={k.toggle ? ctrlMode !== "off" : undefined}
+                      // Keep focus on the terminal so the mobile keyboard stays up.
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() =>
+                        k.toggle
+                          ? client.cycleCtrl()
+                          : client.input(activeSessionId, k.seq!)
+                      }
+                    >
+                      {k.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </>

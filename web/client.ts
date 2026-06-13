@@ -9,6 +9,25 @@ type SessionsListener = (sessions: SessionInfo[]) => void;
 type FoldersListener = (folders: FolderInfo[]) => void;
 type OutputListener = (data: string) => void;
 type ResetListener = () => void;
+// Ctrl modifier state: off, armed for one keystroke, or locked (caps-lock
+// style) until turned off.
+export type CtrlMode = "off" | "once" | "lock";
+type CtrlListener = (mode: CtrlMode) => void;
+
+// Fold a Ctrl modifier into a key's byte sequence, so a sticky on-screen Ctrl
+// can combine with the next keystroke (from the keyboard or an on-screen key).
+function applyCtrl(data: string): string {
+  // Ctrl+<letter/@[\]^_> -> the corresponding C0 control code (e.g. c -> 0x03).
+  if (data.length === 1) {
+    const code = data.toUpperCase().charCodeAt(0);
+    if (code >= 0x40 && code <= 0x5f) return String.fromCharCode(code & 0x1f);
+    return data;
+  }
+  // Ctrl+arrow -> CSI with the Ctrl modifier (1;5A..D).
+  const arrow = /^\x1b\[([ABCD])$/.exec(data);
+  if (arrow) return `\x1b[1;5${arrow[1]}`;
+  return data;
+}
 
 interface OutputSubscriber {
   onData: OutputListener;
@@ -27,6 +46,9 @@ export class Client {
   private sessionsListeners = new Set<SessionsListener>();
   private foldersListeners = new Set<FoldersListener>();
   private outputListeners = new Map<string, Set<OutputSubscriber>>();
+  // Sticky Ctrl: armed by the on-screen Ctrl key, applied to subsequent input.
+  private ctrlMode: CtrlMode = "off";
+  private ctrlListeners = new Set<CtrlListener>();
 
   connect(): void {
     this.shouldReconnect = true;
@@ -109,7 +131,23 @@ export class Client {
     this.send({ type: "start", harnessId, cwd });
   }
   input(sessionId: string, data: string): void {
+    if (this.ctrlMode !== "off") {
+      data = applyCtrl(data);
+      // One-shot consumes itself; lock stays armed for the next key.
+      if (this.ctrlMode === "once") this.setCtrl("off");
+    }
     this.send({ type: "input", sessionId, data });
+  }
+  // Cycle the Ctrl modifier: off -> one-shot -> locked -> off.
+  cycleCtrl(): void {
+    this.setCtrl(
+      this.ctrlMode === "off" ? "once" : this.ctrlMode === "once" ? "lock" : "off",
+    );
+  }
+  private setCtrl(mode: CtrlMode): void {
+    if (this.ctrlMode === mode) return;
+    this.ctrlMode = mode;
+    for (const cb of this.ctrlListeners) cb(mode);
   }
   resize(sessionId: string, cols: number, rows: number): void {
     this.send({ type: "resize", sessionId, cols, rows });
@@ -136,6 +174,12 @@ export class Client {
     this.foldersListeners.add(cb);
     cb(this.folders);
     return () => this.foldersListeners.delete(cb);
+  }
+
+  onCtrl(cb: CtrlListener): () => void {
+    this.ctrlListeners.add(cb);
+    cb(this.ctrlMode);
+    return () => this.ctrlListeners.delete(cb);
   }
 
   /**

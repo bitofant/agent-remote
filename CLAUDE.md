@@ -23,7 +23,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `shared/protocol.ts` — WS message + session types, shared by both sides. Harness-agnostic.
 - `server/` — Node backend. `config.ts` (loads `config.json`), `adapters/` (harness boundary), `sessions/manager.ts` (PTY/streaming/lifecycle, harness-agnostic), `index.ts` (HTTP + WS + dev Vite).
-- `web/` — React app. `client.ts` (WS client, per-session output buffering), `TerminalView.tsx` (xterm per session), `App.tsx`.
+- `web/` — React app. `client.ts` (WS client, per-session output buffering, sticky Ctrl modifier applied in `input()`), `TerminalView.tsx` (xterm per session), `App.tsx` (workspace + mobile keyboard key-bar), `styles.css`.
+- **Mobile keyboard:** `App.tsx` sizes `.app` to `visualViewport.height` when the keyboard is up and floats the key-bar above it; `index.html` sets `interactive-widget=resizes-content`. Together these stop the page being panned under the keyboard — don't revert without re-checking that.
 
 ## What this is
 
