@@ -13,13 +13,11 @@ function folderName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
-// Tracks the on-screen keyboard via the visual viewport. `inset` is how many
-// px the keyboard covers at the bottom of the layout viewport, used to lift a
-// fixed bar above it (the layout viewport itself doesn't shrink for the
-// keyboard on most browsers). `open` stays false on desktop, so keyboard-gated
-// UI never shows there.
-function useKeyboard(): { open: boolean; inset: number; height: number } {
-  const [state, setState] = useState({ open: false, inset: 0, height: 0 });
+// Tracks the on-screen keyboard via the visual viewport. `height` is the
+// visible height the app is pinned to while the keyboard is up. `open` stays
+// false on desktop, so keyboard-gated UI never shows there.
+function useKeyboard(): { open: boolean; height: number } {
+  const [state, setState] = useState({ open: false, height: 0 });
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
@@ -30,10 +28,7 @@ function useKeyboard(): { open: boolean; inset: number; height: number } {
     const onChange = () => {
       maxHeight = Math.max(maxHeight, vv.height);
       const open = maxHeight - vv.height > 120;
-      const inset = open
-        ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
-        : 0;
-      setState({ open, inset, height: Math.round(vv.height) });
+      setState({ open, height: Math.round(vv.height) });
     };
     onChange();
     vv.addEventListener("resize", onChange);
@@ -94,6 +89,7 @@ const KEY_GROUPS: Record<KeyGroup, KeyDef[]> = {
     { label: "Esc", aria: "Escape", seq: "\x1b" },
     { label: "Tab", aria: "Tab", seq: "\t" },
     { label: "Ctrl", aria: "Control", toggle: true },
+    { label: "⏎", aria: "Newline", seq: "\n" },
     { label: "/", aria: "Slash", seq: "/" },
     { label: "`", aria: "Backtick", seq: "`" },
   ],
@@ -391,7 +387,7 @@ function Workspace({
             </div>
 
             {activeSessionId !== null && keyboard.open && (
-              <div className="key-bar" style={{ bottom: keyboard.inset }}>
+              <div className="key-bar">
                 <button
                   className="key-button key-bar-toggle"
                   aria-label={

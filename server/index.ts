@@ -1,6 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { loadConfig } from "./config.js";
@@ -181,7 +181,9 @@ function serveStatic(url: string, res: ServerResponse): void {
     join(WEB_DIST, path === "/" ? "/index.html" : path),
   );
   const file =
-    candidate.startsWith(WEB_DIST) && existsSync(candidate)
+    candidate.startsWith(WEB_DIST) &&
+    existsSync(candidate) &&
+    statSync(candidate).isFile()
       ? candidate
       : join(WEB_DIST, "index.html");
   res.setHeader(
