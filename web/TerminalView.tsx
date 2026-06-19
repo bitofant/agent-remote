@@ -58,6 +58,24 @@ export function TerminalView({
     const observer = new ResizeObserver(syncSize);
     observer.observe(container);
 
+    // Touch scrolling: xterm's screen layer overlays the scroll viewport, so
+    // swipes don't reach it natively (leaving only the sluggish wheel path).
+    // Drive the viewport's scrollTop directly from the drag for 1:1 scrolling.
+    const viewport = container.querySelector<HTMLElement>(".xterm-viewport");
+    let lastTouchY = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      lastTouchY = e.touches[0].clientY;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!viewport) return;
+      const y = e.touches[0].clientY;
+      viewport.scrollTop += lastTouchY - y;
+      lastTouchY = y;
+      e.preventDefault();
+    };
+    container.addEventListener("touchstart", onTouchStart, { passive: true });
+    container.addEventListener("touchmove", onTouchMove, { passive: false });
+
     // Re-apply the font size when crossing the mobile breakpoint (e.g. rotate).
     const onBreakpoint = () => {
       term.options.fontSize = fontSize();
@@ -68,6 +86,8 @@ export function TerminalView({
     return () => {
       observer.disconnect();
       mobile.removeEventListener("change", onBreakpoint);
+      container.removeEventListener("touchstart", onTouchStart);
+      container.removeEventListener("touchmove", onTouchMove);
       unsubscribe();
       term.dispose();
     };

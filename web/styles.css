@@ -450,12 +450,10 @@ body {
 /* --- terminal key bar (shown above the mobile keyboard) ------------------ */
 
 .key-bar {
-  /* Pinned to the bottom of the visual viewport (just above the keyboard);
-     `bottom` is set inline from the measured keyboard inset. */
-  position: fixed;
-  left: 0;
-  right: 0;
-  z-index: 20;
+  /* In-flow at the bottom of the column: the app is sized to the visible
+     viewport, so the bar sits just above the keyboard and the terminal shrinks
+     to leave room (rather than hiding behind a fixed bar). */
+  flex-shrink: 0;
   display: flex;
   gap: 8px;
   padding: 8px;
