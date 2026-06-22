@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -11,6 +17,118 @@ import type { Client } from "./client";
 const clamp = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, n));
 const isWord = (ch: string | undefined) => !!ch && !/\s/.test(ch);
+
+// Copy text to the clipboard, working in both secure and insecure contexts.
+// navigator.clipboard only exists over https/localhost, so plain-http LAN
+// access falls back to the legacy execCommand path.
+async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fall through to the legacy path
+    }
+  }
+  const el = document.createElement("textarea");
+  el.value = text;
+  el.readOnly = true;
+  el.style.position = "fixed";
+  el.style.top = "0";
+  el.style.left = "0";
+  el.style.width = "1px";
+  el.style.height = "1px";
+  el.style.opacity = "0";
+  document.body.appendChild(el);
+  try {
+    // iOS Safari ignores textarea.select() on readonly inputs; it needs an
+    // explicit Range. Other browsers are fine with select().
+    if (/ipad|iphone|ipod/i.test(navigator.userAgent)) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      el.setSelectionRange(0, text.length);
+    } else {
+      el.select();
+    }
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(el);
+  }
+}
+
+// A buffer cell: column plus absolute buffer row (includes scrollback).
+type Cell = { col: number; row: number };
+
+const beforeOrEqual = (a: Cell, b: Cell) =>
+  a.row < b.row || (a.row === b.row && a.col <= b.col);
+
+// Length in cells of the contiguous run s..e (inclusive), wrapping at `cols`.
+const rangeLength = (s: Cell, e: Cell, cols: number) =>
+  (e.row - s.row) * cols + (e.col - s.col) + 1;
+
+// One cell forward (dir +1) or back (dir -1), wrapping line boundaries and
+// clamping to the buffer.
+const stepCell = (cell: Cell, dir: number, cols: number, maxRow: number): Cell => {
+  let col = cell.col + dir;
+  let row = cell.row;
+  if (col < 0) {
+    row -= 1;
+    col = cols - 1;
+  } else if (col >= cols) {
+    row += 1;
+    col = 0;
+  }
+  return { col: clamp(col, 0, cols - 1), row: clamp(row, 0, maxRow) };
+};
+
+// Button that fires once on press, then auto-repeats (accelerating) while held —
+// for nudging a selection edge across many cells without many taps.
+function RepeatButton({
+  onStep,
+  ariaLabel,
+  children,
+}: {
+  onStep: () => void;
+  ariaLabel: string;
+  children: ReactNode;
+}) {
+  const timer = useRef<number | undefined>(undefined);
+  const stop = () => {
+    if (timer.current !== undefined) {
+      clearTimeout(timer.current);
+      timer.current = undefined;
+    }
+  };
+  const start = (e: ReactPointerEvent) => {
+    e.preventDefault(); // don't blur the terminal / start a gesture
+    onStep();
+    let delay = 320;
+    const tick = () => {
+      onStep();
+      delay = Math.max(60, delay - 40);
+      timer.current = window.setTimeout(tick, delay);
+    };
+    timer.current = window.setTimeout(tick, delay);
+  };
+  useEffect(() => stop, []);
+  return (
+    <button
+      className="edge-button"
+      aria-label={ariaLabel}
+      onPointerDown={start}
+      onPointerUp={stop}
+      onPointerLeave={stop}
+      onPointerCancel={stop}
+    >
+      {children}
+    </button>
+  );
+}
 
 // One xterm instance per session, kept mounted for the session's lifetime so
 // scrollback survives tab switches. Inactive terminals are hidden with CSS
@@ -34,7 +152,11 @@ export function TerminalView({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  // Live selection edges (inclusive, absolute rows), so the toolbar can nudge
+  // them and re-apply. Kept in sync wherever we call term.select().
+  const selectionRef = useRef<{ start: Cell; end: Cell } | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   // Mirror the latest props into refs so the (sessionId-keyed) terminal effect's
   // long-lived touch handlers always see current values without re-running.
@@ -45,11 +167,58 @@ export function TerminalView({
   });
   useEffect(() => {
     selectModeRef.current = selectMode;
-    if (!selectMode) {
+    // xterm keeps a hidden textarea focused for key input, which pops the
+    // mobile keyboard. In select mode we don't type: suppress its virtual
+    // keyboard and blur it to dismiss any open one; restore on exit.
+    const textarea = termRef.current?.textarea;
+    if (selectMode) {
+      if (textarea) {
+        textarea.inputMode = "none";
+        textarea.blur();
+      }
+    } else {
+      if (textarea) textarea.inputMode = "";
       termRef.current?.clearSelection();
+      selectionRef.current = null;
       setHasSelection(false);
     }
   }, [selectMode]);
+
+  // Apply a selection (any order), normalize to start<=end, and record it.
+  const applySelection = (a: Cell, b: Cell) => {
+    const term = termRef.current;
+    if (!term) return;
+    const [s, e] = beforeOrEqual(a, b) ? [a, b] : [b, a];
+    term.select(s.col, s.row, rangeLength(s, e, term.cols));
+    selectionRef.current = { start: s, end: e };
+    setHasSelection(true);
+  };
+
+  // Nudge one edge by a cell, never crossing the other edge (min 1 cell), and
+  // scroll the moved edge into view if it left the viewport.
+  const moveEdge = (edge: "start" | "end", dir: 1 | -1) => {
+    const term = termRef.current;
+    const sel = selectionRef.current;
+    if (!term || !sel) return;
+    const maxRow = term.buffer.active.length - 1;
+    let moved = stepCell(
+      edge === "start" ? sel.start : sel.end,
+      dir,
+      term.cols,
+      maxRow,
+    );
+    if (edge === "start") {
+      if (!beforeOrEqual(moved, sel.end)) moved = sel.end;
+      applySelection(moved, sel.end);
+    } else {
+      if (!beforeOrEqual(sel.start, moved)) moved = sel.start;
+      applySelection(sel.start, moved);
+    }
+    const top = term.buffer.active.viewportY;
+    const bottom = top + term.rows - 1;
+    if (moved.row < top) term.scrollLines(moved.row - top);
+    else if (moved.row > bottom) term.scrollLines(moved.row - bottom);
+  };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -129,7 +298,6 @@ export function TerminalView({
     const viewport = container.querySelector<HTMLElement>(".xterm-viewport");
     const screenEl = () => container.querySelector<HTMLElement>(".xterm-screen");
 
-    type Cell = { col: number; row: number };
     // Pixel → buffer cell. Cell pixel size isn't on the public API, so read it
     // off the render service (the one private hook in this file).
     const cellAt = (clientX: number, clientY: number): Cell | null => {
@@ -160,17 +328,12 @@ export function TerminalView({
       let end = col;
       while (start > 0 && isWord(text[start - 1])) start--;
       while (end < text.length - 1 && isWord(text[end + 1])) end++;
-      term.select(start, row, end - start + 1);
+      applySelection({ col: start, row }, { col: end, row });
       return true;
     };
 
     // Contiguous run from anchor to current cell, in reading order.
-    const selectRange = (a: Cell, b: Cell) => {
-      const [s, e] =
-        a.row < b.row || (a.row === b.row && a.col <= b.col) ? [a, b] : [b, a];
-      const length = (e.row - s.row) * term.cols + (e.col - s.col) + 1;
-      term.select(s.col, s.row, length);
-    };
+    const selectRange = (a: Cell, b: Cell) => applySelection(a, b);
 
     let lastTouchY = 0;
     let startX = 0;
@@ -262,18 +425,19 @@ export function TerminalView({
   }, [client, sessionId]);
 
   const copySelection = async () => {
-    const term = termRef.current;
-    const text = term?.getSelection();
-    if (text) {
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch {
-        // Clipboard may be unavailable (insecure context); leave the selection
-        // so the user can fall back to a manual copy.
-        return;
-      }
+    const text = termRef.current?.getSelection();
+    if (!text) {
+      onExitSelect();
+      return;
     }
-    onExitSelect();
+    if (await copyText(text)) {
+      onExitSelect();
+    } else {
+      // Surface the failure instead of silently doing nothing; keep the
+      // selection so the user can retry.
+      setCopyFailed(true);
+      window.setTimeout(() => setCopyFailed(false), 1800);
+    }
   };
 
   return (
@@ -284,14 +448,48 @@ export function TerminalView({
         style={{ display: active ? "block" : "none" }}
       />
       {active && selectMode && hasSelection && (
-        <button
-          className="copy-pill"
-          // Don't steal focus from the terminal (keeps the keyboard up).
+        <div
+          className="select-toolbar"
+          // Don't let toolbar taps blur the terminal or reach its touch layer.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={copySelection}
         >
-          Copy
-        </button>
+          <div className="edge-group">
+            <span className="edge-label">Start</span>
+            <RepeatButton
+              ariaLabel="Move selection start backward"
+              onStep={() => moveEdge("start", -1)}
+            >
+              ◀
+            </RepeatButton>
+            <RepeatButton
+              ariaLabel="Move selection start forward"
+              onStep={() => moveEdge("start", 1)}
+            >
+              ▶
+            </RepeatButton>
+          </div>
+          <div className="edge-group">
+            <span className="edge-label">End</span>
+            <RepeatButton
+              ariaLabel="Move selection end backward"
+              onStep={() => moveEdge("end", -1)}
+            >
+              ◀
+            </RepeatButton>
+            <RepeatButton
+              ariaLabel="Move selection end forward"
+              onStep={() => moveEdge("end", 1)}
+            >
+              ▶
+            </RepeatButton>
+          </div>
+          <button
+            className={`copy-button ${copyFailed ? "failed" : ""}`}
+            onClick={copySelection}
+          >
+            {copyFailed ? "Can't copy" : "Copy"}
+          </button>
+        </div>
       )}
     </>
   );
