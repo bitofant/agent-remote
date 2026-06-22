@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { CanvasAddon } from "@xterm/addon-canvas";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { ClipboardAddon } from "@xterm/addon-clipboard";
 import type { Client } from "./client";
 
 // One xterm instance per session, kept mounted for the session's lifetime so
@@ -29,11 +34,40 @@ export function TerminalView({
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: fontSize(),
       cursorBlink: true,
+      allowProposedApi: true, // required by the unicode11 addon
       theme: { background: "#0b0e14", foreground: "#bfbdb6" },
     });
+
+    // Wide-char width calc: agents emit box-drawing + emoji that the default
+    // tables size wrong, corrupting TUI layout. unicode11 fixes the widths.
+    const unicode11 = new Unicode11Addon();
+    term.loadAddon(unicode11);
+    term.unicode.activeVersion = "11";
+
+    term.loadAddon(new WebLinksAddon());
+    term.loadAddon(new ClipboardAddon());
+
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
+
+    // GPU rendering is the big smoothness/perf win over the default DOM
+    // renderer. Prefer WebGL; fall back to 2D canvas if WebGL is unavailable
+    // or its context is lost (some mobile GPUs drop it under memory pressure).
+    let renderer: WebglAddon | CanvasAddon;
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        webgl.dispose();
+        renderer = new CanvasAddon();
+        term.loadAddon(renderer);
+      });
+      term.loadAddon(webgl);
+      renderer = webgl;
+    } catch {
+      renderer = new CanvasAddon();
+      term.loadAddon(renderer);
+    }
 
     const { initial, unsubscribe } = client.subscribeOutput(
       sessionId,
@@ -89,6 +123,7 @@ export function TerminalView({
       container.removeEventListener("touchstart", onTouchStart);
       container.removeEventListener("touchmove", onTouchMove);
       unsubscribe();
+      renderer.dispose(); // free the GPU/canvas context before the terminal
       term.dispose();
     };
   }, [client, sessionId]);
