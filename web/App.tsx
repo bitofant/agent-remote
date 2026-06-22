@@ -56,6 +56,9 @@ const NAV_ICON =
   "M10 9h4V6h3l-5-5-5 5h3v3zm-1 1H6V7l-5 5 5 5v-3h3v-4zm14 2l-5-5v3h-3v4h3v3l5-5zm-9 3h-4v3H8l5 5 5-5h-3v-3z";
 const KEYBOARD_ICON =
   "M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm9 7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z";
+// Material `select_all` (dashed marquee): toggles touch text-selection mode.
+const SELECT_ICON =
+  "M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2z";
 
 function Icon({ path }: { path: string }) {
   return (
@@ -140,6 +143,8 @@ function Workspace({
   const keyboard = useKeyboard();
   const [ctrlMode, setCtrlMode] = useState<CtrlMode>("off");
   const [keyGroup, setKeyGroup] = useState<KeyGroup>("keys");
+  // Touch text-selection mode, applied to the active terminal.
+  const [selectMode, setSelectMode] = useState(false);
   const knownIds = useRef<Set<string>>(new Set());
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -225,6 +230,11 @@ function Workspace({
         null)
       : null;
 
+  // Selection mode is per active terminal; reset it when the active one changes.
+  useEffect(() => {
+    setSelectMode(false);
+  }, [activeSessionId]);
+
   return (
     <div
       className="app"
@@ -299,14 +309,23 @@ function Workspace({
               <span className="folder-header-path" title={activeFolder}>
                 {activeFolder}
               </span>
-              <div className="add-session" ref={addMenuRef}>
+              <div className="header-actions">
                 <button
-                  className="add-session-button"
-                  onClick={() => setAddMenuOpen((o) => !o)}
-                  title="New session"
+                  className={`header-icon-button ${selectMode ? "active" : ""}`}
+                  onClick={() => setSelectMode((m) => !m)}
+                  aria-pressed={selectMode}
+                  title="Select text"
                 >
-                  +
+                  <Icon path={SELECT_ICON} />
                 </button>
+                <div className="add-session" ref={addMenuRef}>
+                  <button
+                    className="add-session-button"
+                    onClick={() => setAddMenuOpen((o) => !o)}
+                    title="New session"
+                  >
+                    +
+                  </button>
                 {addMenuOpen && (
                   <div className="add-session-menu">
                     {harnesses.length === 0 && (
@@ -326,6 +345,7 @@ function Workspace({
                     ))}
                   </div>
                 )}
+                </div>
               </div>
             </div>
 
@@ -382,6 +402,9 @@ function Workspace({
                   client={client}
                   sessionId={s.id}
                   active={s.id === activeSessionId}
+                  selectMode={s.id === activeSessionId && selectMode}
+                  onEnterSelect={() => setSelectMode(true)}
+                  onExitSelect={() => setSelectMode(false)}
                 />
               ))}
             </div>

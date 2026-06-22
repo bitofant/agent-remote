@@ -270,6 +270,36 @@ body {
   text-overflow: ellipsis;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.header-icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.header-icon-button:hover {
+  border-color: var(--accent);
+}
+
+.header-icon-button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+}
+
 .add-session {
   position: relative;
   flex-shrink: 0;
@@ -445,6 +475,25 @@ body {
   height: 100%;
   color: var(--muted);
   font-size: 14px;
+}
+
+/* Floating copy action shown over the terminal while a selection exists in
+   select mode. Anchored to .session-content (position: relative). */
+.copy-pill {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 8px 20px;
+  background: var(--accent);
+  border: none;
+  border-radius: 999px;
+  color: #04222c;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
 
 /* --- terminal key bar (shown above the mobile keyboard) ------------------ */
