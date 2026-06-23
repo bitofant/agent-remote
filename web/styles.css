@@ -270,6 +270,36 @@ body {
   text-overflow: ellipsis;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.header-icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.header-icon-button:hover {
+  border-color: var(--accent);
+}
+
+.header-icon-button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+}
+
 .add-session {
   position: relative;
   flex-shrink: 0;
@@ -445,6 +475,76 @@ body {
   height: 100%;
   color: var(--muted);
   font-size: 14px;
+}
+
+/* Floating selection toolbar shown over the terminal while a selection exists
+   in select mode. Anchored to .session-content (position: relative). */
+.select-toolbar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.edge-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.edge-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+
+.edge-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  /* We drive press-and-hold repeat from pointer events; stop the browser
+     treating a held button as a scroll/zoom gesture. */
+  touch-action: none;
+  user-select: none;
+}
+
+.edge-button:active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.copy-button {
+  padding: 8px 18px;
+  background: var(--accent);
+  border: none;
+  border-radius: 999px;
+  color: #04222c;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.copy-button.failed {
+  background: #e5534b;
+  color: #fff;
 }
 
 /* --- terminal key bar (shown above the mobile keyboard) ------------------ */
