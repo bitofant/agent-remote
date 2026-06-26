@@ -109,6 +109,17 @@ export class Client {
         );
         this.emitSessions();
         break;
+      case "sessionEvent":
+        // cwd changes (from shell integration) update the session's live cwd;
+        // command-start/end are delivered for future consumers but unused here.
+        if (msg.event.type === "cwd") {
+          const cwd = msg.event.cwd;
+          this.sessions = this.sessions.map((s) =>
+            s.id === msg.sessionId ? { ...s, cwd } : s,
+          );
+          this.emitSessions();
+        }
+        break;
       case "folders":
         this.folders = msg.folders;
         this.emitFolders();

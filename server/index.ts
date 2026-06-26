@@ -6,7 +6,14 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { loadConfig } from "./config.js";
 import { buildAdapters } from "./adapters/registry.js";
 import { SessionManager } from "./sessions/manager.js";
-import { listFolders, upsertFolder, removeFolder, closeDb } from "./db.js";
+import {
+  listFolders,
+  upsertFolder,
+  removeFolder,
+  recordCommand,
+  closeDb,
+} from "./db.js";
+import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
 import { authedUser, handleAuthRoute } from "./auth.js";
 import type {
   ClientMessage,
@@ -29,6 +36,22 @@ const harnesses: HarnessInfo[] = [...adapters.values()].map((a) => ({
   name: a.name,
 }));
 
+// One server-global subscriber that records every command run, with the cwd it
+// ran in, for the command builder's recent/frequent lists. This must NOT live in
+// the per-connection subscription below, or each connected browser would record
+// a duplicate. Only shell sessions emit command events.
+manager.subscribe({
+  onStarted() {},
+  onOutput() {},
+  onExit() {},
+  onEvent(sessionId, event) {
+    if (event.type !== "command-start") return;
+    const command = event.command.trim();
+    const cwd = manager.sessionCwd(sessionId) ?? "";
+    if (command && cwd) recordCommand(command, cwd, event.at);
+  },
+});
+
 type Middleware = (
   req: IncomingMessage,
   res: ServerResponse,
@@ -45,15 +68,62 @@ const server = createHttpServer((req, res) => {
 });
 
 function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
-  if (req.method === "GET" && req.url === "/api/harnesses") {
-    if (!authedUser(req, config)) {
-      res.statusCode = 401;
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ message: "Not logged in." }));
-      return;
-    }
+  const url = req.url ?? "";
+  if (req.method === "GET" && url === "/api/harnesses") {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify(harnesses));
+    return;
+  }
+  if (req.method === "GET" && url.startsWith("/api/commands")) {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const cwd = new URL(url, "http://x").searchParams.get("cwd") ?? "";
+    // Only list folders the user has already opened — keep this from doubling as
+    // an arbitrary filesystem browser. (The cwd is always a known folder in the
+    // UI.) PATH/alias data is the same regardless of which folder is passed.
+    if (!listFolders().some((f) => f.path === cwd)) {
+      res.statusCode = 400;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "Unknown folder." }));
+      return;
+    }
+    void listCommands(cwd).then(
+      (listing) => {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(listing));
+      },
+      (err: unknown) => {
+        res.statusCode = 500;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ message: (err as Error).message }));
+      },
+    );
+    return;
+  }
+  if (req.method === "GET" && url.startsWith("/api/resolve")) {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const params = new URL(url, "http://x").searchParams;
+    const id = params.get("id") ?? "";
+    const cwd = params.get("cwd") ?? "";
+    // Same folder allowlist as /api/commands, and the resolver id must be one we
+    // know — the client never supplies a command to run, only its id.
+    if (!RESOLVER_IDS.has(id) || !listFolders().some((f) => f.path === cwd)) {
+      res.statusCode = 400;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "Unknown resolver or folder." }));
+      return;
+    }
+    void resolveCommand(id, cwd).then(
+      (result) => {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(result));
+      },
+      (err: unknown) => {
+        res.statusCode = 500;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ message: (err as Error).message }));
+      },
+    );
     return;
   }
   if (viteMiddlewares) {
@@ -64,6 +134,12 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
   serveStatic(req.url ?? "/", res);
+}
+
+function sendUnauthorized(res: ServerResponse): void {
+  res.statusCode = 401;
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify({ message: "Not logged in." }));
 }
 
 // --- WebSocket (/ws) -------------------------------------------------------
@@ -109,6 +185,8 @@ wss.on("connection", (ws: WebSocket) => {
     onStarted: (session) => send({ type: "started", session }),
     onOutput: (sessionId, data) => send({ type: "output", sessionId, data }),
     onExit: (sessionId, exitCode) => send({ type: "exit", sessionId, exitCode }),
+    onEvent: (sessionId, event) =>
+      send({ type: "sessionEvent", sessionId, event }),
   });
 
   ws.on("message", (raw) => {

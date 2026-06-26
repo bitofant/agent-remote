@@ -6,6 +6,7 @@ import type {
 } from "../shared/protocol";
 import { Client, type CtrlMode } from "./client";
 import { TerminalView } from "./TerminalView";
+import { CommandBuilder } from "./CommandBuilder";
 import { Login } from "./Login";
 import { fetchMe, logout } from "./auth";
 
@@ -145,6 +146,8 @@ function Workspace({
   const [keyGroup, setKeyGroup] = useState<KeyGroup>("keys");
   // Touch text-selection mode, applied to the active terminal.
   const [selectMode, setSelectMode] = useState(false);
+  // Command-builder dialog (opened from the ./ key-bar button).
+  const [builderOpen, setBuilderOpen] = useState(false);
   const knownIds = useRef<Set<string>>(new Set());
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -233,6 +236,7 @@ function Workspace({
   // Selection mode is per active terminal; reset it when the active one changes.
   useEffect(() => {
     setSelectMode(false);
+    setBuilderOpen(false);
   }, [activeSessionId]);
 
   return (
@@ -423,6 +427,14 @@ function Workspace({
                 >
                   <Icon path={keyGroup === "keys" ? NAV_ICON : KEYBOARD_ICON} />
                 </button>
+                <button
+                  className="key-button key-bar-toggle"
+                  aria-label="Build a command"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setBuilderOpen(true)}
+                >
+                  ./
+                </button>
                 <div className="key-group">
                   {KEY_GROUPS[keyGroup].map((k) => (
                     <button
@@ -445,6 +457,15 @@ function Workspace({
                   ))}
                 </div>
               </div>
+            )}
+
+            {builderOpen && activeSessionId !== null && (
+              <CommandBuilder
+                client={client}
+                sessionId={activeSessionId}
+                cwd={activeFolder}
+                onClose={() => setBuilderOpen(false)}
+              />
             )}
           </>
         )}
