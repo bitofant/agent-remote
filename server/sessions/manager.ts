@@ -26,6 +26,9 @@ export interface SessionListener {
   onStarted(info: SessionInfo): void;
   onOutput(sessionId: string, data: string): void;
   onExit(sessionId: string, exitCode: number | null): void;
+  /** A session was removed from the manager entirely (e.g. user closed an
+   * exited session); it should be dropped from the UI. */
+  onRemoved?(sessionId: string): void;
   /** A structured event observed inside the session (shell integration only). */
   onEvent?(sessionId: string, event: SessionEvent): void;
 }
@@ -132,5 +135,16 @@ export class SessionManager {
 
   stop(sessionId: string): void {
     this.sessions.get(sessionId)?.pty.kill();
+  }
+
+  /** Drop a session from the manager. Intended for finished sessions; if one is
+   * still running it is killed first. After this the session is gone from
+   * `list()` and its scrollback is released. */
+  remove(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (session.info.status !== "exited") session.pty.kill();
+    this.sessions.delete(sessionId);
+    for (const l of this.listeners) l.onRemoved?.(sessionId);
   }
 }

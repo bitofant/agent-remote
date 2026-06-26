@@ -184,6 +184,20 @@ function Workspace({
     }
   }, [sessions]);
 
+  // Drop active-session pins whose session no longer exists (e.g. it was
+  // closed), so the per-folder fallback can pick another session.
+  useEffect(() => {
+    setActiveSession((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [folder, id] of Object.entries(prev)) {
+        if (sessions.some((s) => s.id === id)) next[folder] = id;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [sessions]);
+
   // Default to the most-recent folder once folders arrive.
   useEffect(() => {
     if (activeFolder === null && folders.length > 0) {
@@ -232,6 +246,8 @@ function Workspace({
         sessionsInFolder[sessionsInFolder.length - 1]?.id ??
         null)
       : null;
+  const activeExited =
+    sessionsInFolder.find((s) => s.id === activeSessionId)?.status === "exited";
 
   // Selection mode is per active terminal; reset it when the active one changes.
   useEffect(() => {
@@ -413,7 +429,20 @@ function Workspace({
               ))}
             </div>
 
-            {activeSessionId !== null && keyboard.open && (
+            {/* An exited session can't take input: swap the keyboard key-bar for
+                a prominent control to close it out of the session list. */}
+            {activeExited && (
+              <div className="close-session-bar">
+                <button
+                  className="close-session-button"
+                  onClick={() => client.remove(activeSessionId!)}
+                >
+                  Close session
+                </button>
+              </div>
+            )}
+
+            {activeSessionId !== null && keyboard.open && !activeExited && (
               <div className="key-bar">
                 <button
                   className="key-button key-bar-toggle"

@@ -109,6 +109,11 @@ export class Client {
         );
         this.emitSessions();
         break;
+      case "removed":
+        this.sessions = this.sessions.filter((s) => s.id !== msg.sessionId);
+        this.buffers.delete(msg.sessionId);
+        this.emitSessions();
+        break;
       case "sessionEvent":
         // cwd changes (from shell integration) update the session's live cwd;
         // command-start/end are delivered for future consumers but unused here.
@@ -165,6 +170,9 @@ export class Client {
   }
   stop(sessionId: string): void {
     this.send({ type: "stop", sessionId });
+  }
+  remove(sessionId: string): void {
+    this.send({ type: "remove", sessionId });
   }
   addFolder(path: string): void {
     this.send({ type: "addFolder", path });
