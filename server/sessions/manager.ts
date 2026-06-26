@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type IPty } from "node-pty";
-import type { HarnessAdapter, SessionOptions } from "../adapters/types.js";
-import type { SessionInfo } from "../../shared/protocol.js";
+import type {
+  HarnessAdapter,
+  SessionEventParser,
+  SessionOptions,
+} from "../adapters/types.js";
+import type { SessionEvent, SessionInfo } from "../../shared/protocol.js";
 
 // Per-session scrollback retained so a (re)connecting browser can be brought
 // up to date. Bounded to keep memory in check on long-running sessions.
@@ -11,13 +15,19 @@ interface Session {
   info: SessionInfo;
   pty: IPty;
   buffer: string;
+  /** Present only for harnesses with shell integration; extracts events and
+   * strips the integration markers from the output stream. */
+  parser?: SessionEventParser;
 }
 
-/** Notified of session lifecycle and output. One listener per WS connection. */
+/** Notified of session lifecycle and output. One listener per WS connection,
+ * plus server-global listeners (e.g. the command recorder). */
 export interface SessionListener {
   onStarted(info: SessionInfo): void;
   onOutput(sessionId: string, data: string): void;
   onExit(sessionId: string, exitCode: number | null): void;
+  /** A structured event observed inside the session (shell integration only). */
+  onEvent?(sessionId: string, event: SessionEvent): void;
 }
 
 // Owns the lifecycle of agent subprocesses. This layer is harness-agnostic:
@@ -43,6 +53,12 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.buffer;
   }
 
+  /** The session's current working directory (kept live by shell integration),
+   * for consumers that record what ran where. */
+  sessionCwd(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.info.cwd;
+  }
+
   start(harnessId: string, opts: SessionOptions): SessionInfo {
     const adapter = this.adapters.get(harnessId);
     if (!adapter) throw new Error(`Unknown harness: ${harnessId}`);
@@ -65,12 +81,30 @@ export class SessionManager {
       exitCode: null,
       createdAt: Date.now(),
     };
-    const session: Session = { info, pty: child, buffer: "" };
+    const session: Session = {
+      info,
+      pty: child,
+      buffer: "",
+      parser: adapter.createEventParser?.(),
+    };
     this.sessions.set(info.id, session);
 
     child.onData((data) => {
-      session.buffer = (session.buffer + data).slice(-MAX_BUFFER);
-      for (const l of this.listeners) l.onOutput(info.id, data);
+      // With shell integration, run output through the parser: it strips the
+      // integration markers (so they never reach the terminal or buffer) and
+      // yields structured events. Without a parser, the data passes through.
+      const { output, events } = session.parser
+        ? session.parser.push(data)
+        : { output: data, events: [] };
+      if (output) {
+        session.buffer = (session.buffer + output).slice(-MAX_BUFFER);
+        for (const l of this.listeners) l.onOutput(info.id, output);
+      }
+      for (const event of events) {
+        // cwd changes are reflected on the session itself, live.
+        if (event.type === "cwd") info.cwd = event.cwd;
+        for (const l of this.listeners) l.onEvent?.(info.id, event);
+      }
     });
     child.onExit(({ exitCode }) => {
       info.status = "exited";

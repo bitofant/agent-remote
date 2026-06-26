@@ -35,6 +35,19 @@ db.exec(
      expires_at INTEGER NOT NULL
    )`,
 );
+// Commands run in shell (Terminal) sessions, captured via shell integration with
+// the cwd they ran in. Powers the command builder's recent/frequent lists —
+// replacing the old practice of scraping the user's ~/.zsh_history files.
+db.exec(
+  `CREATE TABLE IF NOT EXISTS commands (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     command TEXT NOT NULL,
+     cwd TEXT NOT NULL,
+     ran_at INTEGER NOT NULL
+   )`,
+);
+db.exec("CREATE INDEX IF NOT EXISTS commands_ran_at ON commands(ran_at)");
+db.exec("CREATE INDEX IF NOT EXISTS commands_cwd ON commands(cwd)");
 
 const listStmt = db.prepare(
   "SELECT path, last_used_at AS lastUsedAt FROM folders ORDER BY last_used_at DESC",
@@ -56,6 +69,58 @@ export function upsertFolder(path: string, ts = Date.now()): void {
 
 export function removeFolder(path: string): void {
   removeStmt.run(path);
+}
+
+// --- command log -----------------------------------------------------------
+
+// Cap the table so it can't grow without bound; pruned probabilistically on
+// insert (the exact ceiling doesn't matter, only that it stays bounded).
+const COMMAND_RETENTION = 10_000;
+
+const recordCommandStmt = db.prepare(
+  "INSERT INTO commands (command, cwd, ran_at) VALUES (?, ?, ?)",
+);
+const pruneCommandsStmt = db.prepare(
+  `DELETE FROM commands
+   WHERE id NOT IN (SELECT id FROM commands ORDER BY id DESC LIMIT ?)`,
+);
+// Recent: distinct commands, those run in the given cwd first (by recency there),
+// then the rest by overall recency.
+const recentCommandsStmt = db.prepare(
+  `SELECT command FROM commands
+   GROUP BY command
+   ORDER BY MAX(CASE WHEN cwd = ? THEN ran_at END) IS NULL,
+            MAX(CASE WHEN cwd = ? THEN ran_at END) DESC,
+            MAX(ran_at) DESC
+   LIMIT ?`,
+);
+// Frequent: distinct commands by overall count, those ever run in the given cwd
+// first; ties broken by recency.
+const frequentCommandsStmt = db.prepare(
+  `SELECT command FROM commands
+   GROUP BY command
+   ORDER BY SUM(CASE WHEN cwd = ? THEN 1 ELSE 0 END) = 0,
+            COUNT(*) DESC,
+            MAX(ran_at) DESC
+   LIMIT ?`,
+);
+
+/** Record a command run in a shell session, with the cwd it ran in. */
+export function recordCommand(command: string, cwd: string, ts = Date.now()): void {
+  recordCommandStmt.run(command, cwd, ts);
+  if (Math.random() < 0.01) pruneCommandsStmt.run(COMMAND_RETENTION);
+}
+
+export function recentCommands(cwd: string, limit: number): string[] {
+  return (recentCommandsStmt.all(cwd, cwd, limit) as { command: string }[]).map(
+    (r) => r.command,
+  );
+}
+
+export function frequentCommands(cwd: string, limit: number): string[] {
+  return (frequentCommandsStmt.all(cwd, limit) as { command: string }[]).map(
+    (r) => r.command,
+  );
 }
 
 // --- users & auth sessions -------------------------------------------------

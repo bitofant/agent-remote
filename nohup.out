@@ -126,3 +126,83 @@ dist/web/assets/index-D8Xyu9IK.js   696.44 kB │ gzip: 191.89 kB
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
 ✓ built in 808ms
 Build complete.
+Building UI...
+
+> agent-remote@0.0.0 build
+> vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 47 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/web/index.html                   0.60 kB │ gzip:   0.37 kB
+dist/web/assets/index-DZvaybdL.css   14.60 kB │ gzip:   3.81 kB
+dist/web/assets/index-DaaY4f3P.js   705.20 kB │ gzip: 194.54 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 867ms
+Build complete.
+Building UI...
+
+> agent-remote@0.0.0 build
+> vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 47 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/web/index.html                   0.60 kB │ gzip:   0.37 kB
+dist/web/assets/index-DZvaybdL.css   14.60 kB │ gzip:   3.81 kB
+dist/web/assets/index-DaaY4f3P.js   705.20 kB │ gzip: 194.54 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 795ms
+Build complete.
+Building UI...
+
+> agent-remote@0.0.0 build
+> vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 47 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/web/index.html                   0.60 kB │ gzip:   0.37 kB
+dist/web/assets/index-DZvaybdL.css   14.60 kB │ gzip:   3.81 kB
+dist/web/assets/index-CZjKAUPo.js   706.48 kB │ gzip: 194.88 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 804ms
+Build complete.
+Building UI...
+
+> agent-remote@0.0.0 build
+> vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 47 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/web/index.html                   0.60 kB │ gzip:   0.37 kB
+dist/web/assets/index-DZvaybdL.css   14.60 kB │ gzip:   3.81 kB
+dist/web/assets/index-KIAn9oiu.js   706.64 kB │ gzip: 194.93 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 791ms
+Build complete.

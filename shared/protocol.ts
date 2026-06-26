@@ -26,6 +26,45 @@ export interface FolderInfo {
   lastUsedAt: number;
 }
 
+/** Executables/commands available for the command builder, for a given cwd.
+ * Returned by `GET /api/commands?cwd=…`. Purely filesystem-derived: the static
+ * argument catalog for well-known commands lives client-side. */
+export interface CommandListing {
+  /** Executable files in the cwd itself (names without a leading `./`). */
+  local: string[];
+  /** Executables found on `$PATH` (deduped, sorted). */
+  path: string[];
+  /** Shell aliases, read from the user's interactive shell. */
+  aliases: { name: string; value: string }[];
+  /** Most-recently-run commands (deduped, newest first), from shell history. */
+  recent: string[];
+  /** Most-frequently-run commands (by count, descending), from shell history. */
+  frequent: string[];
+}
+
+/** A dynamically-resolved argument suggestion (e.g. a live container name).
+ * Returned by `GET /api/resolve?id=…&cwd=…`. */
+export interface CommandArgSuggestion {
+  value: string;
+  detail?: string;
+}
+
+/** Result of running a named argument resolver. `error` is set (with an empty
+ * `suggestions`) when the underlying command failed (e.g. docker daemon down) —
+ * the builder still allows free-text in that case. */
+export interface CommandResolveResult {
+  suggestions: CommandArgSuggestion[];
+  error?: string;
+}
+
+/** A structured event observed inside a session by shell integration: a command
+ * starting, a command finishing, or the working directory changing. Produced by
+ * harnesses that support it (currently the shell); harness-agnostic in shape. */
+export type SessionEvent =
+  | { type: "command-start"; command: string; at: number }
+  | { type: "command-end"; exitCode: number; at: number }
+  | { type: "cwd"; cwd: string; at: number };
+
 /** Messages the browser sends to the backend. */
 export type ClientMessage =
   | { type: "start"; harnessId: string; cwd?: string }
@@ -41,5 +80,6 @@ export type ServerMessage =
   | { type: "started"; session: SessionInfo }
   | { type: "output"; sessionId: string; data: string }
   | { type: "exit"; sessionId: string; exitCode: number | null }
+  | { type: "sessionEvent"; sessionId: string; event: SessionEvent }
   | { type: "folders"; folders: FolderInfo[] }
   | { type: "error"; message: string; sessionId?: string };
