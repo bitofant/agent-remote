@@ -395,12 +395,16 @@ function Workspace({
                         setSelectorOpen(false);
                       }}
                     >
-                      <span className={`status-dot ${s.status}`} />
+                      <span
+                        className={`status-dot ${s.status} ${
+                          s.currentCommand ? "busy" : ""
+                        }`}
+                      />
                       <span className="session-name">{s.harnessName}</span>
-                      <span className="session-meta">
+                      <span className="session-meta" title={s.currentCommand ?? ""}>
                         {s.status === "exited"
                           ? `exited (${s.exitCode ?? "?"})`
-                          : "running"}
+                          : (s.currentCommand ?? "running")}
                       </span>
                     </button>
                   ))}

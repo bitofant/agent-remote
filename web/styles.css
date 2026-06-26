@@ -420,12 +420,17 @@ body {
 }
 
 .session-name {
-  flex: 1;
+  flex-shrink: 0;
 }
 
 .session-meta {
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -437,6 +442,22 @@ body {
 
 .status-dot.running {
   background: #7fd962;
+}
+
+/* A command is actively executing: pulse the running dot to signal it's busy. */
+.status-dot.running.busy {
+  background: #e6b800;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .status-dot.exited {

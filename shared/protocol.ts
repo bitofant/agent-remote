@@ -17,6 +17,10 @@ export interface SessionInfo {
   status: "running" | "exited";
   exitCode: number | null;
   createdAt: number;
+  /** Command line currently executing in the session, or null when idle at the
+   * prompt. Kept live by shell integration; always null for harnesses without
+   * it (and while at the shell prompt). */
+  currentCommand: string | null;
 }
 
 /** A working directory the user has launched sessions in, remembered across

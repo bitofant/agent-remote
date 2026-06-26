@@ -83,6 +83,7 @@ export class SessionManager {
       status: "running",
       exitCode: null,
       createdAt: Date.now(),
+      currentCommand: null,
     };
     const session: Session = {
       info,
@@ -104,8 +105,12 @@ export class SessionManager {
         for (const l of this.listeners) l.onOutput(info.id, output);
       }
       for (const event of events) {
-        // cwd changes are reflected on the session itself, live.
+        // Reflect live state on the session itself: cwd, and the command
+        // currently running (set while one executes, cleared back at the prompt).
         if (event.type === "cwd") info.cwd = event.cwd;
+        else if (event.type === "command-start")
+          info.currentCommand = event.command.trim() || null;
+        else if (event.type === "command-end") info.currentCommand = null;
         for (const l of this.listeners) l.onEvent?.(info.id, event);
       }
     });
