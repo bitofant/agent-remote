@@ -185,6 +185,7 @@ wss.on("connection", (ws: WebSocket) => {
     onStarted: (session) => send({ type: "started", session }),
     onOutput: (sessionId, data) => send({ type: "output", sessionId, data }),
     onExit: (sessionId, exitCode) => send({ type: "exit", sessionId, exitCode }),
+    onRemoved: (sessionId) => send({ type: "removed", sessionId }),
     onEvent: (sessionId, event) =>
       send({ type: "sessionEvent", sessionId, event }),
   });
@@ -214,6 +215,9 @@ wss.on("connection", (ws: WebSocket) => {
           break;
         case "stop":
           manager.stop(msg.sessionId);
+          break;
+        case "remove":
+          manager.remove(msg.sessionId);
           break;
         case "addFolder":
           upsertFolder(msg.path);

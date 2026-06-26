@@ -418,8 +418,20 @@ export function TerminalView({
       container.removeEventListener("touchmove", onTouchMove, { capture: true });
       container.removeEventListener("touchend", onTouchEnd);
       unsubscribe();
-      renderer.dispose(); // free the GPU/canvas context before the terminal
-      term.dispose();
+      // Closing a session unmounts a single terminal at runtime (the rest of the
+      // app stays mounted). Disposing the GPU renderer/terminal can throw on some
+      // drivers, and an error in this cleanup would tear down the whole React
+      // tree — so swallow it. Free the renderer before the terminal regardless.
+      try {
+        renderer.dispose();
+      } catch {
+        /* renderer already gone / context lost */
+      }
+      try {
+        term.dispose();
+      } catch {
+        /* terminal teardown raced its own disposal */
+      }
       termRef.current = null;
     };
   }, [client, sessionId]);

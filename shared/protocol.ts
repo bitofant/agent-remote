@@ -71,6 +71,7 @@ export type ClientMessage =
   | { type: "input"; sessionId: string; data: string }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
   | { type: "stop"; sessionId: string }
+  | { type: "remove"; sessionId: string }
   | { type: "addFolder"; path: string }
   | { type: "removeFolder"; path: string };
 
@@ -80,6 +81,7 @@ export type ServerMessage =
   | { type: "started"; session: SessionInfo }
   | { type: "output"; sessionId: string; data: string }
   | { type: "exit"; sessionId: string; exitCode: number | null }
+  | { type: "removed"; sessionId: string }
   | { type: "sessionEvent"; sessionId: string; event: SessionEvent }
   | { type: "folders"; folders: FolderInfo[] }
   | { type: "error"; message: string; sessionId?: string };

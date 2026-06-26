@@ -613,6 +613,36 @@ body {
   color: var(--bg);
 }
 
+/* --- closed-session bar (shown in place of the key bar when exited) ------ */
+
+.close-session-bar {
+  /* In-flow at the bottom of the column, like the key bar. The top padding
+     keeps a clear gap between the dead shell's contents and the button. */
+  flex-shrink: 0;
+  padding: 16px 12px 12px;
+  background: var(--bg);
+}
+
+.close-session-button {
+  width: 100%;
+  padding: 14px;
+  background: #e5534b;
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.close-session-button:hover {
+  background: #d8453d;
+}
+
+.close-session-button:active {
+  transform: scale(0.99);
+}
+
 /* --- command builder dialog (./ key-bar button) ------------------------- */
 
 .cmd-overlay {
