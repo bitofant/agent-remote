@@ -114,17 +114,27 @@ export class Client {
         this.buffers.delete(msg.sessionId);
         this.emitSessions();
         break;
-      case "sessionEvent":
-        // cwd changes (from shell integration) update the session's live cwd;
-        // command-start/end are delivered for future consumers but unused here.
-        if (msg.event.type === "cwd") {
-          const cwd = msg.event.cwd;
+      case "sessionEvent": {
+        // Shell-integration events keep the session's live state in sync: cwd,
+        // and the command currently running (set while one executes, cleared
+        // back at the prompt).
+        const ev = msg.event;
+        const patch: Partial<SessionInfo> | null =
+          ev.type === "cwd"
+            ? { cwd: ev.cwd }
+            : ev.type === "command-start"
+              ? { currentCommand: ev.command.trim() || null }
+              : ev.type === "command-end"
+                ? { currentCommand: null }
+                : null;
+        if (patch) {
           this.sessions = this.sessions.map((s) =>
-            s.id === msg.sessionId ? { ...s, cwd } : s,
+            s.id === msg.sessionId ? { ...s, ...patch } : s,
           );
           this.emitSessions();
         }
         break;
+      }
       case "folders":
         this.folders = msg.folders;
         this.emitFolders();
