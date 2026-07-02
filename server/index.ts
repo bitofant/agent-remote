@@ -236,6 +236,21 @@ function broadcastFolders(): void {
   for (const ws of connections) ws.send(raw);
 }
 
+// Folders are ordered by which one most recently received input (see the
+// `ORDER BY last_used_at DESC` in db.ts). Every input bumps its folder's
+// timestamp. The broadcast to browsers, though, only matters when the *order*
+// changes — i.e. when input moves to a different folder — so `lastActiveFolder`
+// suppresses the redundant re-broadcast that every keystroke in the same folder
+// would otherwise cause. It's a network/render throttle, not the sort key.
+let lastActiveFolder: string | undefined;
+
+function markFolderActive(folder: string): void {
+  upsertFolder(folder);
+  if (folder === lastActiveFolder) return;
+  lastActiveFolder = folder;
+  broadcastFolders();
+}
+
 wss.on("connection", (ws: WebSocket) => {
   const send = (msg: ServerMessage) => ws.send(JSON.stringify(msg));
   connections.add(ws);
@@ -270,13 +285,18 @@ wss.on("connection", (ws: WebSocket) => {
           const cwd = msg.cwd || process.cwd();
           manager.start(msg.harnessId, { cwd });
           // Launching a session registers/bumps its folder for everyone.
+          lastActiveFolder = cwd;
           upsertFolder(cwd);
           broadcastFolders();
           break;
         }
-        case "input":
+        case "input": {
           manager.input(msg.sessionId, msg.data);
+          // Typing into a session bumps its folder to the top of the list.
+          const folder = manager.sessionFolder(msg.sessionId);
+          if (folder) markFolderActive(folder);
           break;
+        }
         case "resize":
           manager.resize(msg.sessionId, msg.cols, msg.rows);
           break;
@@ -287,10 +307,12 @@ wss.on("connection", (ws: WebSocket) => {
           manager.remove(msg.sessionId);
           break;
         case "addFolder":
+          lastActiveFolder = msg.path;
           upsertFolder(msg.path);
           broadcastFolders();
           break;
         case "removeFolder":
+          if (msg.path === lastActiveFolder) lastActiveFolder = undefined;
           removeFolder(msg.path);
           broadcastFolders();
           break;

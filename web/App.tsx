@@ -246,10 +246,11 @@ function Workspace({
   }, [addMenuOpen]);
 
   const openFolder = (path: string) => {
+    // Just view the folder — selecting doesn't reorder the list. Recency is
+    // driven by input activity (server bumps the folder on keystrokes).
     setActiveFolder(path);
     setSelectorOpen(false);
     setSidebarOpen(false);
-    client.addFolder(path); // bump recency
   };
 
   const submitNewFolder = () => {
