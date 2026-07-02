@@ -15,6 +15,10 @@ interface Session {
   info: SessionInfo;
   pty: IPty;
   buffer: string;
+  /** The cwd the session was launched in. Unlike `info.cwd` (which drifts as
+   * shell integration reports `cd`s), this stays fixed — it's the folder the
+   * session belongs to, used to bump folder recency on input. */
+  folder: string;
   /** Present only for harnesses with shell integration; extracts events and
    * strips the integration markers from the output stream. */
   parser?: SessionEventParser;
@@ -62,6 +66,12 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.info.cwd;
   }
 
+  /** The folder the session was launched in (fixed for the session's life),
+   * for ordering folders by which one most recently received input. */
+  sessionFolder(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.folder;
+  }
+
   start(harnessId: string, opts: SessionOptions): SessionInfo {
     const adapter = this.adapters.get(harnessId);
     if (!adapter) throw new Error(`Unknown harness: ${harnessId}`);
@@ -89,6 +99,7 @@ export class SessionManager {
       info,
       pty: child,
       buffer: "",
+      folder: opts.cwd,
       parser: adapter.createEventParser?.(),
     };
     this.sessions.set(info.id, session);
