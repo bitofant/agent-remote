@@ -46,6 +46,29 @@ export interface CommandListing {
   frequent: string[];
 }
 
+/** One entry in a directory listing for the file editor. `type` is "dir" for a
+ * subfolder (expandable) or "file" for an openable file. Paths are always
+ * relative to the folder root the listing was requested for. */
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+}
+
+/** A directory listing under a folder root, returned by `GET /api/files`. */
+export interface DirListing {
+  /** Path (relative to the root) of the listed directory; "" for the root. */
+  path: string;
+  entries: FileEntry[];
+}
+
+/** A file's text content, returned by `GET /api/file`. Binary or oversized
+ * files are refused server-side rather than returned. */
+export interface FileContent {
+  path: string;
+  content: string;
+}
+
 /** A dynamically-resolved argument suggestion (e.g. a live container name).
  * Returned by `GET /api/resolve?id=…&cwd=…`. */
 export interface CommandArgSuggestion {

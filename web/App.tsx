@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   FolderInfo,
   HarnessInfo,
@@ -6,12 +15,28 @@ import type {
 } from "../shared/protocol";
 import { Client, type CtrlMode } from "./client";
 import { TerminalView } from "./TerminalView";
+// Lazy-loaded: pulls in CodeMirror + language packs only once a file-edit tab
+// is opened, keeping the initial (terminal-first) bundle small.
+const FileEditor = lazy(() =>
+  import("./FileEditor").then((m) => ({ default: m.FileEditor })),
+);
 import { CommandBuilder } from "./CommandBuilder";
 import { Login } from "./Login";
 import { fetchMe, logout } from "./auth";
 
 function folderName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+// A client-only "file edit" tab. It lives alongside PTY sessions in the tab
+// list but is backed by the /api/files routes, not a harness — so it's tracked
+// here in the UI, never by the server session manager.
+interface EditorTab {
+  id: string;
+  folder: string;
+  /** Base name of the currently open file, for the tab subtitle; null in the
+   * file-picker step. */
+  file: string | null;
 }
 
 // Tracks the on-screen keyboard via the visual viewport. `height` is the
@@ -132,6 +157,8 @@ function Workspace({
   const client = useMemo(() => new Client(), []);
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  // Client-only file-editor tabs (see EditorTab).
+  const [editors, setEditors] = useState<EditorTab[]>([]);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   // Which session is shown for each folder.
@@ -184,19 +211,20 @@ function Workspace({
     }
   }, [sessions]);
 
-  // Drop active-session pins whose session no longer exists (e.g. it was
-  // closed), so the per-folder fallback can pick another session.
+  // Drop active-tab pins whose tab no longer exists (a session was closed, or an
+  // editor tab was closed), so the per-folder fallback can pick another tab.
   useEffect(() => {
     setActiveSession((prev) => {
       let changed = false;
       const next: Record<string, string> = {};
       for (const [folder, id] of Object.entries(prev)) {
-        if (sessions.some((s) => s.id === id)) next[folder] = id;
+        if (sessions.some((s) => s.id === id) || editors.some((e) => e.id === id))
+          next[folder] = id;
         else changed = true;
       }
       return changed ? next : prev;
     });
-  }, [sessions]);
+  }, [sessions, editors]);
 
   // Default to the most-recent folder once folders arrive.
   useEffect(() => {
@@ -240,14 +268,42 @@ function Workspace({
   };
 
   const sessionsInFolder = sessions.filter((s) => s.cwd === activeFolder);
+  const editorsInFolder = editors.filter((e) => e.folder === activeFolder);
+  const tabCount = sessionsInFolder.length + editorsInFolder.length;
   const activeSessionId =
     activeFolder !== null
       ? (activeSession[activeFolder] ??
+        editorsInFolder[editorsInFolder.length - 1]?.id ??
         sessionsInFolder[sessionsInFolder.length - 1]?.id ??
         null)
       : null;
   const activeExited =
     sessionsInFolder.find((s) => s.id === activeSessionId)?.status === "exited";
+  const activeIsEditor = editorsInFolder.some((e) => e.id === activeSessionId);
+
+  // Open a new file-editor tab in the active folder and focus it.
+  const openEditor = () => {
+    if (activeFolder === null) return;
+    const id =
+      crypto.randomUUID?.() ?? `editor-${Date.now()}-${Math.random()}`;
+    setEditors((prev) => [...prev, { id, folder: activeFolder, file: null }]);
+    setActiveSession((prev) => ({ ...prev, [activeFolder]: id }));
+    setAddMenuOpen(false);
+  };
+
+  const closeEditor = (id: string) => {
+    setEditors((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  // Stable, idempotent updater for an editor tab's open-file subtitle. Idempotent
+  // so FileEditor calling it on every render can't cause a re-render loop.
+  const setEditorFile = useCallback((id: string, file: string | null) => {
+    setEditors((prev) => {
+      const cur = prev.find((e) => e.id === id);
+      if (!cur || cur.file === file) return prev;
+      return prev.map((e) => (e.id === id ? { ...e, file } : e));
+    });
+  }, []);
 
   // Selection mode is per active terminal; reset it when the active one changes.
   useEffect(() => {
@@ -363,6 +419,13 @@ function Workspace({
                         {h.name}
                       </button>
                     ))}
+                    {/* Not a harness: a client-only file-editor tab. */}
+                    <button
+                      className="add-session-option"
+                      onClick={openEditor}
+                    >
+                      File edit
+                    </button>
                   </div>
                 )}
                 </div>
@@ -375,12 +438,11 @@ function Workspace({
                 onClick={() => setSelectorOpen((o) => !o)}
               >
                 <span className="caret">{selectorOpen ? "▾" : "▸"}</span>
-                {sessionsInFolder.length}{" "}
-                {sessionsInFolder.length === 1 ? "session" : "sessions"}
+                {tabCount} {tabCount === 1 ? "session" : "sessions"}
               </button>
               {selectorOpen && (
                 <div className="session-list">
-                  {sessionsInFolder.length === 0 && (
+                  {tabCount === 0 && (
                     <p className="muted">No sessions yet. Use + to add one.</p>
                   )}
                   {sessionsInFolder.map((s) => (
@@ -406,6 +468,47 @@ function Workspace({
                           ? `exited (${s.exitCode ?? "?"})`
                           : (s.currentCommand ?? "running")}
                       </span>
+                      <span
+                        className="session-close"
+                        role="button"
+                        aria-label="Close session"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          client.remove(s.id);
+                        }}
+                      >
+                        ×
+                      </span>
+                    </button>
+                  ))}
+                  {editorsInFolder.map((e) => (
+                    <button
+                      key={e.id}
+                      className={`session-item ${e.id === activeSessionId ? "active" : ""}`}
+                      onClick={() => {
+                        setActiveSession((prev) => ({
+                          ...prev,
+                          [activeFolder]: e.id,
+                        }));
+                        setSelectorOpen(false);
+                      }}
+                    >
+                      <span className="status-dot editor" />
+                      <span className="session-name">File edit</span>
+                      <span className="session-meta" title={e.file ?? ""}>
+                        {e.file ?? "no file"}
+                      </span>
+                      <span
+                        className="session-close"
+                        role="button"
+                        aria-label="Close file editor"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          closeEditor(e.id);
+                        }}
+                      >
+                        ×
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -413,7 +516,7 @@ function Workspace({
             </div>
 
             <div className="session-content">
-              {sessionsInFolder.length === 0 && (
+              {tabCount === 0 && (
                 <div className="empty-state">
                   No sessions in this folder. Use + to start one.
                 </div>
@@ -431,6 +534,20 @@ function Workspace({
                   onExitSelect={() => setSelectMode(false)}
                 />
               ))}
+              {/* Editor tabs likewise stay mounted so unsaved edits survive tab
+                  switches. */}
+              {editors.length > 0 && (
+                <Suspense fallback={<div className="empty-state">Loading editor…</div>}>
+                  {editors.map((e) => (
+                    <FileEditor
+                      key={e.id}
+                      cwd={e.folder}
+                      active={e.id === activeSessionId}
+                      onOpenFileChange={(name) => setEditorFile(e.id, name)}
+                    />
+                  ))}
+                </Suspense>
+              )}
             </div>
 
             {/* An exited session can't take input: swap the keyboard key-bar for
@@ -446,7 +563,10 @@ function Workspace({
               </div>
             )}
 
-            {activeSessionId !== null && keyboard.open && !activeExited && (
+            {activeSessionId !== null &&
+              keyboard.open &&
+              !activeExited &&
+              !activeIsEditor && (
               <div className="key-bar">
                 <button
                   className="key-button key-bar-toggle"

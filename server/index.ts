@@ -14,6 +14,7 @@ import {
   closeDb,
 } from "./db.js";
 import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
+import { listDir, readTextFile, writeTextFile } from "./files.js";
 import { authedUser, handleAuthRoute } from "./auth.js";
 import type {
   ClientMessage,
@@ -126,6 +127,47 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
     );
     return;
   }
+  // File editor: browse subfolders and read/write files under a known folder
+  // root. Same folder allowlist as the command routes — never an arbitrary
+  // filesystem browser; files.ts confines every path to that root.
+  const pathname = new URL(url, "http://x").pathname;
+  if (pathname === "/api/files" && req.method === "GET") {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const params = new URL(url, "http://x").searchParams;
+    const cwd = params.get("cwd") ?? "";
+    const path = params.get("path") ?? "";
+    if (!listFolders().some((f) => f.path === cwd))
+      return sendJsonError(res, 400, "Unknown folder.");
+    void listDir(cwd, path).then(
+      (listing) => sendJson(res, listing),
+      (err: unknown) => sendJsonError(res, 400, (err as Error).message),
+    );
+    return;
+  }
+  if (pathname === "/api/file") {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const params = new URL(url, "http://x").searchParams;
+    const cwd = params.get("cwd") ?? "";
+    const path = params.get("path") ?? "";
+    if (!listFolders().some((f) => f.path === cwd))
+      return sendJsonError(res, 400, "Unknown folder.");
+    if (req.method === "GET") {
+      void readTextFile(cwd, path).then(
+        (file) => sendJson(res, file),
+        (err: unknown) => sendJsonError(res, 400, (err as Error).message),
+      );
+      return;
+    }
+    if (req.method === "PUT") {
+      void readTextBody(req)
+        .then((content) => writeTextFile(cwd, path, content))
+        .then(
+          () => sendJson(res, { ok: true }),
+          (err: unknown) => sendJsonError(res, 400, (err as Error).message),
+        );
+      return;
+    }
+  }
   if (viteMiddlewares) {
     viteMiddlewares(req, res, () => {
       res.statusCode = 404;
@@ -140,6 +182,31 @@ function sendUnauthorized(res: ServerResponse): void {
   res.statusCode = 401;
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify({ message: "Not logged in." }));
+}
+
+function sendJson(res: ServerResponse, body: unknown): void {
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify(body));
+}
+
+function sendJsonError(res: ServerResponse, status: number, message: string): void {
+  res.statusCode = status;
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify({ message }));
+}
+
+// Read a raw text request body (file contents for PUT /api/file), capped so a
+// single write can't exhaust memory. Matches the MAX_FILE_BYTES guard in files.ts.
+function readTextBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 4 * 1024 * 1024) reject(new Error("File is too large."));
+    });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
 }
 
 // --- WebSocket (/ws) -------------------------------------------------------
