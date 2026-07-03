@@ -294,6 +294,17 @@ body {
   border-color: var(--accent);
 }
 
+/* First-letter badge shown when a harness has no registered icon. */
+.harness-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .header-icon-button.active {
   border-color: var(--accent);
   color: var(--accent);
@@ -337,6 +348,9 @@ body {
 }
 
 .add-session-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 7px 10px;
   background: transparent;
   border: none;
@@ -420,7 +434,10 @@ body {
 }
 
 .session-name {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
+  color: var(--muted);
 }
 
 .session-meta {

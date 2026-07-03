@@ -85,6 +85,28 @@ const KEYBOARD_ICON =
 // Material `select_all` (dashed marquee): toggles touch text-selection mode.
 const SELECT_ICON =
   "M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2z";
+const EDIT_ICON =
+  "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z";
+// Terminal prompt chevron + underline bar.
+const TERMINAL_ICON = "M6.4 16L5 14.6l3.6-3.6L5 7.4 6.4 6l5 5-5 5zM13 16v-2h6v2h-6z";
+// Sparkles — stands in for an AI coding agent.
+const SPARKLE_ICON =
+  "M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z";
+// The Greek letter π (bar + two legs).
+const PI_ICON = "M4 5h16v3H4zM6.5 8h3v11h-3zM14.5 8h3v11h-3z";
+
+// Per-harness glyphs, keyed by adapter id. Unknown harnesses fall back to a
+// first-letter badge, so new adapters still render without a UI change.
+const HARNESS_ICONS: Record<string, string> = {
+  claude: SPARKLE_ICON,
+  pi: PI_ICON,
+  terminal: TERMINAL_ICON,
+};
+
+// The one harness pulled out as a direct button on mobile (the rest fold into
+// the [+] menu). A deliberate, contained harness reference — a UI/product choice
+// that Terminal is the fast path on small screens; touches no session logic.
+const QUICK_HARNESS_ID = "terminal";
 
 function Icon({ path }: { path: string }) {
   return (
@@ -103,6 +125,16 @@ function Icon({ path }: { path: string }) {
 
 function Arrow({ dir }: { dir: keyof typeof ARROW_PATHS }) {
   return <Icon path={ARROW_PATHS[dir]} />;
+}
+
+// A harness's icon, or a first-letter badge when it has no registered glyph.
+function HarnessGlyph({ id, name }: { id: string; name: string }) {
+  const path = HARNESS_ICONS[id];
+  return path ? (
+    <Icon path={path} />
+  ) : (
+    <span className="harness-letter">{name[0]}</span>
+  );
 }
 
 // Keys a mobile keyboard usually lacks but terminals need, split into two
@@ -166,6 +198,10 @@ function Workspace({
   const [newFolder, setNewFolder] = useState("");
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  // Narrow viewport: collapse the inline new-session buttons into the [+] menu.
+  const [isNarrow, setIsNarrow] = useState(
+    () => window.matchMedia("(max-width: 640px)").matches
+  );
   // Off-canvas sidebar drawer (mobile only; ignored on desktop via CSS).
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const keyboard = useKeyboard();
@@ -244,6 +280,15 @@ function Workspace({
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [addMenuOpen]);
+
+  // Track the 640px breakpoint (matches the CSS media queries) to switch the
+  // new-session buttons between inline (wide) and the [+] menu (narrow).
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    const on = () => setIsNarrow(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
 
   const openFolder = (path: string) => {
     // Just view the folder — selecting doesn't reorder the list. Recency is
@@ -395,41 +440,87 @@ function Workspace({
                 >
                   <Icon path={SELECT_ICON} />
                 </button>
-                <div className="add-session" ref={addMenuRef}>
-                  <button
-                    className="add-session-button"
-                    onClick={() => setAddMenuOpen((o) => !o)}
-                    title="New session"
-                  >
-                    +
-                  </button>
-                {addMenuOpen && (
-                  <div className="add-session-menu">
-                    {harnesses.length === 0 && (
-                      <div className="add-session-empty">No harnesses enabled.</div>
-                    )}
+                {!isNarrow ? (
+                  // Wide: every option inline as an icon button, no [+] menu.
+                  <>
                     {harnesses.map((h) => (
                       <button
                         key={h.id}
-                        className="add-session-option"
-                        onClick={() => {
-                          client.start(h.id, activeFolder);
-                          setAddMenuOpen(false);
-                        }}
+                        className="header-icon-button"
+                        onClick={() => client.start(h.id, activeFolder)}
+                        title={`New ${h.name} session`}
+                        aria-label={`New ${h.name} session`}
                       >
-                        {h.name}
+                        <HarnessGlyph id={h.id} name={h.name} />
                       </button>
                     ))}
-                    {/* Not a harness: a client-only file-editor tab. */}
                     <button
-                      className="add-session-option"
+                      className="header-icon-button"
                       onClick={openEditor}
+                      title="File edit"
+                      aria-label="File edit"
                     >
-                      File edit
+                      <Icon path={EDIT_ICON} />
                     </button>
-                  </div>
+                  </>
+                ) : (
+                  // Narrow: [+] holds the coding agents + File edit; Terminal is
+                  // pulled out as its own direct button (order: [+] then T).
+                  <>
+                    <div className="add-session" ref={addMenuRef}>
+                      <button
+                        className="add-session-button"
+                        onClick={() => setAddMenuOpen((o) => !o)}
+                        title="New session"
+                      >
+                        +
+                      </button>
+                      {addMenuOpen && (
+                        <div className="add-session-menu">
+                          {harnesses.filter((h) => h.id !== QUICK_HARNESS_ID)
+                            .length === 0 && (
+                            <div className="add-session-empty">
+                              No harnesses enabled.
+                            </div>
+                          )}
+                          {harnesses
+                            .filter((h) => h.id !== QUICK_HARNESS_ID)
+                            .map((h) => (
+                              <button
+                                key={h.id}
+                                className="add-session-option"
+                                onClick={() => {
+                                  client.start(h.id, activeFolder);
+                                  setAddMenuOpen(false);
+                                }}
+                              >
+                                <HarnessGlyph id={h.id} name={h.name} />
+                                {h.name}
+                              </button>
+                            ))}
+                          {/* Not a harness: a client-only file-editor tab. */}
+                          <button className="add-session-option" onClick={openEditor}>
+                            <Icon path={EDIT_ICON} />
+                            File edit
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {harnesses
+                      .filter((h) => h.id === QUICK_HARNESS_ID)
+                      .map((h) => (
+                        <button
+                          key={h.id}
+                          className="header-icon-button"
+                          onClick={() => client.start(h.id, activeFolder)}
+                          title={`New ${h.name} session`}
+                          aria-label={`New ${h.name} session`}
+                        >
+                          <HarnessGlyph id={h.id} name={h.name} />
+                        </button>
+                      ))}
+                  </>
                 )}
-                </div>
               </div>
             </div>
 
@@ -463,7 +554,9 @@ function Workspace({
                           s.currentCommand ? "busy" : ""
                         }`}
                       />
-                      <span className="session-name">{s.harnessName}</span>
+                      <span className="session-name" title={s.harnessName}>
+                        <HarnessGlyph id={s.harnessId} name={s.harnessName} />
+                      </span>
                       <span className="session-meta" title={s.currentCommand ?? ""}>
                         {s.status === "exited"
                           ? `exited (${s.exitCode ?? "?"})`
@@ -495,7 +588,9 @@ function Workspace({
                       }}
                     >
                       <span className="status-dot editor" />
-                      <span className="session-name">File edit</span>
+                      <span className="session-name" title="File edit">
+                        <Icon path={EDIT_ICON} />
+                      </span>
                       <span className="session-meta" title={e.file ?? ""}>
                         {e.file ?? "no file"}
                       </span>
