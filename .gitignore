@@ -148,3 +148,9 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Temporary Notes
+temp.md
+research.md
+plan.md
+pr-description.md
