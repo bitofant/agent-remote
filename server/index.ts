@@ -251,6 +251,14 @@ function markFolderActive(folder: string): void {
   broadcastFolders();
 }
 
+// Strip terminal report *requests* (Device Attributes `…c`, Device Status
+// Report `…n`) from replayed scrollback. Such a request is only meaningful to
+// the program that asked it live; replaying it makes xterm.js re-answer into an
+// idle shell prompt, which echoes the reply as literal text (e.g. `1;2c`). The
+// live output path is untouched, so foreground programs still get real answers.
+const stripReports = (s: string): string =>
+  s.replace(/\x1b\[[?>=]?[0-9;]*[cn]/g, "");
+
 wss.on("connection", (ws: WebSocket) => {
   const send = (msg: ServerMessage) => ws.send(JSON.stringify(msg));
   connections.add(ws);
@@ -260,7 +268,8 @@ wss.on("connection", (ws: WebSocket) => {
   send({ type: "sessions", sessions: manager.list() });
   for (const session of manager.list()) {
     const buffer = manager.buffer(session.id);
-    if (buffer) send({ type: "output", sessionId: session.id, data: buffer });
+    if (buffer)
+      send({ type: "output", sessionId: session.id, data: stripReports(buffer) });
   }
 
   const unsubscribe = manager.subscribe({
