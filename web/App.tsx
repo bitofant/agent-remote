@@ -164,6 +164,24 @@ const KEY_GROUPS: Record<KeyGroup, KeyDef[]> = {
   ],
 };
 
+// Shift+Tab (CSI Z, "back-tab") — the mode/permission cycle in Claude & pi.
+// Inserted right after Tab in the "keys" group, only while an agent is running
+// (see agentRunning), since it's meaningless at a bare shell prompt.
+const SHIFT_TAB_KEY: KeyDef = { label: "⇧Tab", aria: "Shift Tab", seq: "\x1b[Z" };
+
+// Harnesses that are AI coding agents. Their sessions always want the Shift+Tab
+// key, even when idle (they have no shell integration, so currentCommand is null).
+const AGENT_HARNESS_IDS = new Set(["claude", "pi"]);
+
+// True when a live command line is one of the agent CLIs. Covers the common case
+// of launching `claude`/`pi` from a Terminal session — there the harness is the
+// shell, and only the running command reveals the agent.
+function isAgentCommand(command: string | null): boolean {
+  if (!command) return false;
+  const bin = command.trim().split(/\s+/)[0]?.split("/").pop() ?? "";
+  return AGENT_HARNESS_IDS.has(bin);
+}
+
 export function App() {
   // Auth gate: undefined = still checking, null = logged out, string = username.
   const [user, setUser] = useState<string | null | undefined>(undefined);
@@ -323,9 +341,15 @@ function Workspace({
         sessionsInFolder[sessionsInFolder.length - 1]?.id ??
         null)
       : null;
-  const activeExited =
-    sessionsInFolder.find((s) => s.id === activeSessionId)?.status === "exited";
+  const activeSessionObj = sessionsInFolder.find((s) => s.id === activeSessionId);
+  const activeExited = activeSessionObj?.status === "exited";
   const activeIsEditor = editorsInFolder.some((e) => e.id === activeSessionId);
+  // Show the Shift+Tab key when the active session is an agent — either a
+  // claude/pi harness, or a Terminal session currently running one of them.
+  const agentRunning =
+    !!activeSessionObj &&
+    (AGENT_HARNESS_IDS.has(activeSessionObj.harnessId) ||
+      isAgentCommand(activeSessionObj.currentCommand));
 
   // Open a new file-editor tab in the active folder and focus it.
   const openEditor = () => {
@@ -685,7 +709,12 @@ function Workspace({
                   ./
                 </button>
                 <div className="key-group">
-                  {KEY_GROUPS[keyGroup].map((k) => (
+                  {(keyGroup === "keys" && agentRunning
+                    ? KEY_GROUPS.keys.flatMap((k) =>
+                        k.aria === "Tab" ? [k, SHIFT_TAB_KEY] : [k],
+                      )
+                    : KEY_GROUPS[keyGroup]
+                  ).map((k) => (
                     <button
                       key={k.aria}
                       className={`key-button ${
