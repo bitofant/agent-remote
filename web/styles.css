@@ -817,13 +817,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 36px;
-  padding: 6px 8px;
+  min-width: 45px;
+  padding: 8px 10px;
   background: transparent;
   border: none;
   border-radius: 8px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 14px;
   font-family: ui-monospace, monospace;
   cursor: pointer;
   transition:
