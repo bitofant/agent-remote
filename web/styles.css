@@ -504,6 +504,135 @@ body {
   color: var(--accent);
 }
 
+/* --- Resume dialog (previously-run chat sessions for a folder) ------------ */
+
+.resume-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.resume-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 520px;
+  max-height: 70vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+  overflow: hidden;
+}
+
+@media (min-width: 641px) {
+  .resume-overlay {
+    align-items: center;
+  }
+  .resume-dialog {
+    border-radius: 12px;
+    max-height: 60vh;
+  }
+}
+
+.resume-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.resume-dialog-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.resume-dialog-close:hover {
+  color: var(--text);
+}
+
+.resume-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.resume-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Resume button in the chat header (alongside Model/Mode). */
+.header-resume {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.header-resume:hover {
+  border-color: var(--accent);
+}
+
+.resume-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.resume-item-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.resume-item-open:hover {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.resume-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-item-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* --- File editor (picker + CodeMirror) ----------------------------------- */
 
 .editor-panel {
@@ -1116,4 +1245,484 @@ body {
   .folder-header {
     padding-left: 52px;
   }
+}
+
+/* --- chat view (chat sessions, ui: "chat") ------------------------------- */
+
+.chat-view {
+  /* Fills .session-content like .terminal / .editor-panel; hidden via
+     display:none when inactive. */
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.chat-empty {
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+  margin-top: 24px;
+}
+
+.chat-bubble {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  user-select: text;
+}
+
+.chat-bubble.user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+/* A prompt queued behind the current run, not yet delivered to the model. */
+.chat-bubble.user.queued {
+  opacity: 0.5;
+  border-style: dashed;
+}
+
+.chat-bubble.assistant {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  /* Markdown handles its own whitespace. */
+  white-space: normal;
+}
+
+/* Blinking placeholder while an assistant bubble has no content yet. */
+.chat-cursor::after {
+  content: "▋";
+  color: var(--accent);
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+/* Rendered markdown: tame default element margins inside a bubble. */
+.chat-md > :first-child {
+  margin-top: 0;
+}
+.chat-md > :last-child {
+  margin-bottom: 0;
+}
+.chat-md p,
+.chat-md ul,
+.chat-md ol,
+.chat-md pre,
+.chat-md blockquote,
+.chat-md h1,
+.chat-md h2,
+.chat-md h3,
+.chat-md h4 {
+  margin: 8px 0;
+}
+.chat-md h1,
+.chat-md h2,
+.chat-md h3,
+.chat-md h4 {
+  font-size: 15px;
+}
+.chat-md ul,
+.chat-md ol {
+  padding-left: 20px;
+}
+.chat-md code {
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.chat-md pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  overflow-x: auto;
+}
+.chat-md pre code {
+  background: none;
+  padding: 0;
+}
+.chat-md a {
+  color: var(--accent);
+}
+.chat-md blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  color: var(--muted);
+}
+
+/* Collapsed reasoning block inside an assistant bubble. */
+.chat-thinking {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 4px 0;
+}
+.chat-thinking summary {
+  cursor: pointer;
+}
+.chat-thinking > div {
+  white-space: pre-wrap;
+  margin-top: 4px;
+}
+
+/* One tool call: collapsed summary row, expandable args + output. */
+.chat-tool {
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12.5px;
+}
+.chat-tool summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  list-style: none;
+  min-width: 0;
+}
+.chat-tool summary::-webkit-details-marker {
+  display: none;
+}
+.chat-tool-glyph {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.chat-tool[data-status="running"] .chat-tool-glyph {
+  color: #e6b800;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+.chat-tool[data-status="done"] .chat-tool-glyph {
+  color: #7fd962;
+}
+.chat-tool[data-status="error"] .chat-tool-glyph {
+  color: #e5534b;
+}
+.chat-tool-name {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-family: ui-monospace, monospace;
+}
+.chat-tool-preview {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.chat-tool-args,
+.chat-tool-output {
+  margin: 0;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* A blocking agent-side question (permission prompt etc.). */
+.chat-request {
+  align-self: stretch;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.chat-request-title {
+  font-weight: 600;
+}
+.chat-request-message {
+  color: var(--muted);
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.chat-request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.chat-request-actions button {
+  padding: 8px 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chat-request-actions button.chat-request-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.chat-request-actions input {
+  flex: 1;
+  min-width: 120px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+}
+.chat-request-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Free-text reasoning attached to a rejection (permission cards). */
+.chat-request-note {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+/* Free-text "Other…" answer for a question. */
+.chat-question-other {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* Structured question dialog (AskUserQuestion). */
+.chat-question {
+  margin-top: 10px;
+}
+.chat-question-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.chat-question-text {
+  margin-top: 2px;
+  font-weight: 600;
+}
+.chat-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.chat-question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+}
+.chat-question-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+}
+.chat-question-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.chat-question-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chat-notice {
+  align-self: center;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+.chat-notice.warning {
+  color: #e6b800;
+}
+.chat-notice.error {
+  color: #e5534b;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+/* Composer: in-flow at the bottom like .key-bar, so it rides above the mobile
+   keyboard when the app is pinned to the visual viewport. */
+.chat-composer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.chat-composer textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.4;
+  max-height: 132px; /* ~6 lines, then inner scroll */
+  overflow-y: auto;
+}
+.chat-composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.chat-composer button {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chat-send {
+  background: var(--accent);
+  color: var(--bg);
+}
+.chat-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.chat-stop {
+  background: #e5534b;
+  color: #fff;
+}
+
+/* --- chat header: model switcher ----------------------------------------- */
+
+.chat-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.chat-model {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-model select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chat-model select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* --- slash-command palette ----------------------------------------------- */
+
+.chat-slash {
+  flex-shrink: 0;
+  align-self: flex-end;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 18px;
+  font-family: ui-monospace, monospace;
+  cursor: pointer;
+}
+.chat-slash.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-commands {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.chat-command {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-command:hover {
+  background: var(--bg);
+}
+.chat-command-name {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--accent);
+}
+.chat-command-desc {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

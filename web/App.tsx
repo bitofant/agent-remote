@@ -11,6 +11,7 @@ import {
 import type {
   FolderInfo,
   HarnessInfo,
+  ResumableSession,
   SessionInfo,
 } from "../shared/protocol";
 import { Client, type CtrlMode } from "./client";
@@ -19,6 +20,10 @@ import { TerminalView } from "./TerminalView";
 // is opened, keeping the initial (terminal-first) bundle small.
 const FileEditor = lazy(() =>
   import("./FileEditor").then((m) => ({ default: m.FileEditor })),
+);
+// Lazy-loaded: pulls in the markdown renderer only once a chat session exists.
+const ChatView = lazy(() =>
+  import("./ChatView").then((m) => ({ default: m.ChatView })),
 );
 import { CommandBuilder } from "./CommandBuilder";
 import { Login } from "./Login";
@@ -127,6 +132,17 @@ function Arrow({ dir }: { dir: keyof typeof ARROW_PATHS }) {
   return <Icon path={ARROW_PATHS[dir]} />;
 }
 
+// Compact "time since" label for the resume list (e.g. "3m", "2h", "5d").
+function relativeTime(ts: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
 // A harness's icon, or a first-letter badge when it has no registered glyph.
 function HarnessGlyph({ id, name }: { id: string; name: string }) {
   const path = HARNESS_ICONS[id];
@@ -213,6 +229,11 @@ function Workspace({
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   // Which session is shown for each folder.
   const [activeSession, setActiveSession] = useState<Record<string, string>>({});
+  // Resumable (previously-run, not-currently-open) chat sessions for the active
+  // folder — fetched from the DB-backed /api/resumable endpoint.
+  const [resumable, setResumable] = useState<ResumableSession[]>([]);
+  // Resume-session picker dialog (opened from the chat header's Resume button).
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [newFolder, setNewFolder] = useState("");
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -287,6 +308,33 @@ function Workspace({
     }
   }, [folders, activeFolder]);
 
+  // Resumable sessions for the active folder. Refetched when the folder changes
+  // and whenever the live session set changes — closing a session makes it
+  // resumable, resuming one hides it (it's now live).
+  const refreshResumable = useCallback(() => {
+    if (activeFolder === null) {
+      setResumable([]);
+      return;
+    }
+    fetch(`/api/resumable?cwd=${encodeURIComponent(activeFolder)}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setResumable)
+      .catch(() => setResumable([]));
+  }, [activeFolder]);
+  useEffect(() => {
+    refreshResumable();
+  }, [refreshResumable, sessions]);
+  // A folder switch invalidates the (per-folder) resume list; close the dialog.
+  useEffect(() => {
+    setResumeDialogOpen(false);
+  }, [activeFolder]);
+
+  const forgetResumable = (key: string) => {
+    void fetch(`/api/resumable?key=${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    }).finally(refreshResumable);
+  };
+
   // Close the add-session dropdown on an outside click.
   useEffect(() => {
     if (!addMenuOpen) return;
@@ -344,6 +392,9 @@ function Workspace({
   const activeSessionObj = sessionsInFolder.find((s) => s.id === activeSessionId);
   const activeExited = activeSessionObj?.status === "exited";
   const activeIsEditor = editorsInFolder.some((e) => e.id === activeSessionId);
+  // Chat sessions have their own composer; terminal-only UI (key-bar, select
+  // mode, command builder) is gated off for them.
+  const activeIsChat = activeSessionObj?.ui === "chat";
   // Show the Shift+Tab key when the active session is an agent — either a
   // claude/pi harness, or a Terminal session currently running one of them.
   const agentRunning =
@@ -456,14 +507,31 @@ function Workspace({
                 {activeFolder}
               </span>
               <div className="header-actions">
-                <button
-                  className={`header-icon-button ${selectMode ? "active" : ""}`}
-                  onClick={() => setSelectMode((m) => !m)}
-                  aria-pressed={selectMode}
-                  title="Select text"
-                >
-                  <Icon path={SELECT_ICON} />
-                </button>
+                {/* Resume a previously-run chat session in this folder. A
+                    folder-level action (it acts on other, closed sessions), so
+                    it lives here with `resumable`/`resumeDialogOpen`, not inside
+                    the per-session ChatView. */}
+                {activeIsChat && resumable.length > 0 && (
+                  <button
+                    className="header-resume"
+                    title="Resume a previous session"
+                    onClick={() => setResumeDialogOpen(true)}
+                  >
+                    Resume{resumable.length > 1 ? ` (${resumable.length})` : ""}
+                  </button>
+                )}
+                {/* Chat bubbles support native text selection; the xterm
+                    select mode only applies to terminal tabs. */}
+                {!activeIsChat && (
+                  <button
+                    className={`header-icon-button ${selectMode ? "active" : ""}`}
+                    onClick={() => setSelectMode((m) => !m)}
+                    aria-pressed={selectMode}
+                    title="Select text"
+                  >
+                    <Icon path={SELECT_ICON} />
+                  </button>
+                )}
                 {!isNarrow ? (
                   // Wide: every option inline as an icon button, no [+] menu.
                   <>
@@ -643,17 +711,34 @@ function Workspace({
               )}
               {/* All sessions stay mounted for scrollback; only the active one
                   in the active folder is visible. */}
-              {sessions.map((s) => (
-                <TerminalView
-                  key={s.id}
-                  client={client}
-                  sessionId={s.id}
-                  active={s.id === activeSessionId}
-                  selectMode={s.id === activeSessionId && selectMode}
-                  onEnterSelect={() => setSelectMode(true)}
-                  onExitSelect={() => setSelectMode(false)}
-                />
-              ))}
+              {sessions
+                .filter((s) => s.ui !== "chat")
+                .map((s) => (
+                  <TerminalView
+                    key={s.id}
+                    client={client}
+                    sessionId={s.id}
+                    active={s.id === activeSessionId}
+                    selectMode={s.id === activeSessionId && selectMode}
+                    onEnterSelect={() => setSelectMode(true)}
+                    onExitSelect={() => setSelectMode(false)}
+                  />
+                ))}
+              {sessions.some((s) => s.ui === "chat") && (
+                <Suspense fallback={<div className="empty-state">Loading chat…</div>}>
+                  {sessions
+                    .filter((s) => s.ui === "chat")
+                    .map((s) => (
+                      <ChatView
+                        key={s.id}
+                        client={client}
+                        sessionId={s.id}
+                        active={s.id === activeSessionId}
+                        exited={s.status === "exited"}
+                      />
+                    ))}
+                </Suspense>
+              )}
               {/* Editor tabs likewise stay mounted so unsaved edits survive tab
                   switches. */}
               {editors.length > 0 && (
@@ -686,7 +771,8 @@ function Workspace({
             {activeSessionId !== null &&
               keyboard.open &&
               !activeExited &&
-              !activeIsEditor && (
+              !activeIsEditor &&
+              !activeIsChat && (
               <div className="key-bar">
                 <button
                   className="key-button key-bar-toggle"
@@ -744,6 +830,73 @@ function Workspace({
                 cwd={activeFolder}
                 onClose={() => setBuilderOpen(false)}
               />
+            )}
+
+            {resumeDialogOpen && activeFolder !== null && (
+              <div
+                className="resume-overlay"
+                onClick={() => setResumeDialogOpen(false)}
+              >
+                <div
+                  className="resume-dialog"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="resume-dialog-head">
+                    <span>Resume session</span>
+                    <button
+                      className="resume-dialog-close"
+                      aria-label="Close"
+                      onClick={() => setResumeDialogOpen(false)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="resume-dialog-body">
+                    {resumable.length === 0 ? (
+                      <div className="resume-empty">
+                        No sessions to resume in this folder.
+                      </div>
+                    ) : (
+                      resumable.map((r) => (
+                        <div key={r.resumeKey} className="resume-item">
+                          <button
+                            className="resume-item-open"
+                            title={`Resume ${r.harnessName} session`}
+                            onClick={() => {
+                              client.start(
+                                r.harnessId,
+                                activeFolder,
+                                r.resumeKey,
+                              );
+                              setResumeDialogOpen(false);
+                            }}
+                          >
+                            <HarnessGlyph
+                              id={r.harnessId}
+                              name={r.harnessName}
+                            />
+                            <span className="resume-item-title">
+                              {r.title || r.harnessName}
+                            </span>
+                            <span className="resume-item-time">
+                              {relativeTime(r.updatedAt)}
+                            </span>
+                          </button>
+                          <span
+                            className="session-close"
+                            role="button"
+                            aria-label="Forget session"
+                            title="Forget this session"
+                            onClick={() => forgetResumable(r.resumeKey)}
+                          >
+                            ×
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
             )}
           </>
         )}

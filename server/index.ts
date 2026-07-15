@@ -11,6 +11,10 @@ import {
   upsertFolder,
   removeFolder,
   recordCommand,
+  upsertChatSession,
+  setChatSessionTitle,
+  listResumableSessions,
+  deleteChatSession,
   closeDb,
 } from "./db.js";
 import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
@@ -47,9 +51,37 @@ manager.subscribe({
   onExit() {},
   onEvent(sessionId, event) {
     if (event.type !== "command-start") return;
+    // Chat sessions mirror busy state through command events for the session
+    // list; those are prompts, not shell commands — keep them out of recents.
+    if (manager.sessionUi(sessionId) === "chat") return;
     const command = event.command.trim();
     const cwd = manager.sessionCwd(sessionId) ?? "";
     if (command && cwd) recordCommand(command, cwd, event.at);
+  },
+  // Persist resumable chat sessions: record the key at init, then set the title
+  // from the first user prompt. Keeps the DB the source of truth for the resume
+  // list so it survives closed tabs and restarts.
+  onResumable(sessionId, key) {
+    const info = manager.sessionInfo(sessionId);
+    const folder = manager.sessionFolder(sessionId);
+    if (!info || !folder) return;
+    upsertChatSession({
+      resumeKey: key,
+      harnessId: info.harnessId,
+      harnessName: info.harnessName,
+      folder,
+    });
+  },
+  onChatEvent(sessionId, event) {
+    if (event.type !== "user-message") return;
+    const key = manager.resumeKey(sessionId);
+    if (!key) return;
+    const text = event.message.parts
+      .map((p) => (p.type === "text" ? p.text : ""))
+      .join("")
+      .trim()
+      .split("\n", 1)[0];
+    if (text) setChatSessionTitle(key, text.slice(0, 120));
   },
 });
 
@@ -126,6 +158,28 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
       },
     );
     return;
+  }
+  // Resumable chat sessions for a folder (GET), and forgetting one (DELETE).
+  // Same auth + folder allowlist as the command routes.
+  if (url.startsWith("/api/resumable")) {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const params = new URL(url, "http://x").searchParams;
+    if (req.method === "GET") {
+      const cwd = params.get("cwd") ?? "";
+      if (!listFolders().some((f) => f.path === cwd))
+        return sendJsonError(res, 400, "Unknown folder.");
+      // Hide sessions that are currently open — you resume closed ones.
+      const live = manager.liveResumeKeys();
+      const sessions = listResumableSessions(cwd).filter(
+        (s) => !live.has(s.resumeKey),
+      );
+      return sendJson(res, sessions);
+    }
+    if (req.method === "DELETE") {
+      const key = params.get("key") ?? "";
+      if (key) deleteChatSession(key);
+      return sendJson(res, { ok: true });
+    }
   }
   // File editor: browse subfolders and read/write files under a known folder
   // root. Same folder allowlist as the command routes — never an arbitrary
@@ -263,10 +317,16 @@ wss.on("connection", (ws: WebSocket) => {
   const send = (msg: ServerMessage) => ws.send(JSON.stringify(msg));
   connections.add(ws);
 
-  // Bring the new client up to date: folders, current sessions, then scrollback.
+  // Bring the new client up to date: folders, current sessions, then history —
+  // scrollback for terminal sessions, a chat-state snapshot for chat sessions.
   send({ type: "folders", folders: listFolders() });
   send({ type: "sessions", sessions: manager.list() });
   for (const session of manager.list()) {
+    if (session.ui === "chat") {
+      const state = manager.chatState(session.id);
+      if (state) send({ type: "chatState", sessionId: session.id, state });
+      continue;
+    }
     const buffer = manager.buffer(session.id);
     if (buffer)
       send({ type: "output", sessionId: session.id, data: stripReports(buffer) });
@@ -279,6 +339,8 @@ wss.on("connection", (ws: WebSocket) => {
     onRemoved: (sessionId) => send({ type: "removed", sessionId }),
     onEvent: (sessionId, event) =>
       send({ type: "sessionEvent", sessionId, event }),
+    onChatEvent: (sessionId, event) =>
+      send({ type: "chatEvent", sessionId, event }),
   });
 
   ws.on("message", (raw) => {
@@ -292,7 +354,7 @@ wss.on("connection", (ws: WebSocket) => {
       switch (msg.type) {
         case "start": {
           const cwd = msg.cwd || process.cwd();
-          manager.start(msg.harnessId, { cwd });
+          manager.start(msg.harnessId, { cwd, resume: msg.resume });
           // Launching a session registers/bumps its folder for everyone.
           lastActiveFolder = cwd;
           upsertFolder(cwd);
@@ -309,6 +371,13 @@ wss.on("connection", (ws: WebSocket) => {
         case "resize":
           manager.resize(msg.sessionId, msg.cols, msg.rows);
           break;
+        case "chatAction": {
+          manager.chatAction(msg.sessionId, msg.action);
+          // Prompting a chat session bumps its folder like terminal input.
+          const folder = manager.sessionFolder(msg.sessionId);
+          if (folder) markFolderActive(folder);
+          break;
+        }
         case "stop":
           manager.stop(msg.sessionId);
           break;
