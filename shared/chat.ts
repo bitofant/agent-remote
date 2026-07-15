@@ -1,7 +1,6 @@
-// Chat-state reducer shared by the backend and the frontend. The server folds
-// adapter events into a per-session ChatState (so a connecting browser gets a
-// single snapshot instead of an event log); the browser applies the identical
-// reducer to live events, keeping both sides in lockstep.
+// Chat-state reducer run identically by server and client. The server folds
+// adapter events into per-session ChatState (browser gets one snapshot, not an
+// event log); the browser applies the same reducer to live events.
 
 import type {
   ChatEvent,
@@ -10,8 +9,7 @@ import type {
   ChatState,
 } from "./protocol.js";
 
-/** Bounds, analogous to the terminal MAX_BUFFER: keep memory in check on
- * long-running sessions while retaining plenty of visible history. */
+/** Bounds to keep memory in check on long-running sessions. */
 const MAX_MESSAGES = 200;
 const MAX_TOOL_OUTPUT = 20_000;
 const MAX_NOTICES = 20;

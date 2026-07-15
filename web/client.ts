@@ -38,9 +38,9 @@ interface OutputSubscriber {
   onReset: ResetListener;
 }
 
-// Single WebSocket connection multiplexing every session. Output is buffered
-// per session so a terminal mounting late (e.g. after switching tabs, or on
-// reconnect) can be replayed without losing or duplicating bytes.
+// Single WebSocket multiplexing every session. Output is buffered per session so
+// a late-mounting terminal (tab switch / reconnect) replays without losing or
+// duplicating bytes.
 export class Client {
   private ws?: WebSocket;
   private shouldReconnect = false;
@@ -58,9 +58,8 @@ export class Client {
 
   connect(): void {
     this.shouldReconnect = true;
-    // Idempotent: never run a second socket alongside an existing one (e.g.
-    // React StrictMode invoking the connect effect twice), or the same messages
-    // get handled twice and terminals duplicate every byte.
+    // Idempotent: a second socket (e.g. StrictMode double-invoke) would handle
+    // every message twice and duplicate terminal bytes.
     if (this.ws) return;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -84,11 +83,9 @@ export class Client {
   private handle(msg: ServerMessage): void {
     switch (msg.type) {
       case "sessions":
-        // Fresh connection (incl. reconnect): drop stale client buffers and
-        // reset mounted terminals before the server replays scrollback, so the
-        // replay rebuilds each terminal rather than duplicating its contents.
-        // Chat states are dropped too — the server resends full snapshots
-        // right after this message.
+        // Fresh connection (incl. reconnect): drop stale buffers and reset
+        // terminals before the server replays scrollback, so replay rebuilds
+        // rather than duplicates. Chat states are resent as snapshots next.
         this.buffers.clear();
         this.chatStates.clear();
         for (const set of this.outputListeners.values())
@@ -136,9 +133,7 @@ export class Client {
         break;
       }
       case "sessionEvent": {
-        // Shell-integration events keep the session's live state in sync: cwd,
-        // and the command currently running (set while one executes, cleared
-        // back at the prompt).
+        // Keep the session's live state in sync: cwd + running command.
         const ev = msg.event;
         const patch: Partial<SessionInfo> | null =
           ev.type === "cwd"
@@ -236,11 +231,9 @@ export class Client {
   }
 
   /**
-   * Subscribe to a session's output. Returns the buffered scrollback so far
-   * plus an unsubscribe; reading the buffer and registering the listener
-   * happens synchronously, so no bytes are dropped or doubled in between.
-   * `onReset` fires when the server is about to replay scrollback (on
-   * reconnect) and the terminal should clear itself first.
+   * Subscribe to a session's output. Returns buffered scrollback + unsubscribe;
+   * read + register happen synchronously so no bytes drop or double. `onReset`
+   * fires before a reconnect replay so the terminal can clear itself first.
    */
   subscribeOutput(
     sessionId: string,
@@ -263,9 +256,7 @@ export class Client {
 
   /**
    * Subscribe to a chat session's state. Same synchronous contract as
-   * `subscribeOutput`: the current state is returned and the listener is
-   * registered atomically, so no update is dropped or doubled. Snapshots
-   * (connect/reconnect) and live events both arrive as full states.
+   * `subscribeOutput`. Snapshots and live events both arrive as full states.
    */
   subscribeChat(
     sessionId: string,

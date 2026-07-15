@@ -33,9 +33,8 @@ function folderName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
-// A client-only "file edit" tab. It lives alongside PTY sessions in the tab
-// list but is backed by the /api/files routes, not a harness — so it's tracked
-// here in the UI, never by the server session manager.
+// Client-only "file edit" tab: lives alongside PTY sessions but is backed by
+// /api/files, not a harness — tracked here in the UI, never by the manager.
 interface EditorTab {
   id: string;
   folder: string;
@@ -52,9 +51,8 @@ function useKeyboard(): { open: boolean; height: number } {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    // Largest viewport height seen = the no-keyboard height; compare against it
-    // so detection works whether the keyboard shrinks the visual or the layout
-    // viewport.
+    // Largest height seen = no-keyboard height; works whether the keyboard
+    // shrinks the visual or the layout viewport.
     let maxHeight = Math.max(vv.height, window.innerHeight);
     const onChange = () => {
       maxHeight = Math.max(maxHeight, vv.height);
@@ -108,9 +106,7 @@ const HARNESS_ICONS: Record<string, string> = {
   terminal: TERMINAL_ICON,
 };
 
-// The one harness pulled out as a direct button on mobile (the rest fold into
-// the [+] menu). A deliberate, contained harness reference — a UI/product choice
-// that Terminal is the fast path on small screens; touches no session logic.
+// The one harness pulled out as a direct button on mobile (rest fold into [+]).
 const QUICK_HARNESS_ID = "terminal";
 
 function Icon({ path }: { path: string }) {
@@ -153,10 +149,9 @@ function HarnessGlyph({ id, name }: { id: string; name: string }) {
   );
 }
 
-// Keys a mobile keyboard usually lacks but terminals need, split into two
-// switchable groups: positional (arrows) and everything else. A plain key sends
-// its `seq`; the `toggle` key (Ctrl) instead arms a sticky modifier applied to
-// the next keystroke (from the keyboard or another on-screen key).
+// Keys a mobile keyboard lacks but terminals need, split into two groups
+// (arrows / everything else). Plain key sends `seq`; `toggle` (Ctrl) arms a
+// sticky modifier applied to the next keystroke.
 type KeyDef = { label: ReactNode; aria: string; seq?: string; toggle?: boolean };
 
 type KeyGroup = "keys" | "arrows";
@@ -180,18 +175,15 @@ const KEY_GROUPS: Record<KeyGroup, KeyDef[]> = {
   ],
 };
 
-// Shift+Tab (CSI Z, "back-tab") — the mode/permission cycle in Claude & pi.
-// Inserted right after Tab in the "keys" group, only while an agent is running
-// (see agentRunning), since it's meaningless at a bare shell prompt.
+// Shift+Tab (CSI Z, "back-tab") — mode/permission cycle in Claude & pi. Shown
+// after Tab only while an agent is running (meaningless at a shell prompt).
 const SHIFT_TAB_KEY: KeyDef = { label: "⇧Tab", aria: "Shift Tab", seq: "\x1b[Z" };
 
-// Harnesses that are AI coding agents. Their sessions always want the Shift+Tab
-// key, even when idle (they have no shell integration, so currentCommand is null).
+// AI coding-agent harnesses; their sessions always want Shift+Tab even when idle.
 const AGENT_HARNESS_IDS = new Set(["claude", "pi"]);
 
-// True when a live command line is one of the agent CLIs. Covers the common case
-// of launching `claude`/`pi` from a Terminal session — there the harness is the
-// shell, and only the running command reveals the agent.
+// True when a live command line is an agent CLI (e.g. `claude`/`pi` launched
+// from a Terminal session, where only the running command reveals the agent).
 function isAgentCommand(command: string | null): boolean {
   if (!command) return false;
   const bin = command.trim().split(/\s+/)[0]?.split("/").pop() ?? "";
@@ -229,8 +221,7 @@ function Workspace({
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   // Which session is shown for each folder.
   const [activeSession, setActiveSession] = useState<Record<string, string>>({});
-  // Resumable (previously-run, not-currently-open) chat sessions for the active
-  // folder — fetched from the DB-backed /api/resumable endpoint.
+  // Resumable (closed) chat sessions for the active folder, from /api/resumable.
   const [resumable, setResumable] = useState<ResumableSession[]>([]);
   // Resume-session picker dialog (opened from the chat header's Resume button).
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
@@ -308,9 +299,8 @@ function Workspace({
     }
   }, [folders, activeFolder]);
 
-  // Resumable sessions for the active folder. Refetched when the folder changes
-  // and whenever the live session set changes — closing a session makes it
-  // resumable, resuming one hides it (it's now live).
+  // Refetched on folder change and when the live session set changes (closing a
+  // session makes it resumable, resuming one hides it).
   const refreshResumable = useCallback(() => {
     if (activeFolder === null) {
       setResumable([]);
@@ -357,8 +347,8 @@ function Workspace({
   }, []);
 
   const openFolder = (path: string) => {
-    // Just view the folder — selecting doesn't reorder the list. Recency is
-    // driven by input activity (server bumps the folder on keystrokes).
+    // Viewing doesn't reorder the list — recency is driven by input activity
+    // (server bumps the folder on keystrokes).
     setActiveFolder(path);
     setSelectorOpen(false);
     setSidebarOpen(false);
@@ -416,8 +406,7 @@ function Workspace({
     setEditors((prev) => prev.filter((e) => e.id !== id));
   };
 
-  // Stable, idempotent updater for an editor tab's open-file subtitle. Idempotent
-  // so FileEditor calling it on every render can't cause a re-render loop.
+  // Idempotent so FileEditor calling it every render can't loop re-renders.
   const setEditorFile = useCallback((id: string, file: string | null) => {
     setEditors((prev) => {
       const cur = prev.find((e) => e.id === id);
@@ -435,9 +424,8 @@ function Workspace({
   return (
     <div
       className="app"
-      // While the keyboard is up, pin the app to the visible (visual viewport)
-      // height so its content can't be panned under the keyboard. dvh alone
-      // doesn't shrink for the keyboard, which let the title bar scroll away.
+      // Pin to the visual-viewport height while the keyboard is up so content
+      // can't pan under it (dvh alone doesn't shrink for the keyboard).
       style={keyboard.open ? { height: keyboard.height } : undefined}
     >
       <button
@@ -507,10 +495,8 @@ function Workspace({
                 {activeFolder}
               </span>
               <div className="header-actions">
-                {/* Resume a previously-run chat session in this folder. A
-                    folder-level action (it acts on other, closed sessions), so
-                    it lives here with `resumable`/`resumeDialogOpen`, not inside
-                    the per-session ChatView. */}
+                {/* Folder-level action (acts on other, closed sessions), so it
+                    lives here, not inside the per-session ChatView. */}
                 {activeIsChat && resumable.length > 0 && (
                   <button
                     className="header-resume"
@@ -520,8 +506,7 @@ function Workspace({
                     Resume{resumable.length > 1 ? ` (${resumable.length})` : ""}
                   </button>
                 )}
-                {/* Chat bubbles support native text selection; the xterm
-                    select mode only applies to terminal tabs. */}
+                {/* xterm select mode applies to terminal tabs only. */}
                 {!activeIsChat && (
                   <button
                     className={`header-icon-button ${selectMode ? "active" : ""}`}
@@ -709,8 +694,7 @@ function Workspace({
                   No sessions in this folder. Use + to start one.
                 </div>
               )}
-              {/* All sessions stay mounted for scrollback; only the active one
-                  in the active folder is visible. */}
+              {/* All sessions stay mounted for scrollback; only the active is shown. */}
               {sessions
                 .filter((s) => s.ui !== "chat")
                 .map((s) => (
@@ -739,8 +723,7 @@ function Workspace({
                     ))}
                 </Suspense>
               )}
-              {/* Editor tabs likewise stay mounted so unsaved edits survive tab
-                  switches. */}
+              {/* Editor tabs stay mounted so unsaved edits survive tab switches. */}
               {editors.length > 0 && (
                 <Suspense fallback={<div className="empty-state">Loading editor…</div>}>
                   {editors.map((e) => (
@@ -755,8 +738,7 @@ function Workspace({
               )}
             </div>
 
-            {/* An exited session can't take input: swap the keyboard key-bar for
-                a prominent control to close it out of the session list. */}
+            {/* Exited sessions can't take input: swap the key-bar for a close control. */}
             {activeExited && (
               <div className="close-session-bar">
                 <button

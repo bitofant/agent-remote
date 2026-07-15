@@ -1,16 +1,13 @@
-// Server-side chat render log. Watches each chat session's normalized ChatState
-// and persists, per finalized message, both the original data (the ChatMessage)
-// and what the UI renders (via shared/render.ts's renderMessage) so we can
-// review and improve how each message type is displayed. Harness-agnostic: it
-// sees only the shared chat schema, same as the browser.
+// Server-side chat render log (diagnostics): per finalized message, persists the
+// original ChatMessage and its rendered form (shared/render.ts's renderMessage)
+// so we can review how each message type is displayed.
 
 import type { ChatState } from "../shared/protocol.js";
 import { renderMessage } from "../shared/render.js";
 import { logChatRender } from "./db.js";
 
-// Per-session signature of every message we've already logged, so we only write
-// when a message's content actually changes (late tool results refresh the row;
-// unchanged messages are skipped). Cleared when the session goes away.
+// Per-session signature of each already-logged message, so we only write on
+// change (late tool results refresh; unchanged skipped). Cleared on session end.
 const logged = new Map<string, Map<string, string>>();
 
 /** Persist any new-or-changed finalized messages of a chat session. Cheap to

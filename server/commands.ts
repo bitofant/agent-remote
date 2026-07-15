@@ -11,21 +11,17 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
-// $PATH and aliases don't depend on the requested cwd and are mildly expensive
-// (a directory scan / spawning a shell), so cache them across requests. Only
-// the per-folder local executables are recomputed every time.
+// $PATH and aliases are cwd-independent but expensive (dir scan / shell spawn),
+// so cache across requests. Per-folder local executables are always recomputed.
 const TTL_MS = 30_000;
 let pathCache: { at: number; value: string[] } | undefined;
 let aliasCache: { at: number; value: CommandListing["aliases"] } | undefined;
 
-// How many entries to surface in each of the recent / frequent sections.
 const HISTORY_LIMIT = 8;
-// Rank a larger pool than we show, so the per-cwd availability filter still has
-// enough candidates left to fill HISTORY_LIMIT.
+// Rank a larger pool than shown so the availability filter can still fill HISTORY_LIMIT.
 const HISTORY_POOL = 60;
 
-/** True if a directory entry should be offered as a runnable command: a regular
- * file that is either executable or a shell script. */
+/** A regular file that is executable or a .sh script. */
 async function isExecutableFile(path: string): Promise<boolean> {
   try {
     const s = await stat(path);
@@ -102,8 +98,8 @@ async function listAliases(): Promise<CommandListing["aliases"]> {
   const shell = process.env.SHELL || "/bin/bash";
   let value: CommandListing["aliases"] = [];
   try {
-    // -i so the interactive rc (where aliases live) is sourced. Guard with a
-    // timeout: a misbehaving rc must not hang the request.
+    // -i sources the interactive rc (where aliases live); timeout so a
+    // misbehaving rc can't hang the request.
     const { stdout } = await execFileAsync(shell, ["-ic", "alias"], {
       timeout: 2000,
       maxBuffer: 1 << 20,
@@ -116,11 +112,10 @@ async function listAliases(): Promise<CommandListing["aliases"]> {
   return value;
 }
 
-// Whether a recorded command line could actually run in `cwd`. Only relative
-// path invocations (`./restart.sh`, `../tool`) are cwd-dependent — plain names
-// resolve via PATH/aliases/builtins and absolute paths don't depend on cwd, so
-// those are always kept. A `./name` is checked against the cwd's executables;
-// deeper relative paths are stat'd directly.
+// Whether a recorded command line can run in `cwd`. Only relative-path
+// invocations (`./restart.sh`, `../tool`) are cwd-dependent; plain names and
+// absolute paths are always kept. `./name` → check cwd's executables; deeper
+// relative paths → stat directly.
 async function availableInCwd(
   line: string,
   cwd: string,
@@ -139,9 +134,8 @@ export async function listCommands(cwd: string): Promise<CommandListing> {
     listPath(),
     listAliases(),
   ]);
-  // Recent/frequent come from the recorded command log (commands run through
-  // shell sessions), ranked with the requested cwd preferred. A pool larger than
-  // we show is fetched so the availability filter can still fill HISTORY_LIMIT.
+  // Recent/frequent from the command log, cwd-preferred; over-fetched so the
+  // availability filter can still fill HISTORY_LIMIT.
   const localSet = new Set(local);
   const filterAvailable = async (cmds: string[]) => {
     const ok = await Promise.all(
@@ -157,10 +151,9 @@ export async function listCommands(cwd: string): Promise<CommandListing> {
 }
 
 // --- dynamic argument resolvers --------------------------------------------
-// A resolver produces live suggestions for a command argument (e.g. container
-// names for `docker logs`). The catalog references these by id; the actual
-// command is fixed here, never supplied by the client — the browser only ever
-// sends a resolver id, so this can't be used to run arbitrary commands.
+// Live suggestions for a command argument (e.g. container names for `docker
+// logs`). The catalog references these by id; the command is fixed here, never
+// client-supplied (the browser sends only an id), so no arbitrary commands run.
 
 type Resolver = (cwd: string) => Promise<CommandArgSuggestion[]>;
 
@@ -215,8 +208,7 @@ const RESOLVERS: Record<string, Resolver> = {
 
 export const RESOLVER_IDS = new Set(Object.keys(RESOLVERS));
 
-// Short cache so the dialog (and React effect double-invokes) don't re-run the
-// same probe repeatedly; live data like container lists still refreshes fast.
+// Short cache so the dialog (+ React double-invokes) don't re-run the same probe.
 const RESOLVE_TTL_MS = 3000;
 const resolveCache = new Map<string, { at: number; value: CommandResolveResult }>();
 
@@ -233,8 +225,7 @@ export async function resolveCommand(
   try {
     value = { suggestions: await resolver(cwd) };
   } catch (err) {
-    // Command missing, non-zero exit (daemon down, not a repo, …), or no
-    // package.json — degrade to free-text rather than failing the request.
+    // Missing command, non-zero exit, or no package.json — degrade to free-text.
     value = { suggestions: [], error: (err as Error).message.split("\n")[0] };
   }
   resolveCache.set(key, { at: Date.now(), value });

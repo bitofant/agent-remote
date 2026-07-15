@@ -11,16 +11,12 @@ import type {
   SessionOptions,
 } from "./types.js";
 
-// Adapter for pi (https://github.com/getpi/pi). Unlike the terminal harnesses,
-// pi sessions run headless via `pi --mode rpc` — a JSONL protocol over
-// stdin/stdout — and render as a chat-bubble UI in the browser. This file is
-// the ONLY place that knows pi's RPC vocabulary: the translator below maps it
-// to/from the normalized chat schema in shared/protocol.ts.
-//
-// Protocol reference: the pi package's docs/rpc.md. Framing is strict JSONL
-// with LF as the only delimiter (tolerate a trailing CR). Deliberately not
-// Node readline, which also splits on U+2028/U+2029 — valid inside JSON
-// strings.
+// Adapter for pi (https://github.com/getpi/pi): runs headless via `pi --mode
+// rpc` (JSONL over stdin/stdout), rendered as chat bubbles. The ONLY place that
+// knows pi's RPC vocabulary; the translator maps it to/from the chat schema.
+// Protocol ref: pi's docs/rpc.md. Framing is strict JSONL, LF-delimited
+// (tolerate trailing CR). NOT Node readline — it also splits on U+2028/U+2029,
+// valid inside JSON strings.
 export function createPiAdapter(cfg: HarnessConfig): HarnessAdapter {
   return {
     id: "pi",

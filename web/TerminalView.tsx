@@ -18,9 +18,8 @@ const clamp = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, n));
 const isWord = (ch: string | undefined) => !!ch && !/\s/.test(ch);
 
-// Copy text to the clipboard, working in both secure and insecure contexts.
-// navigator.clipboard only exists over https/localhost, so plain-http LAN
-// access falls back to the legacy execCommand path.
+// Copy to clipboard. navigator.clipboard only exists over https/localhost, so
+// plain-http LAN access falls back to the legacy execCommand path.
 async function copyText(text: string): Promise<boolean> {
   if (navigator.clipboard?.writeText) {
     try {
@@ -41,8 +40,7 @@ async function copyText(text: string): Promise<boolean> {
   el.style.opacity = "0";
   document.body.appendChild(el);
   try {
-    // iOS Safari ignores textarea.select() on readonly inputs; it needs an
-    // explicit Range. Other browsers are fine with select().
+    // iOS Safari ignores select() on readonly inputs; it needs an explicit Range.
     if (/ipad|iphone|ipod/i.test(navigator.userAgent)) {
       const range = document.createRange();
       range.selectNodeContents(el);
@@ -86,8 +84,8 @@ const stepCell = (cell: Cell, dir: number, cols: number, maxRow: number): Cell =
   return { col: clamp(col, 0, cols - 1), row: clamp(row, 0, maxRow) };
 };
 
-// Button that fires once on press, then auto-repeats (accelerating) while held —
-// for nudging a selection edge across many cells without many taps.
+// Fires on press, then auto-repeats (accelerating) while held — for nudging a
+// selection edge across many cells without many taps.
 function RepeatButton({
   onStep,
   ariaLabel,
@@ -130,9 +128,8 @@ function RepeatButton({
   );
 }
 
-// One xterm instance per session, kept mounted for the session's lifetime so
-// scrollback survives tab switches. Inactive terminals are hidden with CSS
-// rather than unmounted.
+// One xterm per session, kept mounted so scrollback survives tab switches;
+// inactive terminals are hidden with CSS, not unmounted.
 export function TerminalView({
   client,
   sessionId,
@@ -152,14 +149,14 @@ export function TerminalView({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  // Live selection edges (inclusive, absolute rows), so the toolbar can nudge
-  // them and re-apply. Kept in sync wherever we call term.select().
+  // Live selection edges (inclusive, absolute rows) so the toolbar can nudge
+  // and re-apply them; synced wherever we call term.select().
   const selectionRef = useRef<{ start: Cell; end: Cell } | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
 
-  // Mirror the latest props into refs so the (sessionId-keyed) terminal effect's
-  // long-lived touch handlers always see current values without re-running.
+  // Mirror latest props into refs so the terminal effect's long-lived touch
+  // handlers see current values without re-running.
   const selectModeRef = useRef(selectMode);
   const onEnterRef = useRef(onEnterSelect);
   useEffect(() => {
@@ -167,9 +164,8 @@ export function TerminalView({
   });
   useEffect(() => {
     selectModeRef.current = selectMode;
-    // xterm keeps a hidden textarea focused for key input, which pops the
-    // mobile keyboard. In select mode we don't type: suppress its virtual
-    // keyboard and blur it to dismiss any open one; restore on exit.
+    // xterm's hidden textarea pops the mobile keyboard. In select mode we don't
+    // type: suppress its virtual keyboard and blur it; restore on exit.
     const textarea = termRef.current?.textarea;
     if (selectMode) {
       if (textarea) {
@@ -237,8 +233,8 @@ export function TerminalView({
     });
     termRef.current = term;
 
-    // Wide-char width calc: agents emit box-drawing + emoji that the default
-    // tables size wrong, corrupting TUI layout. unicode11 fixes the widths.
+    // unicode11 fixes wide-char widths (box-drawing/emoji) the default tables
+    // size wrong, which otherwise corrupts TUI layout.
     const unicode11 = new Unicode11Addon();
     term.loadAddon(unicode11);
     term.unicode.activeVersion = "11";
@@ -250,9 +246,8 @@ export function TerminalView({
     term.loadAddon(fit);
     term.open(container);
 
-    // GPU rendering is the big smoothness/perf win over the default DOM
-    // renderer. Prefer WebGL; fall back to 2D canvas if WebGL is unavailable
-    // or its context is lost (some mobile GPUs drop it under memory pressure).
+    // GPU rendering (perf win over the DOM renderer). Prefer WebGL; fall back to
+    // canvas if unavailable or its context is lost (mobile GPUs drop it).
     let renderer: WebglAddon | CanvasAddon;
     try {
       const webgl = new WebglAddon();
@@ -293,13 +288,13 @@ export function TerminalView({
     observer.observe(container);
 
     // --- Touch: scroll, long-press-to-select, and drag-to-select ------------
-    // xterm's selection is wired to mouse events that touch never synthesizes,
-    // so we drive its public select() API from raw touch coords ourselves.
+    // xterm's selection is wired to mouse events touch never synthesizes, so we
+    // drive its public select() API from raw touch coords ourselves.
     const viewport = container.querySelector<HTMLElement>(".xterm-viewport");
     const screenEl = () => container.querySelector<HTMLElement>(".xterm-screen");
 
-    // Pixel → buffer cell. Cell pixel size isn't on the public API, so read it
-    // off the render service (the one private hook in this file).
+    // Pixel → buffer cell. Cell pixel size isn't public, so read it off the
+    // render service (the one private hook in this file).
     const cellAt = (clientX: number, clientY: number): Cell | null => {
       const scr = screenEl();
       const dims = (term as unknown as { _core?: any })._core?._renderService
@@ -375,9 +370,8 @@ export function TerminalView({
         clearTimer(); // a drag isn't a long-press
       }
       if (selectModeRef.current) {
-        // Block xterm's own touch-scroll listener (on the inner .xterm-screen)
-        // from also scrolling: this capture-phase handler runs first, and
-        // stopPropagation keeps the event from ever reaching it.
+        // stopPropagation (capture phase) blocks xterm's own touch-scroll
+        // listener on the inner .xterm-screen.
         e.preventDefault();
         e.stopPropagation();
         const cur = cellAt(t.clientX, t.clientY);
@@ -396,7 +390,7 @@ export function TerminalView({
 
     container.addEventListener("touchstart", onTouchStart, { passive: true });
     // Capture phase so select mode can stopPropagation before xterm's own
-    // touch-scroll listener (bound to the inner .xterm-screen) ever runs.
+    // touch-scroll listener runs.
     container.addEventListener("touchmove", onTouchMove, {
       passive: false,
       capture: true,
@@ -418,10 +412,8 @@ export function TerminalView({
       container.removeEventListener("touchmove", onTouchMove, { capture: true });
       container.removeEventListener("touchend", onTouchEnd);
       unsubscribe();
-      // Closing a session unmounts a single terminal at runtime (the rest of the
-      // app stays mounted). Disposing the GPU renderer/terminal can throw on some
-      // drivers, and an error in this cleanup would tear down the whole React
-      // tree — so swallow it. Free the renderer before the terminal regardless.
+      // Disposing the GPU renderer/terminal can throw on some drivers; swallow
+      // it so cleanup can't tear down the whole React tree. Renderer before term.
       try {
         renderer.dispose();
       } catch {
@@ -445,8 +437,7 @@ export function TerminalView({
     if (await copyText(text)) {
       onExitSelect();
     } else {
-      // Surface the failure instead of silently doing nothing; keep the
-      // selection so the user can retry.
+      // Surface the failure; keep the selection so the user can retry.
       setCopyFailed(true);
       window.setTimeout(() => setCopyFailed(false), 1800);
     }

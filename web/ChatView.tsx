@@ -14,12 +14,10 @@ import type {
 import { argsPreview, renderMarkdown, toolGlyph, truncate } from "../shared/render";
 import type { Client } from "./client";
 
-// Chat-bubble view for chat sessions (ui: "chat"). Harness-agnostic: it renders
-// the normalized ChatState kept by the client and sends normalized ChatActions
-// back. Lazy-loaded from App (like FileEditor) so marked stays out of the
-// terminal-first initial bundle. The rendering primitives (markdown, tool
-// preview/glyph) live in shared/render.ts so the server-side render-log captures
-// exactly what's shown here.
+// Chat-bubble view for chat sessions (ui: "chat"). Harness-agnostic: renders the
+// client's normalized ChatState, sends ChatActions back. Lazy-loaded so marked
+// stays out of the initial bundle. Rendering primitives live in shared/render.ts
+// so the server-side render-log captures exactly what's shown here.
 
 function Markdown({ text }: { text: string }) {
   return (
@@ -99,29 +97,25 @@ function UiRequestCard({
   }) => void;
 }) {
   const [value, setValue] = useState("");
-  // Free-text reasoning attached to a rejection (Deny/No/Cancel). Mirrors the
-  // TUI's "No, <why>" — the note is fed back to the model as the deny message.
+  // Rejection reason (Deny/No/Cancel), fed back to the model as the deny message.
   const [note, setNote] = useState("");
-  // Free-text answers per question, keyed by question text. Always appended to
-  // the chosen option; required (and stands alone) when "Other" is picked.
+  // Free-text answers per question; appended to the chosen option, required (and
+  // stands alone) when "Other" is picked.
   const [others, setOthers] = useState<Record<string, string>>({});
   const isPermission =
     request.kind === "select" || request.kind === "confirm";
-  // Selected option labels per question, keyed by question text (for the
-  // `questions` kind). Single-select holds one entry; multi-select holds many.
+  // Selected option labels per question (`questions` kind); multi-select holds many.
   const [picks, setPicks] = useState<Record<string, string[]>>({});
   const questions = request.questions ?? [];
-  // A question's answer = chosen option label(s) with the free-text appended.
-  // The synthetic "Other" label carries no meaning of its own, so it's dropped
-  // from the answer — the free text stands in for it.
+  // Answer = chosen label(s) + appended free text. The synthetic "Other" label
+  // is dropped — its free text stands in for it.
   const answerFor = (question: string) => {
     const parts = (picks[question] ?? []).filter((l) => l !== OTHER);
     const text = (others[question] ?? "").trim();
     if (text) parts.push(text);
     return parts.join(", ");
   };
-  // A question is answerable once it has an answer; when "Other" is chosen the
-  // free text is mandatory.
+  // Answerable once it has an answer; "Other" makes the free text mandatory.
   const answerValid = (question: string) => {
     const picked = picks[question] ?? [];
     if (picked.includes(OTHER) && !(others[question] ?? "").trim()) return false;
@@ -170,8 +164,7 @@ function UiRequestCard({
                   </button>
                 );
               })}
-              {/* Standalone "Other" choice — behaves like any option; the text
-                  field (below) supplies its answer and is then required. */}
+              {/* "Other": the text field below supplies its answer (then required). */}
               <button
                 key="__other__"
                 className={`chat-question-option${
@@ -196,8 +189,7 @@ function UiRequestCard({
             />
           </div>
         ))}
-      {/* Reasoning box for permission cards — type why you're rejecting; it's
-          sent as the deny message so the model sees your feedback (TUI parity). */}
+      {/* Reasoning box for permission cards — sent as the deny message. */}
       {isPermission && (
         <textarea
           className="chat-request-note"
@@ -225,8 +217,7 @@ function UiRequestCard({
         {request.kind === "confirm" && (
           <>
             <button onClick={() => onRespond({ confirmed: true })}>Yes</button>
-            {/* Rejection requires a reason — it's sent to the model as the
-                deny message, so an empty "No" would be uninformative. */}
+            {/* Rejection requires a reason (sent as the deny message). */}
             <button
               disabled={!note.trim()}
               onClick={() => onRespond({ confirmed: false, note })}
@@ -284,7 +275,7 @@ export function ChatView({
   exited: boolean;
 }) {
   const [state, setState] = useState<ChatState>(() => {
-    // Synchronous initial read; the effect below (re)subscribes for updates.
+    // Synchronous initial read; the effect below subscribes for updates.
     const { initial, unsubscribe } = client.subscribeChat(sessionId, () => {});
     unsubscribe();
     return initial;
@@ -296,8 +287,7 @@ export function ChatView({
   const nearBottomRef = useRef(true);
 
   useEffect(() => {
-    // Deltas can arrive far faster than React should render; coalesce updates
-    // to one per animation frame.
+    // Deltas arrive faster than React should render; coalesce to one per frame.
     let latest: ChatState | null = null;
     let frame: number | null = null;
     const { initial, unsubscribe } = client.subscribeChat(sessionId, (s) => {

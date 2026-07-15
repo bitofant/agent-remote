@@ -9,15 +9,11 @@ import type {
 } from "./types.js";
 import type { SessionEvent } from "../../shared/protocol.js";
 
-// Adapter for a plain interactive shell — the "Terminal" option. The PTY gives
-// the shell a tty, so the configured command (e.g. bash/zsh) starts
-// interactively; the working directory is applied by the session manager.
-//
-// When the configured shell is one we can instrument (zsh/bash), we inject a
-// small startup script that emits VS Code OSC 633 markers from the shell's
-// prompt hooks, and attach a parser that turns those markers into session
-// events (command-start/end + live cwd). The user's own rc still loads. All of
-// this is confined here — the session layer stays harness-agnostic.
+// Adapter for a plain interactive shell — the "Terminal" option.
+// For instrumentable shells (zsh/bash) we inject a startup script that emits VS
+// Code OSC 633 markers from the prompt hooks (the user's rc still loads), and a
+// parser that turns those markers into session events (command-start/end + cwd).
+// All confined here — the session layer stays harness-agnostic.
 
 const INTEGRATION_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -45,8 +41,8 @@ export function createShellAdapter(cfg: HarnessConfig): HarnessAdapter {
           command: cfg.command,
           args: [],
           env: {
-            // Hijack ZDOTDIR so our .zshrc runs; preserve the user's real dir so
-            // it can hand control back and source the user's config.
+            // Hijack ZDOTDIR to run our .zshrc; keep the user's real dir so it
+            // can hand back and source the user's config.
             ZDOTDIR: join(INTEGRATION_DIR, "zdotdir"),
             USER_ZDOTDIR: process.env.ZDOTDIR ?? process.env.HOME ?? "",
           },
@@ -74,9 +70,9 @@ export function createShellAdapter(cfg: HarnessConfig): HarnessAdapter {
 
 const OSC_PREFIX = "\x1b]633;";
 
-// Reverse the escaping the integration scripts apply to OSC 633;E command lines.
-// A single pass with `\\` first in the alternation resolves the ambiguity of an
-// escaped backslash that happens to be followed by `x3b`/`x0a`/`x0d` text.
+// Reverse the integration scripts' escaping of OSC 633;E command lines. `\\`
+// first in the alternation disambiguates an escaped backslash followed by
+// literal `x3b`/`x0a`/`x0d` text.
 function unescapeCommand(s: string): string {
   return s.replace(/\\(\\|x3b|x0a|x0d)/g, (_, t: string) =>
     t === "\\" ? "\\" : t === "x3b" ? ";" : t === "x0a" ? "\n" : "\r",
