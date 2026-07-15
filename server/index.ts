@@ -15,8 +15,10 @@ import {
   setChatSessionTitle,
   listResumableSessions,
   deleteChatSession,
+  listChatRenderLog,
   closeDb,
 } from "./db.js";
+import { recordChatRenders, forgetChatRenders } from "./chatLog.js";
 import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
 import { listDir, readTextFile, writeTextFile } from "./files.js";
 import { authedUser, handleAuthRoute } from "./auth.js";
@@ -73,6 +75,19 @@ manager.subscribe({
     });
   },
   onChatEvent(sessionId, event) {
+    // Log how finalized messages are rendered (original + shown HTML) so we can
+    // review display quality. Skip the high-frequency streaming events — the
+    // final form is captured on assistant-end / tool-end. Cheap: unchanged
+    // messages are deduped before any rendering (see chatLog.ts).
+    if (event.type !== "part-delta" && event.type !== "tool-update") {
+      const state = manager.chatState(sessionId);
+      const info = manager.sessionInfo(sessionId);
+      if (state)
+        recordChatRenders(sessionId, state, {
+          harnessId: info?.harnessId,
+          cwd: info?.cwd,
+        });
+    }
     if (event.type !== "user-message") return;
     const key = manager.resumeKey(sessionId);
     if (!key) return;
@@ -82,6 +97,9 @@ manager.subscribe({
       .trim()
       .split("\n", 1)[0];
     if (text) setChatSessionTitle(key, text.slice(0, 120));
+  },
+  onRemoved(sessionId) {
+    forgetChatRenders(sessionId);
   },
 });
 
@@ -180,6 +198,19 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
       if (key) deleteChatSession(key);
       return sendJson(res, { ok: true });
     }
+  }
+  // Chat render log (diagnostics): review how chat messages are displayed —
+  // original normalized data paired with the rendered HTML/component per part.
+  // Auth'd; read-only. `?session=` filters to one session, `?limit=` caps rows.
+  if (req.method === "GET" && url.startsWith("/api/chat-log")) {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const params = new URL(url, "http://x").searchParams;
+    const session = params.get("session") || undefined;
+    const limit = Math.min(
+      Math.max(Number(params.get("limit")) || 100, 1),
+      1000,
+    );
+    return sendJson(res, listChatRenderLog(limit, session));
   }
   // File editor: browse subfolders and read/write files under a known folder
   // root. Same folder allowlist as the command routes — never an arbitrary

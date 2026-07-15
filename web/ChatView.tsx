@@ -5,75 +5,33 @@ import {
   useRef,
   useState,
 } from "react";
-import { Marked } from "marked";
 import type {
   ChatMessage,
   ChatPart,
   ChatState,
   ChatUiRequest,
 } from "../shared/protocol";
+import { argsPreview, renderMarkdown, toolGlyph, truncate } from "../shared/render";
 import type { Client } from "./client";
 
 // Chat-bubble view for chat sessions (ui: "chat"). Harness-agnostic: it renders
 // the normalized ChatState kept by the client and sends normalized ChatActions
 // back. Lazy-loaded from App (like FileEditor) so marked stays out of the
-// terminal-first initial bundle.
-
-const escapeHtml = (s: string): string =>
-  s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
-// Markdown renderer for assistant text. Raw HTML in the model's output is
-// escaped (shown literally) rather than injected into the page.
-const md = new Marked({
-  gfm: true,
-  breaks: true,
-  renderer: {
-    html({ text }: { text: string }) {
-      return escapeHtml(text);
-    },
-  },
-});
+// terminal-first initial bundle. The rendering primitives (markdown, tool
+// preview/glyph) live in shared/render.ts so the server-side render-log captures
+// exactly what's shown here.
 
 function Markdown({ text }: { text: string }) {
   return (
     <div
       className="chat-md"
-      dangerouslySetInnerHTML={{ __html: md.parse(text, { async: false }) }}
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
     />
   );
 }
 
-function argsPreview(args: unknown): string {
-  if (args && typeof args === "object") {
-    // Common case: a single primary argument (e.g. bash's `command`) reads
-    // better than JSON.
-    const values = Object.values(args as Record<string, unknown>);
-    if (values.length === 1 && typeof values[0] === "string")
-      return values[0] as string;
-  }
-  try {
-    return args === undefined ? "" : JSON.stringify(args);
-  } catch {
-    return "";
-  }
-}
-
-const truncate = (s: string, n: number): string =>
-  s.length > n ? `${s.slice(0, n)}…` : s;
-
 function ToolPart({ part }: { part: Extract<ChatPart, { type: "tool" }> }) {
-  const glyph =
-    part.status === "done"
-      ? "✓"
-      : part.status === "error"
-        ? "✕"
-        : part.status === "running"
-          ? "●"
-          : "○";
+  const glyph = toolGlyph(part.status);
   const preview = truncate(argsPreview(part.args).replace(/\s+/g, " "), 80);
   return (
     <details className="chat-tool" data-status={part.status}>
