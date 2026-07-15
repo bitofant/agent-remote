@@ -94,10 +94,9 @@ interface OpenDoc {
   isNew: boolean;
 }
 
-// A file-editor tab: a two-step panel that first shows a folder tree (the file
-// picker) and then a CodeMirror editor for the chosen file. Confined to the
-// folder root `cwd`; all I/O goes through the /api/files + /api/file routes.
-// Kept mounted (hidden when inactive) so unsaved edits survive tab switches.
+// File-editor tab: folder-tree picker → CodeMirror editor, confined to `cwd`
+// via /api/files + /api/file. Kept mounted (hidden when inactive) so unsaved
+// edits survive tab switches.
 export function FileEditor({
   cwd,
   active,
@@ -188,8 +187,7 @@ export function FileEditor({
     setDoc(null);
     setDirty(false);
     setStatus(null);
-    // A newly-saved file may have appeared: refresh whatever dirs are loaded is
-    // overkill; refreshing the root covers the common (root-level) case.
+    // Refresh the root to surface any newly-saved file (common case).
     loadDir("");
   };
 
@@ -235,11 +233,8 @@ export function FileEditor({
           EditorView.lineWrapping,
           ...(lang ? [lang] : []),
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) {
-              // Compare against the on-disk baseline so undoing back to it clears
-              // the dirty flag.
-              setDirty(u.state.doc.toString() !== doc.content);
-            }
+            // Compare against the on-disk baseline so undo-to-baseline clears dirty.
+            if (u.docChanged) setDirty(u.state.doc.toString() !== doc.content);
           }),
         ],
       }),

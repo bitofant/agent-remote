@@ -28,9 +28,8 @@ import type {
   ServerMessage,
 } from "../shared/protocol.js";
 
-// Single-port server. The whole app — UI, /api, and /ws — listens on one port.
-// In dev (--dev) Vite runs in middleware mode on this same server, providing
-// the UI and HMR. In production we serve the prebuilt assets from dist/web.
+// Single port for UI, /api, and /ws. Dev (--dev): Vite in middleware mode on
+// this server (UI + HMR). Prod: serve prebuilt dist/web.
 const DEV = process.argv.includes("--dev");
 
 const config = loadConfig();
@@ -43,26 +42,24 @@ const harnesses: HarnessInfo[] = [...adapters.values()].map((a) => ({
   name: a.name,
 }));
 
-// One server-global subscriber that records every command run, with the cwd it
-// ran in, for the command builder's recent/frequent lists. This must NOT live in
-// the per-connection subscription below, or each connected browser would record
-// a duplicate. Only shell sessions emit command events.
+// Server-global subscriber recording every command run (with cwd) for the
+// builder's recent/frequent lists. Must NOT live in the per-connection
+// subscription below, or each browser would double-record.
 manager.subscribe({
   onStarted() {},
   onOutput() {},
   onExit() {},
   onEvent(sessionId, event) {
     if (event.type !== "command-start") return;
-    // Chat sessions mirror busy state through command events for the session
-    // list; those are prompts, not shell commands — keep them out of recents.
+    // Chat sessions mirror busy via command events — those are prompts, not
+    // shell commands; keep them out of recents.
     if (manager.sessionUi(sessionId) === "chat") return;
     const command = event.command.trim();
     const cwd = manager.sessionCwd(sessionId) ?? "";
     if (command && cwd) recordCommand(command, cwd, event.at);
   },
-  // Persist resumable chat sessions: record the key at init, then set the title
-  // from the first user prompt. Keeps the DB the source of truth for the resume
-  // list so it survives closed tabs and restarts.
+  // Persist resumable chat sessions (DB is the source of truth for the resume
+  // list): record the key at init, set the title from the first user prompt.
   onResumable(sessionId, key) {
     const info = manager.sessionInfo(sessionId);
     const folder = manager.sessionFolder(sessionId);
@@ -75,10 +72,8 @@ manager.subscribe({
     });
   },
   onChatEvent(sessionId, event) {
-    // Log how finalized messages are rendered (original + shown HTML) so we can
-    // review display quality. Skip the high-frequency streaming events — the
-    // final form is captured on assistant-end / tool-end. Cheap: unchanged
-    // messages are deduped before any rendering (see chatLog.ts).
+    // Log finalized-message renders (diagnostics). Skip high-frequency streaming
+    // events — final form lands on assistant-end/tool-end; chatLog dedupes.
     if (event.type !== "part-delta" && event.type !== "tool-update") {
       const state = manager.chatState(sessionId);
       const info = manager.sessionInfo(sessionId);
@@ -129,9 +124,7 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
   if (req.method === "GET" && url.startsWith("/api/commands")) {
     if (!authedUser(req, config)) return sendUnauthorized(res);
     const cwd = new URL(url, "http://x").searchParams.get("cwd") ?? "";
-    // Only list folders the user has already opened — keep this from doubling as
-    // an arbitrary filesystem browser. (The cwd is always a known folder in the
-    // UI.) PATH/alias data is the same regardless of which folder is passed.
+    // Allowlist to opened folders so this isn't an arbitrary filesystem browser.
     if (!listFolders().some((f) => f.path === cwd)) {
       res.statusCode = 400;
       res.setHeader("content-type", "application/json");
@@ -156,8 +149,7 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
     const params = new URL(url, "http://x").searchParams;
     const id = params.get("id") ?? "";
     const cwd = params.get("cwd") ?? "";
-    // Same folder allowlist as /api/commands, and the resolver id must be one we
-    // know — the client never supplies a command to run, only its id.
+    // Folder allowlist + known resolver id (client supplies only an id, never a command).
     if (!RESOLVER_IDS.has(id) || !listFolders().some((f) => f.path === cwd)) {
       res.statusCode = 400;
       res.setHeader("content-type", "application/json");
@@ -177,8 +169,7 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
     );
     return;
   }
-  // Resumable chat sessions for a folder (GET), and forgetting one (DELETE).
-  // Same auth + folder allowlist as the command routes.
+  // Resumable chat sessions for a folder (GET) / forget one (DELETE).
   if (url.startsWith("/api/resumable")) {
     if (!authedUser(req, config)) return sendUnauthorized(res);
     const params = new URL(url, "http://x").searchParams;
@@ -199,9 +190,7 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
       return sendJson(res, { ok: true });
     }
   }
-  // Chat render log (diagnostics): review how chat messages are displayed —
-  // original normalized data paired with the rendered HTML/component per part.
-  // Auth'd; read-only. `?session=` filters to one session, `?limit=` caps rows.
+  // Chat render log (read-only diagnostics). ?session= filters, ?limit= caps rows.
   if (req.method === "GET" && url.startsWith("/api/chat-log")) {
     if (!authedUser(req, config)) return sendUnauthorized(res);
     const params = new URL(url, "http://x").searchParams;
@@ -212,9 +201,8 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
     );
     return sendJson(res, listChatRenderLog(limit, session));
   }
-  // File editor: browse subfolders and read/write files under a known folder
-  // root. Same folder allowlist as the command routes — never an arbitrary
-  // filesystem browser; files.ts confines every path to that root.
+  // File editor: list/read/write under a known folder root (files.ts confines
+  // every path to it).
   const pathname = new URL(url, "http://x").pathname;
   if (pathname === "/api/files" && req.method === "GET") {
     if (!authedUser(req, config)) return sendUnauthorized(res);
@@ -280,8 +268,8 @@ function sendJsonError(res: ServerResponse, status: number, message: string): vo
   res.end(JSON.stringify({ message }));
 }
 
-// Read a raw text request body (file contents for PUT /api/file), capped so a
-// single write can't exhaust memory. Matches the MAX_FILE_BYTES guard in files.ts.
+// Read a raw text request body (PUT /api/file), capped so one write can't
+// exhaust memory (matches files.ts's MAX_FILE_BYTES).
 function readTextBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -295,13 +283,12 @@ function readTextBody(req: IncomingMessage): Promise<string> {
 }
 
 // --- WebSocket (/ws) -------------------------------------------------------
-// noServer + manual upgrade routing so our /ws coexists with Vite's HMR socket
-// on the same port.
+// noServer + manual upgrade routing so /ws coexists with Vite's HMR socket.
 const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
   if (req.url === "/ws") {
-    // The core security boundary: no PTY is reachable without a valid session.
-    // Cookies ride along on the upgrade request (same-origin) automatically.
+    // Security boundary: no PTY reachable without a valid session (cookies ride
+    // the same-origin upgrade request).
     if (!authedUser(req, config)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
@@ -309,11 +296,11 @@ server.on("upgrade", (req, socket, head) => {
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
   }
-  // Other upgrades (e.g. Vite HMR) are handled by Vite's own upgrade listener.
+  // Other upgrades (Vite HMR) handled by Vite's own upgrade listener.
 });
 
-// All live connections, so folder changes can be broadcast to every browser
-// (folder history is server-owned, shared state — not per-connection).
+// All live connections, so server-owned folder history can be broadcast to
+// every browser.
 const connections = new Set<WebSocket>();
 function broadcastFolders(): void {
   const msg: ServerMessage = { type: "folders", folders: listFolders() };
@@ -321,12 +308,9 @@ function broadcastFolders(): void {
   for (const ws of connections) ws.send(raw);
 }
 
-// Folders are ordered by which one most recently received input (see the
-// `ORDER BY last_used_at DESC` in db.ts). Every input bumps its folder's
-// timestamp. The broadcast to browsers, though, only matters when the *order*
-// changes — i.e. when input moves to a different folder — so `lastActiveFolder`
-// suppresses the redundant re-broadcast that every keystroke in the same folder
-// would otherwise cause. It's a network/render throttle, not the sort key.
+// Every input bumps its folder's timestamp (folders sort by last_used_at DESC),
+// but the broadcast only matters when the *order* changes. lastActiveFolder
+// suppresses the redundant re-broadcast per keystroke in the same folder.
 let lastActiveFolder: string | undefined;
 
 function markFolderActive(folder: string): void {
@@ -336,11 +320,9 @@ function markFolderActive(folder: string): void {
   broadcastFolders();
 }
 
-// Strip terminal report *requests* (Device Attributes `…c`, Device Status
-// Report `…n`) from replayed scrollback. Such a request is only meaningful to
-// the program that asked it live; replaying it makes xterm.js re-answer into an
-// idle shell prompt, which echoes the reply as literal text (e.g. `1;2c`). The
-// live output path is untouched, so foreground programs still get real answers.
+// Strip terminal report requests (Device Attributes `…c`, Device Status `…n`)
+// from replayed scrollback — replaying them makes xterm re-answer into an idle
+// prompt, echoing the reply as literal text (e.g. `1;2c`). Live output untouched.
 const stripReports = (s: string): string =>
   s.replace(/\x1b\[[?>=]?[0-9;]*[cn]/g, "");
 
@@ -348,8 +330,8 @@ wss.on("connection", (ws: WebSocket) => {
   const send = (msg: ServerMessage) => ws.send(JSON.stringify(msg));
   connections.add(ws);
 
-  // Bring the new client up to date: folders, current sessions, then history —
-  // scrollback for terminal sessions, a chat-state snapshot for chat sessions.
+  // Bring the new client up to date: folders, sessions, then history
+  // (scrollback for terminals, a chat-state snapshot for chat sessions).
   send({ type: "folders", folders: listFolders() });
   send({ type: "sessions", sessions: manager.list() });
   for (const session of manager.list()) {
@@ -386,7 +368,7 @@ wss.on("connection", (ws: WebSocket) => {
         case "start": {
           const cwd = msg.cwd || process.cwd();
           manager.start(msg.harnessId, { cwd, resume: msg.resume });
-          // Launching a session registers/bumps its folder for everyone.
+          // Launching registers/bumps its folder for everyone.
           lastActiveFolder = cwd;
           upsertFolder(cwd);
           broadcastFolders();
@@ -394,7 +376,7 @@ wss.on("connection", (ws: WebSocket) => {
         }
         case "input": {
           manager.input(msg.sessionId, msg.data);
-          // Typing into a session bumps its folder to the top of the list.
+          // Typing bumps its folder to the top of the list.
           const folder = manager.sessionFolder(msg.sessionId);
           if (folder) markFolderActive(folder);
           break;
@@ -404,7 +386,7 @@ wss.on("connection", (ws: WebSocket) => {
           break;
         case "chatAction": {
           manager.chatAction(msg.sessionId, msg.action);
-          // Prompting a chat session bumps its folder like terminal input.
+          // Prompting bumps its folder like terminal input.
           const folder = manager.sessionFolder(msg.sessionId);
           if (folder) markFolderActive(folder);
           break;
@@ -483,9 +465,8 @@ if (DEV) {
   viteMiddlewares = vite.middlewares as unknown as Middleware;
 }
 
-// Fail loudly on a port collision instead of letting the process linger idle.
-// (A stranded older dev server holding the port is how stale code keeps serving
-// while every "restart" silently fails to bind.)
+// Fail loudly on a port collision — a stranded older server holding the port is
+// how stale code keeps serving while every "restart" silently fails to bind.
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     console.error(
@@ -499,8 +480,8 @@ server.on("error", (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-// Checkpoint the WAL and close the DB cleanly on shutdown (tsx watch sends
-// SIGTERM on each reload; Ctrl-C sends SIGINT).
+// Checkpoint the WAL and close the DB cleanly on shutdown (tsx watch → SIGTERM
+// on reload; Ctrl-C → SIGINT).
 let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;

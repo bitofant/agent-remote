@@ -21,8 +21,7 @@ import type {
 } from "../../shared/protocol.js";
 import { applyChatEvent, emptyChatState } from "../../shared/chat.js";
 
-// Per-session scrollback retained so a (re)connecting browser can be brought
-// up to date. Bounded to keep memory in check on long-running sessions.
+// Per-session scrollback retained for replay on (re)connect; bounded for memory.
 const MAX_BUFFER = 200_000;
 
 // Tail of a chat child's stderr, surfaced as an error notice if it dies.
@@ -30,9 +29,8 @@ const MAX_STDERR_TAIL = 2_000;
 
 interface Session {
   info: SessionInfo;
-  /** The cwd the session was launched in. Unlike `info.cwd` (which drifts as
-   * shell integration reports `cd`s), this stays fixed — it's the folder the
-   * session belongs to, used to bump folder recency on input. */
+  /** Launch cwd — fixed, unlike `info.cwd` which drifts with reported `cd`s.
+   * The folder the session belongs to; bumps folder recency on input. */
   folder: string;
   // --- terminal flavor (ui: "terminal") ---
   pty?: IPty;
@@ -70,9 +68,8 @@ export interface SessionListener {
   onResumable?(sessionId: string, key: string): void;
 }
 
-// Owns the lifecycle of agent subprocesses. This layer is harness-agnostic:
-// it asks an adapter only for the command line, then handles the PTY, output
-// fan-out, and teardown itself.
+// Owns agent-subprocess lifecycle, harness-agnostically: asks an adapter only
+// for the command line, then handles PTY, output fan-out, and teardown itself.
 export class SessionManager {
   private sessions = new Map<string, Session>();
   private listeners = new Set<SessionListener>();
@@ -218,9 +215,8 @@ export class SessionManager {
     };
 
     child.onData((data) => {
-      // With shell integration, run output through the parser: it strips the
-      // integration markers (so they never reach the terminal or buffer) and
-      // yields structured events. Without a parser, the data passes through.
+      // The parser strips integration markers and yields events; without one,
+      // data passes through unchanged.
       const { output, events } = session.parser
         ? session.parser.push(data)
         : { output: data, events: [] };
@@ -229,8 +225,7 @@ export class SessionManager {
         for (const l of this.listeners) l.onOutput(info.id, output);
       }
       for (const event of events) {
-        // Reflect live state on the session itself: cwd, and the command
-        // currently running (set while one executes, cleared back at the prompt).
+        // Reflect live state: cwd + the running command (set on exec, cleared at prompt).
         if (event.type === "cwd") info.cwd = event.cwd;
         else if (event.type === "command-start")
           info.currentCommand = event.command.trim() || null;
@@ -268,8 +263,8 @@ export class SessionManager {
       chat: emptyChatState(),
     };
 
-    // setEncoding makes Node decode utf8 across chunk boundaries for us, so
-    // the translator only ever deals in whole characters.
+    // setEncoding decodes utf8 across chunk boundaries so the translator only
+    // sees whole characters.
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       for (const event of session.translator!.push(chunk))
@@ -306,9 +301,8 @@ export class SessionManager {
     return session;
   }
 
-  /** Fold a normalized chat event into the session's state and fan it out.
-   * Also mirrors busy/idle into `currentCommand` so the existing session-list
-   * UI (pulsing dot + subtitle) works for chat sessions unchanged. */
+  /** Fold a chat event into state and fan it out. Also mirrors busy/idle into
+   * `currentCommand` so the session-list UI (dot + subtitle) works unchanged. */
   private applyChat(session: Session, event: ChatEvent): void {
     session.chat = applyChatEvent(session.chat ?? emptyChatState(), event);
     const info = session.info;
@@ -323,10 +317,8 @@ export class SessionManager {
     for (const l of this.listeners) l.onChatEvent?.(info.id, event);
   }
 
-  /** Perform a chat action. For a session-based chat the adapter's ChatSession
-   * handles it (and emits any resulting events through onEvent); for a
-   * translator-based chat we encode to stdin and apply synthetic events (e.g.
-   * the user-message echo) ourselves. */
+  /** Perform a chat action. Session-based: the adapter's ChatSession handles it.
+   * Translator-based: encode to stdin and apply synthetic events ourselves. */
   chatAction(sessionId: string, action: ChatAction): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.info.status !== "running") return;
@@ -358,9 +350,7 @@ export class SessionManager {
     this.kill(this.sessions.get(sessionId));
   }
 
-  /** Drop a session from the manager. Intended for finished sessions; if one is
-   * still running it is killed first. After this the session is gone from
-   * `list()` and its scrollback is released. */
+  /** Drop a session (killing it first if still running); releases its scrollback. */
   remove(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;

@@ -26,9 +26,8 @@ interface Section {
 const prefix = (s: string, q: string) =>
   s.toLowerCase().startsWith(q.toLowerCase());
 
-// Modal that builds a command line from the cwd's executables, $PATH, aliases
-// and a static catalog of well-known subcommands/flags, then inserts it into the
-// terminal (without pressing Enter — the user reviews and runs it).
+// Modal that builds a command line from cwd executables, $PATH, aliases, and a
+// static catalog, then inserts it (no Enter — the user reviews and runs it).
 export function CommandBuilder({
   client,
   sessionId,
@@ -130,8 +129,7 @@ export function CommandBuilder({
   const firstOption = sections[0]?.options[0];
 
   const pickCommand = (opt: CommandOption) => {
-    // History entries are complete command lines — insert them directly,
-    // skipping the argument-builder step (there's nothing left to build).
+    // History entries are complete command lines — insert directly, no arg step.
     if (opt.whole) {
       client.input(sessionId, opt.insert); // insert only — no trailing newline
       onClose();
@@ -183,8 +181,7 @@ export function CommandBuilder({
   const addArg = (node: ArgNode) => {
     setTokens((t) => [...t, node.value]);
     setQuery("");
-    // Descend when this token has its own suggestions (static or resolved);
-    // otherwise keep the current level so further flags can be added.
+    // Descend if this token has its own suggestions; else stay for more flags.
     if (node.children || node.source) {
       setLevel({ nodes: node.children ?? [], source: node.source });
     }

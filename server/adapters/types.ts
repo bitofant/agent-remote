@@ -1,9 +1,7 @@
-// The harness adapter abstraction — the core extension point of agent-remote.
-//
-// An adapter's only job is to describe HOW to invoke a given agent CLI. All
-// process mechanics (PTY, streaming, lifecycle) live in the harness-agnostic
-// session layer, so adding a new agent means writing a new adapter here and
-// nothing else. Keep harness-specific logic confined to this directory.
+// The harness adapter abstraction — agent-remote's core extension point.
+// An adapter only describes HOW to invoke an agent CLI; all process mechanics
+// (PTY, streaming, lifecycle) live in the harness-agnostic session layer. New
+// agent = new adapter here, nothing else. Keep harness specifics in this dir.
 
 import type {
   ChatAction,
@@ -14,16 +12,14 @@ import type {
 export interface SessionOptions {
   /** Working directory the agent should run in. */
   cwd: string;
-  /** Opaque, harness-native handle for resuming a prior session (restoring its
-   * conversation history). Absent for a fresh session; adapters that don't
-   * support resume ignore it. */
+  /** Opaque harness-native handle for resuming a prior session; absent for a
+   * fresh one. Adapters without resume support ignore it. */
   resume?: string;
 }
 
-/** A stateful parser fed raw PTY output chunks. It extracts structured session
- * events (e.g. from shell-integration escape sequences) and returns the output
- * with any of those sequences stripped, so they never reach the browser's
- * terminal or the replay buffer. Buffers across chunk boundaries internally. */
+/** Fed raw PTY output chunks: extracts structured session events (e.g. from
+ * shell-integration escapes) and returns the output with those sequences
+ * stripped. Buffers across chunk boundaries internally. */
 export interface SessionEventParser {
   push(chunk: string): { output: string; events: SessionEvent[] };
 }
@@ -36,11 +32,10 @@ export interface HarnessInvocation {
   env?: Record<string, string>;
 }
 
-/** A stateful bidirectional protocol translator for chat-UI harnesses. The
- * session layer spawns the invocation with *piped* stdio (no PTY), feeds
- * utf8-decoded stdout through `push()`, and writes `encode()`'s bytes to
- * stdin. All harness-specific wire format (framing, RPC vocabulary) lives
- * inside the translator; only normalized chat events/actions cross it. */
+/** Bidirectional protocol translator for chat-UI harnesses. The session layer
+ * spawns piped stdio (no PTY), feeds utf8 stdout through `push()`, and writes
+ * `encode()`'s bytes to stdin. All wire format (framing, RPC) stays inside;
+ * only normalized chat events/actions cross it. */
 export interface ChatTranslator {
   /** Translate raw stdout text into normalized events. Buffers partial lines
    * across chunk boundaries internally. */
@@ -56,18 +51,15 @@ export interface ChatSessionHandlers {
   onEvent(event: ChatEvent): void;
   /** The underlying agent process/session ended. */
   onExit(exitCode: number | null): void;
-  /** The session learned its opaque, harness-native resume key (persist it so
-   * the session can be resumed later). Fired for harnesses that support resume;
-   * may fire more than once (idempotent — the key is stable). */
+  /** The session learned its resume key (persist it). May fire more than once
+   * (idempotent — the key is stable). */
   onResumable?(key: string): void;
 }
 
 /** A richer chat integration than ChatTranslator: the adapter owns the agent
- * process/SDK itself and exposes control operations (prompt, abort, permission
- * responses, model switching). Used when a translator over manager-owned stdio
- * isn't enough — e.g. the Claude adapter driving the Agent SDK, which owns its
- * own subprocess and offers first-class permission/model/command control. All
- * harness specifics stay inside; the manager only drives this interface. */
+ * process/SDK and exposes control ops (prompt/abort/permissions/model). Used
+ * when a translator over manager-owned stdio isn't enough — e.g. the Claude
+ * adapter driving the Agent SDK. The manager only drives this interface. */
 export interface ChatSession {
   /** Begin the session; events start flowing to the handlers. */
   start(handlers: ChatSessionHandlers): void;

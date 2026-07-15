@@ -9,10 +9,9 @@ import {
   getUser,
 } from "./db.js";
 
-// All authentication lives here: password hashing, cookie handling, and the
-// HTTP auth routes. The rest of the server only asks "who is this request?"
-// via authedUser(). Sessions are server-side tokens stored in sqlite and
-// carried in an HttpOnly cookie, so the token is never exposed to page JS.
+// All authentication: password hashing, cookies, HTTP auth routes. The rest of
+// the server only asks "who is this request?" via authedUser(). Sessions are
+// server-side sqlite tokens in an HttpOnly cookie, never exposed to page JS.
 
 const COOKIE_NAME = "agent_remote_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -72,9 +71,8 @@ function sessionCookie(
 
 // --- request authentication ------------------------------------------------
 
-/** The username making this request, if it carries a valid session whose user
- * is still enabled in config; otherwise null. Re-checking config membership on
- * every request means removing a name from config.json revokes access at once. */
+/** Username if the request has a valid session AND is still in config.users;
+ * else null. Re-checking config each request means removing a name revokes at once. */
 export function authedUser(req: IncomingMessage, config: Config): string | null {
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   if (!token) return null;

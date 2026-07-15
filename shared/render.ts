@@ -1,9 +1,6 @@
-// Single source of truth for how a normalized ChatPart/ChatMessage becomes the
-// HTML the browser shows. ChatView imports the primitives here (md, escapeHtml,
-// argsPreview, …) so the UI and this module never drift; the server-side chat
-// render-log (server/chatLog.ts) calls renderMessage() to capture *exactly* what
-// the UI produces alongside the original normalized data. Harness-agnostic: it
-// only knows the shared chat schema, never any agent's wire format.
+// Single source of truth for turning a ChatPart/ChatMessage into displayed HTML.
+// ChatView imports these primitives so the UI can't drift; server/chatLog.ts
+// calls renderMessage() to capture exactly what the UI produces.
 
 import { Marked } from "marked";
 import type { ChatMessage, ChatPart } from "./protocol.js";
@@ -15,8 +12,7 @@ export const escapeHtml = (s: string): string =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
-// Markdown renderer for assistant text. Raw HTML in the model's output is
-// escaped (shown literally) rather than injected into the page.
+// Markdown renderer for assistant text; raw HTML is escaped, not injected.
 export const md = new Marked({
   gfm: true,
   breaks: true,
@@ -37,8 +33,7 @@ export const truncate = (s: string, n: number): string =>
 /** The one-line argument preview shown next to a tool's name. */
 export function argsPreview(args: unknown): string {
   if (args && typeof args === "object") {
-    // Common case: a single primary argument (e.g. bash's `command`) reads
-    // better than JSON.
+    // A single primary arg (e.g. bash's `command`) reads better than JSON.
     const values = Object.values(args as Record<string, unknown>);
     if (values.length === 1 && typeof values[0] === "string")
       return values[0] as string;

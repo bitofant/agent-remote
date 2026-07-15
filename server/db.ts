@@ -3,10 +3,9 @@ import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
 import type { FolderInfo, ResumableSession } from "../shared/protocol.js";
 
-// The project's only persistence layer. Sessions are live PTYs and can't
-// survive a restart, but the folders the user has worked in are remembered
-// here, along with registered user accounts and their login sessions, so all
-// survive restarts and are shared across browsers via the server.
+// The project's only persistence layer: folders, user accounts, login sessions,
+// command log, and resumable chat sessions all survive restarts here (live PTYs
+// can't). Shared across browsers via the server.
 
 const DB_PATH = resolve(process.cwd(), "data/agent-remote.db");
 
@@ -26,8 +25,8 @@ db.exec(
      created_at INTEGER NOT NULL
    )`,
 );
-// Login sessions, keyed by an opaque random token kept in the browser's cookie.
-// Named auth_sessions to avoid confusion with the live agent (PTY) sessions.
+// Login sessions, keyed by an opaque random token in the browser's cookie.
+// Named auth_sessions to avoid confusion with live agent (PTY) sessions.
 db.exec(
   `CREATE TABLE IF NOT EXISTS auth_sessions (
      token TEXT PRIMARY KEY,
@@ -35,9 +34,8 @@ db.exec(
      expires_at INTEGER NOT NULL
    )`,
 );
-// Commands run in shell (Terminal) sessions, captured via shell integration with
-// the cwd they ran in. Powers the command builder's recent/frequent lists —
-// replacing the old practice of scraping the user's ~/.zsh_history files.
+// Commands run in Terminal sessions (via shell integration), with their cwd.
+// Powers the command builder's recent/frequent lists.
 db.exec(
   `CREATE TABLE IF NOT EXISTS commands (
      id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,10 +46,9 @@ db.exec(
 );
 db.exec("CREATE INDEX IF NOT EXISTS commands_ran_at ON commands(ran_at)");
 db.exec("CREATE INDEX IF NOT EXISTS commands_cwd ON commands(cwd)");
-// Resumable chat sessions: a harness-native resume key (e.g. the Claude Agent
-// SDK session id) plus the folder it belongs to, so a prior conversation can be
-// reopened after the tab is closed or the server restarts. Rows outlive the live
-// (in-memory) session; the resume list hides keys that are currently running.
+// Resumable chat sessions: harness-native resume key (e.g. Claude SDK session
+// id) + its folder, so a conversation can be reopened after the tab closes or
+// the server restarts. Rows outlive the live session.
 db.exec(
   `CREATE TABLE IF NOT EXISTS chat_sessions (
      resume_key TEXT PRIMARY KEY,
@@ -66,12 +63,9 @@ db.exec(
 db.exec(
   "CREATE INDEX IF NOT EXISTS chat_sessions_folder ON chat_sessions(folder)",
 );
-// Chat message render log: one row per rendered chat message, capturing both the
-// original normalized data (the ChatMessage the UI receives) and the rendered
-// representation the UI shows (HTML + component/class per part, from
-// shared/render.ts). Lets us review how each message type is displayed and
-// improve it. Keyed by (session, message) and upserted, so late tool results
-// refresh the same row. Debug/diagnostic data — not part of the app's state.
+// Chat render log (diagnostics): one row per rendered message, both the original
+// ChatMessage and its rendered form (HTML + component/class per part). Keyed by
+// (session, message), upserted so late tool results refresh the row.
 db.exec(
   `CREATE TABLE IF NOT EXISTS chat_render_log (
      session_id TEXT NOT NULL,
@@ -114,8 +108,7 @@ export function removeFolder(path: string): void {
 
 // --- command log -----------------------------------------------------------
 
-// Cap the table so it can't grow without bound; pruned probabilistically on
-// insert (the exact ceiling doesn't matter, only that it stays bounded).
+// Bounded, pruned probabilistically on insert (exact ceiling doesn't matter).
 const COMMAND_RETENTION = 10_000;
 
 const recordCommandStmt = db.prepare(
@@ -178,8 +171,7 @@ const upsertChatSessionStmt = db.prepare(
      folder = excluded.folder,
      updated_at = excluded.updated_at`,
 );
-// Set the title only while it's still empty, so the first user prompt sticks as
-// the label even as the conversation (and updated_at) keeps growing.
+// Only set the title while still empty, so the first user prompt sticks as the label.
 const setChatSessionTitleStmt = db.prepare(
   `UPDATE chat_sessions SET title = ?
    WHERE resume_key = ? AND (title IS NULL OR title = '')`,
@@ -385,9 +377,8 @@ export function deleteAuthSession(token: string): void {
 
 // --- shutdown --------------------------------------------------------------
 
-/** Flush the WAL back into the main .db file and close. Without this, a dev
- * server that is only ever SIGKILLed leaves every write stranded in the WAL
- * and the .db file empty — recoverable, but the file is not self-sufficient. */
+/** Flush the WAL into the main .db file and close. Without this, a SIGKILLed
+ * server leaves writes stranded in the WAL and the .db file empty. */
 export function closeDb(): void {
   try {
     db.pragma("wal_checkpoint(TRUNCATE)");
