@@ -1,12 +1,16 @@
 import type {
+  ChatAction,
+  ChatState,
   ClientMessage,
   FolderInfo,
   ServerMessage,
   SessionInfo,
 } from "../shared/protocol";
+import { applyChatEvent, emptyChatState } from "../shared/chat";
 
 type SessionsListener = (sessions: SessionInfo[]) => void;
 type FoldersListener = (folders: FolderInfo[]) => void;
+type ChatListener = (state: ChatState) => void;
 type OutputListener = (data: string) => void;
 type ResetListener = () => void;
 // Ctrl modifier state: off, armed for one keystroke, or locked (caps-lock
@@ -43,9 +47,11 @@ export class Client {
   private sessions: SessionInfo[] = [];
   private folders: FolderInfo[] = [];
   private buffers = new Map<string, string>();
+  private chatStates = new Map<string, ChatState>();
   private sessionsListeners = new Set<SessionsListener>();
   private foldersListeners = new Set<FoldersListener>();
   private outputListeners = new Map<string, Set<OutputSubscriber>>();
+  private chatListeners = new Map<string, Set<ChatListener>>();
   // Sticky Ctrl: armed by the on-screen Ctrl key, applied to subsequent input.
   private ctrlMode: CtrlMode = "off";
   private ctrlListeners = new Set<CtrlListener>();
@@ -81,7 +87,10 @@ export class Client {
         // Fresh connection (incl. reconnect): drop stale client buffers and
         // reset mounted terminals before the server replays scrollback, so the
         // replay rebuilds each terminal rather than duplicating its contents.
+        // Chat states are dropped too — the server resends full snapshots
+        // right after this message.
         this.buffers.clear();
+        this.chatStates.clear();
         for (const set of this.outputListeners.values())
           set.forEach((sub) => sub.onReset());
         this.sessions = msg.sessions;
@@ -112,8 +121,20 @@ export class Client {
       case "removed":
         this.sessions = this.sessions.filter((s) => s.id !== msg.sessionId);
         this.buffers.delete(msg.sessionId);
+        this.chatStates.delete(msg.sessionId);
         this.emitSessions();
         break;
+      case "chatState":
+        this.chatStates.set(msg.sessionId, msg.state);
+        this.emitChat(msg.sessionId, msg.state);
+        break;
+      case "chatEvent": {
+        const prev = this.chatStates.get(msg.sessionId) ?? emptyChatState();
+        const next = applyChatEvent(prev, msg.event);
+        this.chatStates.set(msg.sessionId, next);
+        this.emitChat(msg.sessionId, next);
+        break;
+      }
       case "sessionEvent": {
         // Shell-integration events keep the session's live state in sync: cwd,
         // and the command currently running (set while one executes, cleared
@@ -153,8 +174,8 @@ export class Client {
     }
   }
 
-  start(harnessId: string, cwd?: string): void {
-    this.send({ type: "start", harnessId, cwd });
+  start(harnessId: string, cwd?: string, resume?: string): void {
+    this.send({ type: "start", harnessId, cwd, resume });
   }
   input(sessionId: string, data: string): void {
     if (this.ctrlMode !== "off") {
@@ -180,6 +201,9 @@ export class Client {
   }
   stop(sessionId: string): void {
     this.send({ type: "stop", sessionId });
+  }
+  chatAction(sessionId: string, action: ChatAction): void {
+    this.send({ type: "chatAction", sessionId, action });
   }
   remove(sessionId: string): void {
     this.send({ type: "remove", sessionId });
@@ -235,6 +259,33 @@ export class Client {
       initial,
       unsubscribe: () => set!.delete(sub),
     };
+  }
+
+  /**
+   * Subscribe to a chat session's state. Same synchronous contract as
+   * `subscribeOutput`: the current state is returned and the listener is
+   * registered atomically, so no update is dropped or doubled. Snapshots
+   * (connect/reconnect) and live events both arrive as full states.
+   */
+  subscribeChat(
+    sessionId: string,
+    cb: ChatListener,
+  ): { initial: ChatState; unsubscribe: () => void } {
+    const initial = this.chatStates.get(sessionId) ?? emptyChatState();
+    let set = this.chatListeners.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.chatListeners.set(sessionId, set);
+    }
+    set.add(cb);
+    return {
+      initial,
+      unsubscribe: () => set!.delete(cb),
+    };
+  }
+
+  private emitChat(sessionId: string, state: ChatState): void {
+    this.chatListeners.get(sessionId)?.forEach((cb) => cb(state));
   }
 
   private emitSessions(): void {

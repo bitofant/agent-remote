@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
-import type { FolderInfo } from "../shared/protocol.js";
+import type { FolderInfo, ResumableSession } from "../shared/protocol.js";
 
 // The project's only persistence layer. Sessions are live PTYs and can't
 // survive a restart, but the folders the user has worked in are remembered
@@ -48,6 +48,24 @@ db.exec(
 );
 db.exec("CREATE INDEX IF NOT EXISTS commands_ran_at ON commands(ran_at)");
 db.exec("CREATE INDEX IF NOT EXISTS commands_cwd ON commands(cwd)");
+// Resumable chat sessions: a harness-native resume key (e.g. the Claude Agent
+// SDK session id) plus the folder it belongs to, so a prior conversation can be
+// reopened after the tab is closed or the server restarts. Rows outlive the live
+// (in-memory) session; the resume list hides keys that are currently running.
+db.exec(
+  `CREATE TABLE IF NOT EXISTS chat_sessions (
+     resume_key TEXT PRIMARY KEY,
+     harness_id TEXT NOT NULL,
+     harness_name TEXT NOT NULL,
+     folder TEXT NOT NULL,
+     title TEXT,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+);
+db.exec(
+  "CREATE INDEX IF NOT EXISTS chat_sessions_folder ON chat_sessions(folder)",
+);
 
 const listStmt = db.prepare(
   "SELECT path, last_used_at AS lastUsedAt FROM folders ORDER BY last_used_at DESC",
@@ -121,6 +139,69 @@ export function frequentCommands(cwd: string, limit: number): string[] {
   return (frequentCommandsStmt.all(cwd, limit) as { command: string }[]).map(
     (r) => r.command,
   );
+}
+
+// --- resumable chat sessions -----------------------------------------------
+
+// Cap the table like the command log; pruned probabilistically on upsert.
+const CHAT_SESSION_RETENTION = 2_000;
+
+const upsertChatSessionStmt = db.prepare(
+  `INSERT INTO chat_sessions (resume_key, harness_id, harness_name, folder, title, created_at, updated_at)
+   VALUES (@resumeKey, @harnessId, @harnessName, @folder, NULL, @ts, @ts)
+   ON CONFLICT(resume_key) DO UPDATE SET
+     harness_id = excluded.harness_id,
+     harness_name = excluded.harness_name,
+     folder = excluded.folder,
+     updated_at = excluded.updated_at`,
+);
+// Set the title only while it's still empty, so the first user prompt sticks as
+// the label even as the conversation (and updated_at) keeps growing.
+const setChatSessionTitleStmt = db.prepare(
+  `UPDATE chat_sessions SET title = ?
+   WHERE resume_key = ? AND (title IS NULL OR title = '')`,
+);
+const listResumableSessionsStmt = db.prepare(
+  `SELECT resume_key AS resumeKey, harness_id AS harnessId,
+          harness_name AS harnessName, COALESCE(title, '') AS title,
+          updated_at AS updatedAt
+   FROM chat_sessions WHERE folder = ? ORDER BY updated_at DESC`,
+);
+const deleteChatSessionStmt = db.prepare(
+  "DELETE FROM chat_sessions WHERE resume_key = ?",
+);
+const pruneChatSessionsStmt = db.prepare(
+  `DELETE FROM chat_sessions
+   WHERE resume_key NOT IN (
+     SELECT resume_key FROM chat_sessions ORDER BY updated_at DESC LIMIT ?
+   )`,
+);
+
+/** Record (or refresh) a resumable session for the given folder. Leaves an
+ * existing title untouched — only recency and location are updated. */
+export function upsertChatSession(row: {
+  resumeKey: string;
+  harnessId: string;
+  harnessName: string;
+  folder: string;
+  ts?: number;
+}): void {
+  upsertChatSessionStmt.run({ ...row, ts: row.ts ?? Date.now() });
+  if (Math.random() < 0.02) pruneChatSessionsStmt.run(CHAT_SESSION_RETENTION);
+}
+
+/** Set the session's title if it has none yet (idempotent). */
+export function setChatSessionTitle(resumeKey: string, title: string): void {
+  setChatSessionTitleStmt.run(title, resumeKey);
+}
+
+/** Resumable sessions for a folder, newest first. */
+export function listResumableSessions(folder: string): ResumableSession[] {
+  return listResumableSessionsStmt.all(folder) as ResumableSession[];
+}
+
+export function deleteChatSession(resumeKey: string): void {
+  deleteChatSessionStmt.run(resumeKey);
 }
 
 // --- users & auth sessions -------------------------------------------------
