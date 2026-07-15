@@ -26,6 +26,22 @@ interface Section {
 const prefix = (s: string, q: string) =>
   s.toLowerCase().startsWith(q.toLowerCase());
 
+// The builder's search input holds focus (and thus the mobile keyboard). When
+// the dialog unmounts on insert, focus would fall to <body> and the keyboard
+// would drop. Hand focus back to the visible terminal's textarea — done inside
+// the tap gesture so mobile keeps the keyboard up.
+const focusTerminal = () => {
+  const areas = document.querySelectorAll<HTMLTextAreaElement>(
+    ".terminal .xterm-helper-textarea",
+  );
+  for (const ta of areas) {
+    if (ta.offsetParent !== null) {
+      ta.focus();
+      break;
+    }
+  }
+};
+
 // Modal that builds a command line from cwd executables, $PATH, aliases, and a
 // static catalog, then inserts it (no Enter — the user reviews and runs it).
 export function CommandBuilder({
@@ -132,6 +148,7 @@ export function CommandBuilder({
     // History entries are complete command lines — insert directly, no arg step.
     if (opt.whole) {
       client.input(sessionId, opt.insert); // insert only — no trailing newline
+      focusTerminal();
       onClose();
       return;
     }
@@ -215,6 +232,7 @@ export function CommandBuilder({
   const insert = () => {
     if (!finalCommand) return;
     client.input(sessionId, finalCommand); // insert only — no trailing newline
+    focusTerminal();
     onClose();
   };
 
