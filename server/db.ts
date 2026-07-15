@@ -66,6 +66,29 @@ db.exec(
 db.exec(
   "CREATE INDEX IF NOT EXISTS chat_sessions_folder ON chat_sessions(folder)",
 );
+// Chat message render log: one row per rendered chat message, capturing both the
+// original normalized data (the ChatMessage the UI receives) and the rendered
+// representation the UI shows (HTML + component/class per part, from
+// shared/render.ts). Lets us review how each message type is displayed and
+// improve it. Keyed by (session, message) and upserted, so late tool results
+// refresh the same row. Debug/diagnostic data — not part of the app's state.
+db.exec(
+  `CREATE TABLE IF NOT EXISTS chat_render_log (
+     session_id TEXT NOT NULL,
+     message_id TEXT NOT NULL,
+     role TEXT NOT NULL,
+     harness_id TEXT,
+     cwd TEXT,
+     original TEXT NOT NULL,
+     rendered TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL,
+     PRIMARY KEY (session_id, message_id)
+   )`,
+);
+db.exec(
+  "CREATE INDEX IF NOT EXISTS chat_render_log_updated ON chat_render_log(updated_at)",
+);
 
 const listStmt = db.prepare(
   "SELECT path, last_used_at AS lastUsedAt FROM folders ORDER BY last_used_at DESC",
@@ -202,6 +225,105 @@ export function listResumableSessions(folder: string): ResumableSession[] {
 
 export function deleteChatSession(resumeKey: string): void {
   deleteChatSessionStmt.run(resumeKey);
+}
+
+// --- chat render log --------------------------------------------------------
+
+// Cap the table like the other logs; pruned probabilistically on write.
+const CHAT_RENDER_LOG_RETENTION = 20_000;
+
+const upsertChatRenderStmt = db.prepare(
+  `INSERT INTO chat_render_log
+     (session_id, message_id, role, harness_id, cwd, original, rendered, created_at, updated_at)
+   VALUES (@sessionId, @messageId, @role, @harnessId, @cwd, @original, @rendered, @ts, @ts)
+   ON CONFLICT(session_id, message_id) DO UPDATE SET
+     role = excluded.role,
+     harness_id = excluded.harness_id,
+     cwd = excluded.cwd,
+     original = excluded.original,
+     rendered = excluded.rendered,
+     updated_at = excluded.updated_at`,
+);
+const pruneChatRenderStmt = db.prepare(
+  `DELETE FROM chat_render_log
+   WHERE rowid NOT IN (
+     SELECT rowid FROM chat_render_log ORDER BY updated_at DESC LIMIT ?
+   )`,
+);
+const listChatRenderStmt = db.prepare(
+  `SELECT session_id AS sessionId, message_id AS messageId, role,
+          harness_id AS harnessId, cwd, original, rendered,
+          created_at AS createdAt, updated_at AS updatedAt
+   FROM chat_render_log ORDER BY updated_at DESC LIMIT ?`,
+);
+const listChatRenderForSessionStmt = db.prepare(
+  `SELECT session_id AS sessionId, message_id AS messageId, role,
+          harness_id AS harnessId, cwd, original, rendered,
+          created_at AS createdAt, updated_at AS updatedAt
+   FROM chat_render_log WHERE session_id = ? ORDER BY updated_at DESC LIMIT ?`,
+);
+
+export interface ChatRenderLogRow {
+  sessionId: string;
+  messageId: string;
+  role: string;
+  harnessId: string | null;
+  cwd: string | null;
+  /** JSON of the original normalized ChatMessage. */
+  original: string;
+  /** JSON of the RenderedMessage (what the UI shows). */
+  rendered: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Record (or refresh) the render log for one chat message. */
+export function logChatRender(row: {
+  sessionId: string;
+  messageId: string;
+  role: string;
+  harnessId?: string | null;
+  cwd?: string | null;
+  original: string;
+  rendered: string;
+  ts?: number;
+}): void {
+  upsertChatRenderStmt.run({
+    harnessId: null,
+    cwd: null,
+    ...row,
+    ts: row.ts ?? Date.now(),
+  });
+  if (Math.random() < 0.01) pruneChatRenderStmt.run(CHAT_RENDER_LOG_RETENTION);
+}
+
+/** Recent render-log rows, newest first. Filtered to one session when given.
+ * `original`/`rendered` are parsed back from JSON for the caller. */
+export function listChatRenderLog(
+  limit: number,
+  sessionId?: string,
+): (Omit<ChatRenderLogRow, "original" | "rendered"> & {
+  original: unknown;
+  rendered: unknown;
+})[] {
+  const rows = (
+    sessionId
+      ? listChatRenderForSessionStmt.all(sessionId, limit)
+      : listChatRenderStmt.all(limit)
+  ) as ChatRenderLogRow[];
+  return rows.map((r) => ({
+    ...r,
+    original: safeParse(r.original),
+    rendered: safeParse(r.rendered),
+  }));
+}
+
+function safeParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
 }
 
 // --- users & auth sessions -------------------------------------------------
