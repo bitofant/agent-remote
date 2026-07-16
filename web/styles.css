@@ -216,15 +216,11 @@ body {
 
 .folder-item {
   display: flex;
-  flex-direction: column;
+  align-items: stretch;
   gap: 2px;
-  padding: 8px 10px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
 }
 
 .folder-item:hover {
@@ -234,6 +230,45 @@ body {
 .folder-item.active {
   background: var(--bg);
   border-color: var(--accent);
+}
+
+.folder-item-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-remove {
+  flex: none;
+  width: 28px;
+  align-self: stretch;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.folder-item:hover .folder-remove,
+.folder-item.active .folder-remove {
+  opacity: 1;
+}
+
+.folder-remove:hover {
+  color: var(--text);
+  background: var(--border);
 }
 
 .folder-name {
