@@ -37,6 +37,9 @@ export interface HarnessInvocation {
  * `encode()`'s bytes to stdin. All wire format (framing, RPC) stays inside;
  * only normalized chat events/actions cross it. */
 export interface ChatTranslator {
+  /** Optional: stdin bytes to write once when the session starts, before any
+   * user action (e.g. an RPC handshake / capability query). */
+  init?(): string;
   /** Translate raw stdout text into normalized events. Buffers partial lines
    * across chunk boundaries internally. */
   push(chunk: string): ChatEvent[];

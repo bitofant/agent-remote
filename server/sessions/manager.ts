@@ -298,6 +298,10 @@ export class SessionManager {
       finish(-1);
     });
 
+    // Optional RPC handshake / capability query the translator wants sent first.
+    const initData = session.translator!.init?.();
+    if (initData) child.stdin.write(initData);
+
     return session;
   }
 
