@@ -612,21 +612,6 @@ body {
   font-size: 13px;
 }
 
-/* Resume button in the chat header (alongside Model/Mode). */
-.header-resume {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 10px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.header-resume:hover {
-  border-color: var(--accent);
-}
-
 .resume-item {
   display: flex;
   align-items: center;

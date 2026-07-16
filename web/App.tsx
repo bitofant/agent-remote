@@ -518,17 +518,8 @@ function Workspace({
                 {activeFolder}
               </span>
               <div className="header-actions">
-                {/* Folder-level action (acts on other, closed sessions), so it
-                    lives here, not inside the per-session ChatView. */}
-                {activeIsChat && resumable.length > 0 && (
-                  <button
-                    className="header-resume"
-                    title="Resume a previous session"
-                    onClick={() => setResumeDialogOpen(true)}
-                  >
-                    Resume{resumable.length > 1 ? ` (${resumable.length})` : ""}
-                  </button>
-                )}
+                {/* Resume lives in ChatView's `/` slash-command menu as
+                    `/resume` (mirrors the CLI), not a header button. */}
                 {/* xterm select mode applies to terminal tabs only. */}
                 {!activeIsChat && (
                   <button
@@ -742,6 +733,8 @@ function Workspace({
                         sessionId={s.id}
                         active={s.id === activeSessionId}
                         exited={s.status === "exited"}
+                        canResume={resumable.length > 0}
+                        onResume={() => setResumeDialogOpen(true)}
                       />
                     ))}
                 </Suspense>
