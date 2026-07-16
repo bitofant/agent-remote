@@ -328,11 +328,18 @@ export function ChatView({
   sessionId,
   active,
   exited,
+  canResume,
+  onResume,
 }: {
   client: Client;
   sessionId: string;
   active: boolean;
   exited: boolean;
+  // Whether the folder has closed sessions to resume, and the opener for the
+  // resume picker. `/resume` is a client-only entry in the slash-command menu
+  // (not a harness command), so it lives alongside the real commands here.
+  canResume: boolean;
+  onResume: () => void;
 }) {
   const [state, setState] = useState<ChatState>(() => {
     // Synchronous initial read; the effect below subscribes for updates.
@@ -499,8 +506,24 @@ export function ChatView({
           </div>
         ))}
       </div>
-      {!exited && showCommands && state.commands.length > 0 && (
+      {!exited && showCommands && (state.commands.length > 0 || canResume) && (
         <div className="chat-commands">
+          {canResume && (
+            <button
+              key="__resume"
+              className="chat-command"
+              onClick={() => {
+                onResume();
+                setShowCommands(false);
+              }}
+              title="Resume a previous session"
+            >
+              <span className="chat-command-name">/resume</span>
+              <span className="chat-command-desc">
+                Resume a previous session
+              </span>
+            </button>
+          )}
           {state.commands.map((c) => (
             <button
               key={c.name}
@@ -518,7 +541,7 @@ export function ChatView({
       )}
       {!exited && (
         <div className="chat-composer">
-          {state.commands.length > 0 && (
+          {(state.commands.length > 0 || canResume) && (
             <button
               className={`chat-slash${showCommands ? " active" : ""}`}
               title="Slash commands"
