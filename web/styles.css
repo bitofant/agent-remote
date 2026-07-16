@@ -1383,6 +1383,16 @@ body {
   white-space: pre-wrap;
   margin-top: 4px;
 }
+/* Live "Thinking…" indicator when there's no reasoning transcript to show
+   (claude). Gentle pulse, no spinner. Removed by the reducer once the next
+   part arrives. */
+.chat-thinking-label {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-style: italic;
+  margin: 4px 0;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
 
 /* One tool call: collapsed summary row, expandable args + output. */
 .chat-tool {
@@ -1431,17 +1441,57 @@ body {
   text-overflow: ellipsis;
   min-width: 0;
 }
+/* Secondary muted detail in the summary (Bash description, Read line range). */
+.chat-tool-desc {
+  color: var(--muted);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* Tool bodies: no wrapping — mobile pans horizontally instead of getting a
+   line break on every column. Each code/diff/output <pre> scrolls on its own. */
 .chat-tool-args,
+.chat-tool-code,
+.chat-tool-diff,
 .chat-tool-output {
   margin: 0;
   padding: 6px 8px;
   border-top: 1px solid var(--border);
   font-family: ui-monospace, monospace;
   font-size: 12px;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
+  white-space: pre;
   max-height: 40vh;
-  overflow-y: auto;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* File-path header above a diff/code body. */
+.chat-tool-path {
+  padding: 6px 8px 0;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Red/green line diff for Edit calls. Each line is its own block (no newline
+   separators), so a blank line needs a min-height to stay visible. */
+.chat-tool-diff span {
+  display: block;
+  min-height: 1.2em;
+}
+.chat-tool-diff .diff-add {
+  color: #7fd962;
+  background: color-mix(in srgb, #7fd962 12%, transparent);
+}
+.chat-tool-diff .diff-del {
+  color: #e5534b;
+  background: color-mix(in srgb, #e5534b 12%, transparent);
+}
+.chat-tool-diff .diff-ctx {
+  color: var(--muted);
 }
 
 /* A blocking agent-side question (permission prompt etc.). */

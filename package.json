@@ -9,6 +9,7 @@
     "dev": "tsx watch server/index.ts --dev",
     "build": "vite build",
     "start": "tsx server/index.ts",
+    "chat-log-report": "tsx scripts/chat-log-report.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {

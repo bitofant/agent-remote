@@ -11,7 +11,8 @@ import type {
   ChatState,
   ChatUiRequest,
 } from "../shared/protocol";
-import { argsPreview, renderMarkdown, toolGlyph, truncate } from "../shared/render";
+import { renderMarkdown, toolGlyph, toolView } from "../shared/render";
+import type { ToolBody } from "../shared/render";
 import type { Client } from "./client";
 
 // Chat-bubble view for chat sessions (ui: "chat"). Harness-agnostic: renders the
@@ -28,21 +29,52 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
+function ToolBodyView({ body }: { body: ToolBody }) {
+  switch (body.kind) {
+    case "none":
+      return null;
+    case "json":
+      return <pre className="chat-tool-args">{body.text}</pre>;
+    case "code":
+      return (
+        <div className="chat-tool-body">
+          {body.label && <div className="chat-tool-path">{body.label}</div>}
+          <pre className="chat-tool-code">{body.text}</pre>
+        </div>
+      );
+    case "diff":
+      return (
+        <div className="chat-tool-body">
+          {body.path && <div className="chat-tool-path">{body.path}</div>}
+          <pre className="chat-tool-diff">
+            {body.lines.map((l, i) => (
+              <span
+                key={i}
+                className={
+                  l.sign === "+" ? "diff-add" : l.sign === "-" ? "diff-del" : "diff-ctx"
+                }
+              >
+                {`${l.sign} ${l.text}`}
+              </span>
+            ))}
+          </pre>
+        </div>
+      );
+  }
+}
+
 function ToolPart({ part }: { part: Extract<ChatPart, { type: "tool" }> }) {
   const glyph = toolGlyph(part.status);
-  const preview = truncate(argsPreview(part.args).replace(/\s+/g, " "), 80);
+  const view = toolView(part);
   return (
     <details className="chat-tool" data-status={part.status}>
       <summary>
         <span className="chat-tool-glyph">{glyph}</span>
         <span className="chat-tool-name">{part.name}</span>
-        {preview && <span className="chat-tool-preview">{preview}</span>}
+        {view.primary && <span className="chat-tool-preview">{view.primary}</span>}
+        {view.secondary && <span className="chat-tool-desc">{view.secondary}</span>}
       </summary>
-      {part.args !== undefined && (
-        <pre className="chat-tool-args">
-          {JSON.stringify(part.args, null, 2)}
-        </pre>
-      )}
+      <ToolBodyView body={view.body} />
       {part.output && <pre className="chat-tool-output">{part.output}</pre>}
     </details>
   );
@@ -62,7 +94,14 @@ function Bubble({ message, streaming }: { message: ChatMessage; streaming?: bool
           case "text":
             return <Markdown key={i} text={part.text} />;
           case "thinking":
-            return (
+            // No reasoning text (claude never streams it) → a plain live
+            // "Thinking…" label; the reducer strips this part once the next
+            // part starts. With text (pi) → the collapsible transcript.
+            return part.text.trim() === "" ? (
+              <div key={i} className="chat-thinking-label">
+                Thinking…
+              </div>
+            ) : (
               <details key={i} className="chat-thinking">
                 <summary>Thinking…</summary>
                 <div>{part.text}</div>

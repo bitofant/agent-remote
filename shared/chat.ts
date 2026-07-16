@@ -73,7 +73,7 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         ...state,
         streaming: {
           ...state.streaming,
-          parts: [...state.streaming.parts, part],
+          parts: [...dropEmptyThinking(state.streaming.parts), part],
         },
       };
     }
@@ -103,18 +103,23 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         ...state,
         streaming: {
           ...state.streaming,
-          parts: [...state.streaming.parts, part],
+          parts: [...dropEmptyThinking(state.streaming.parts), part],
         },
       };
     }
 
-    case "assistant-end":
+    case "assistant-end": {
       if (!state.streaming) return state;
+      const finalized = {
+        ...state.streaming,
+        parts: dropEmptyThinking(state.streaming.parts),
+      };
       return {
         ...state,
-        messages: capMessages([...state.messages, state.streaming]),
+        messages: capMessages([...state.messages, finalized]),
         streaming: null,
       };
+    }
 
     case "tool-update":
       return updateToolPart(state, event.toolId, (part) => ({
@@ -174,6 +179,17 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
     case "commands":
       return { ...state, commands: event.commands };
   }
+}
+
+/** Drop content-less thinking parts. A thinking part with no text (claude never
+ * streams its reasoning back — see adapters/claude.ts) is only ever a live
+ * "Thinking…" indicator; once the next part starts or the turn ends it carries
+ * nothing, so we remove it rather than leave an empty collapsible behind. pi's
+ * thinking always has text by then and is kept. */
+function dropEmptyThinking(parts: ChatPart[]): ChatPart[] {
+  return parts.filter(
+    (p) => !(p.type === "thinking" && p.text.trim() === ""),
+  );
 }
 
 function capMessages(messages: ChatMessage[]): ChatMessage[] {
