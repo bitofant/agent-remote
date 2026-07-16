@@ -62,6 +62,7 @@ interface PiLine {
   // response
   command?: string;
   success?: boolean;
+  data?: { commands?: { name?: string; description?: string }[] };
   // auto_retry_start / extension_error / compaction_end
   error?: string;
   errorMessage?: string;
@@ -77,6 +78,12 @@ class PiRpcTranslator implements ChatTranslator {
   /** Whether an assistant message is currently streaming (only assistant
    * message_start/end are surfaced; user/toolResult messages are not). */
   private assistantOpen = false;
+
+  /** Query the available slash commands (extension commands, prompt templates,
+   * skills) once at startup so the UI can offer a `/` palette. */
+  init(): string {
+    return '{"type":"get_commands"}\n';
+  }
 
   push(chunk: string): ChatEvent[] {
     this.lineBuffer += chunk;
@@ -231,7 +238,20 @@ class PiRpcTranslator implements ChatTranslator {
         return this.translateUiRequest(line);
 
       case "response":
-        // Command acknowledgments are uninteresting unless they failed.
+        // get_commands reply → surface the slash-command palette.
+        if (line.command === "get_commands" && line.data?.commands) {
+          return [
+            {
+              type: "commands",
+              commands: line.data.commands
+                .filter((c): c is { name: string; description?: string } =>
+                  typeof c.name === "string" && c.name.length > 0,
+                )
+                .map((c) => ({ name: c.name, description: c.description })),
+            },
+          ];
+        }
+        // Other command acknowledgments are uninteresting unless they failed.
         return line.success === false && line.error
           ? [{ type: "notice", level: "error", text: line.error }]
           : [];
