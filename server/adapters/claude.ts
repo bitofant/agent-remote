@@ -243,7 +243,9 @@ class ClaudeChatSession implements ChatSession {
                 id,
                 kind: "select",
                 title: `Allow ${toolName}?`,
-                message: summarizeInput(toolInput),
+                // Rich, harness-agnostic view (diff/code/path) instead of raw
+                // arg JSON — the client renders it via the shared toolView.
+                tool: { name: toolName, args: toolInput },
                 options: canAlways
                   ? [ALLOW, isEdit ? ALLOW_ALL_EDITS : ALWAYS_ALLOW, DENY]
                   : [ALLOW, DENY],
@@ -697,20 +699,6 @@ function parseToolArgs(tool: ToolBlock): unknown {
     }
   }
   return tool.initialInput;
-}
-
-/** A one-line summary of a tool's input for a permission card. */
-function summarizeInput(input: unknown): string {
-  if (input && typeof input === "object") {
-    const values = Object.values(input as Record<string, unknown>);
-    if (values.length === 1 && typeof values[0] === "string") return values[0];
-  }
-  try {
-    const s = input === undefined ? "" : JSON.stringify(input);
-    return s.length > 200 ? `${s.slice(0, 200)}…` : s;
-  } catch {
-    return "";
-  }
 }
 
 /** A content block of a replayed assistant message (loose shape — we read only

@@ -165,6 +165,10 @@ export interface ChatUiRequest {
   placeholder?: string;
   /** Structured questions, for `questions` only. */
   questions?: ChatQuestion[];
+  /** The tool a permission `select` is about, so the card can render the same
+   * rich view (diff/code/path/…) the transcript uses instead of raw arg JSON.
+   * Harness-agnostic — the client folds `{ name, args }` through `toolView`. */
+  tool?: { name: string; args?: unknown };
 }
 
 /** A model the session can switch to. */
