@@ -63,11 +63,17 @@ function ToolBodyView({ body }: { body: ToolBody }) {
   }
 }
 
-function ToolPart({ part }: { part: Extract<ChatPart, { type: "tool" }> }) {
+function ToolPart({
+  part,
+  open,
+}: {
+  part: Extract<ChatPart, { type: "tool" }>;
+  open?: boolean;
+}) {
   const glyph = toolGlyph(part.status);
   const view = toolView(part);
   return (
-    <details className="chat-tool" data-status={part.status}>
+    <details className="chat-tool" data-status={part.status} open={open}>
       <summary>
         <span className="chat-tool-glyph">{glyph}</span>
         <span className="chat-tool-name">{part.name}</span>
@@ -177,6 +183,21 @@ function UiRequestCard({
       <div className="chat-request-title">{request.title}</div>
       {request.message && (
         <div className="chat-request-message">{request.message}</div>
+      )}
+      {/* Permission cards render the tool through the same rich toolView the
+          transcript uses (diff/code/path), expanded, instead of raw arg JSON. */}
+      {request.tool && (
+        <ToolPart
+          part={{
+            type: "tool",
+            toolId: request.id,
+            name: request.tool.name,
+            args: request.tool.args,
+            output: "",
+            status: "pending",
+          }}
+          open
+        />
       )}
       {request.kind === "questions" &&
         questions.map((q) => (

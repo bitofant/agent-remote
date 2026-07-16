@@ -1511,6 +1511,10 @@ body {
   margin-top: 4px;
   white-space: pre-wrap;
 }
+/* The rich tool preview embedded in a permission card. */
+.chat-request .chat-tool {
+  margin-top: 8px;
+}
 .chat-request-actions {
   display: flex;
   flex-wrap: wrap;

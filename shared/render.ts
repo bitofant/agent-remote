@@ -140,12 +140,17 @@ export function toolView(
       primary: filePath ? shortenPath(filePath) : "write",
       body: { kind: "code", label: filePath, text: content },
     };
-  // Bash-like: a shell command.
+  // Bash-like: a shell command. When the harness supplies a description of the
+  // command's intent (claude does; pi doesn't), lead the body with it as a
+  // colon-terminated first line, then the command on the following lines.
   if (command !== undefined)
     return {
       primary: truncate(command.replace(/\s+/g, " "), 80),
       secondary: description,
-      body: { kind: "code", text: command },
+      body: {
+        kind: "code",
+        text: description ? `${description}:\n${command}` : command,
+      },
     };
   // Read-like: a path with an optional line range; output carries the content.
   if (filePath !== undefined) {
