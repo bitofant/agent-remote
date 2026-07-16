@@ -363,6 +363,17 @@ function Workspace({
     setSidebarOpen(false);
   };
 
+  const removeFolderAt = (path: string) => {
+    client.removeFolder(path);
+    // If we just removed the open folder, fall back to another one so the
+    // main pane doesn't point at a folder that's no longer listed.
+    setActiveFolder((cur) =>
+      cur === path
+        ? (folders.find((f) => f.path !== path)?.path ?? null)
+        : cur,
+    );
+  };
+
   const handleLogout = async () => {
     await logout();
     client.disconnect();
@@ -470,15 +481,27 @@ function Workspace({
             <p className="muted">No folders yet. Add one above.</p>
           )}
           {folders.map((f) => (
-            <button
+            <div
               key={f.path}
               className={`folder-item ${f.path === activeFolder ? "active" : ""}`}
-              onClick={() => openFolder(f.path)}
-              title={f.path}
             >
-              <span className="folder-name">{folderName(f.path)}</span>
-              <span className="folder-path">{f.path}</span>
-            </button>
+              <button
+                className="folder-item-open"
+                onClick={() => openFolder(f.path)}
+                title={f.path}
+              >
+                <span className="folder-name">{folderName(f.path)}</span>
+                <span className="folder-path">{f.path}</span>
+              </button>
+              <button
+                className="folder-remove"
+                onClick={() => removeFolderAt(f.path)}
+                title="Remove folder from sidebar"
+                aria-label={`Remove ${folderName(f.path)}`}
+              >
+                ×
+              </button>
+            </div>
           ))}
         </section>
       </aside>
