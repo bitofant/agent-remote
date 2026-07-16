@@ -45,6 +45,164 @@ export function argsPreview(args: unknown): string {
   }
 }
 
+/** Last two path segments (`…/dir/file.ts`), for a compact but legible subject. */
+export function shortenPath(p: string): string {
+  const segs = p.split("/").filter(Boolean);
+  return segs.length <= 2 ? p : `…/${segs.slice(-2).join("/")}`;
+}
+
+export interface DiffLine {
+  sign: " " | "+" | "-";
+  text: string;
+}
+
+/** Minimal LCS line diff of two strings, for rendering an Edit as red/green
+ * lines instead of two JSON-escaped blobs. Falls back to a plain remove-all /
+ * add-all block when the inputs are large enough that O(n·m) would hurt. */
+export function lineDiff(oldText: string, newText: string): DiffLine[] {
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  const n = a.length;
+  const m = b.length;
+  if (n * m > 250_000)
+    return [
+      ...a.map((text): DiffLine => ({ sign: "-", text })),
+      ...b.map((text): DiffLine => ({ sign: "+", text })),
+    ];
+  const dp: number[][] = Array.from({ length: n + 1 }, () =>
+    new Array(m + 1).fill(0),
+  );
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] =
+        a[i] === b[j]
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) out.push({ sign: " ", text: a[i++] }), j++;
+    else if (dp[i + 1][j] >= dp[i][j + 1]) out.push({ sign: "-", text: a[i++] });
+    else out.push({ sign: "+", text: b[j++] });
+  }
+  while (i < n) out.push({ sign: "-", text: a[i++] });
+  while (j < m) out.push({ sign: "+", text: b[j++] });
+  return out;
+}
+
+/** How a tool's expanded body should be displayed. */
+export type ToolBody =
+  | { kind: "diff"; path?: string; lines: DiffLine[] }
+  | { kind: "code"; label?: string; text: string }
+  | { kind: "json"; text: string }
+  | { kind: "none" };
+
+/** A tool call's display model — the collapsed summary subject plus how to show
+ * its args body. Field-driven (file_path/path, command, old/new_string, content)
+ * so it's harness-agnostic: covers claude's Edit/Read/Write/Bash and pi's
+ * lowercase read/write/bash alike. Both the HTML renderer here and ChatView's
+ * ToolPart consume this, so the UI and the render log can't drift. */
+export interface ToolView {
+  /** Subject shown next to the tool name (path, command, …). */
+  primary: string;
+  /** Muted secondary detail (a Bash description, a Read line range). */
+  secondary?: string;
+  body: ToolBody;
+}
+
+export function toolView(
+  part: Extract<ChatPart, { type: "tool" }>,
+): ToolView {
+  const a = (part.args ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" ? v : undefined;
+  const num = (v: unknown): number | undefined =>
+    typeof v === "number" ? v : undefined;
+  const filePath = str(a.file_path) ?? str(a.path);
+  const command = str(a.command);
+  const description = str(a.description);
+  const oldStr = str(a.old_string);
+  const newStr = str(a.new_string);
+  const content = str(a.content);
+  const offset = num(a.offset);
+  const limit = num(a.limit);
+
+  // Edit-like: a string replacement in a file → show a diff.
+  if (oldStr !== undefined && newStr !== undefined)
+    return {
+      primary: filePath ? shortenPath(filePath) : "edit",
+      body: { kind: "diff", path: filePath, lines: lineDiff(oldStr, newStr) },
+    };
+  // Write-like: new file content → show it as a code block, not JSON.
+  if (content !== undefined)
+    return {
+      primary: filePath ? shortenPath(filePath) : "write",
+      body: { kind: "code", label: filePath, text: content },
+    };
+  // Bash-like: a shell command.
+  if (command !== undefined)
+    return {
+      primary: truncate(command.replace(/\s+/g, " "), 80),
+      secondary: description,
+      body: { kind: "code", text: command },
+    };
+  // Read-like: a path with an optional line range; output carries the content.
+  if (filePath !== undefined) {
+    const range =
+      offset !== undefined
+        ? `lines ${offset}${limit !== undefined ? `–${offset + limit}` : "+"}`
+        : limit !== undefined
+          ? `first ${limit} lines`
+          : undefined;
+    return { primary: shortenPath(filePath), secondary: range, body: { kind: "none" } };
+  }
+  // Unknown tool: keep the generic single-value preview, pretty-print the rest.
+  return {
+    primary: truncate(argsPreview(part.args).replace(/\s+/g, " "), 80),
+    body:
+      part.args !== undefined
+        ? { kind: "json", text: JSON.stringify(part.args, null, 2) }
+        : { kind: "none" },
+  };
+}
+
+/** The HTML for a tool body (mirrors ChatView's ToolBody rendering). */
+function renderToolBody(body: ToolBody): string {
+  switch (body.kind) {
+    case "none":
+      return "";
+    case "json":
+      return `<pre class="chat-tool-args">${escapeHtml(body.text)}</pre>`;
+    case "code":
+      return (
+        `<div class="chat-tool-body">` +
+        (body.label
+          ? `<div class="chat-tool-path">${escapeHtml(body.label)}</div>`
+          : "") +
+        `<pre class="chat-tool-code">${escapeHtml(body.text)}</pre></div>`
+      );
+    case "diff": {
+      const cls = { " ": "diff-ctx", "+": "diff-add", "-": "diff-del" };
+      // Spans are display:block (see CSS) so they line-break themselves — no
+      // newline separators, which in a <pre> would double-space the diff.
+      const lines = body.lines
+        .map(
+          (l) =>
+            `<span class="${cls[l.sign]}">${escapeHtml(l.sign + " " + l.text)}</span>`,
+        )
+        .join("");
+      return (
+        `<div class="chat-tool-body">` +
+        (body.path
+          ? `<div class="chat-tool-path">${escapeHtml(body.path)}</div>`
+          : "") +
+        `<pre class="chat-tool-diff">${lines}</pre></div>`
+      );
+    }
+  }
+}
+
 /** Status glyph shown on a tool part (matches ChatView's ToolPart). */
 export function toolGlyph(status: string): string {
   return status === "done"
@@ -90,30 +248,39 @@ export function renderPart(part: ChatPart): RenderedPart {
         html: `<div class="chat-md">${renderMarkdown(part.text)}</div>`,
       };
     case "thinking":
-      return {
-        type: "thinking",
-        component: "ThinkingPart",
-        className: "chat-thinking",
-        html:
-          `<details class="chat-thinking"><summary>Thinking…</summary>` +
-          `<div>${escapeHtml(part.text)}</div></details>`,
-      };
+      // No reasoning text (claude) → a plain live "Thinking…" label; with text
+      // (pi) → the collapsible transcript. Mirrors ChatView's Bubble. Note the
+      // reducer strips empty thinking parts once the next part starts, so the
+      // label form is mostly transient and rarely lands in the render log.
+      return part.text.trim() === ""
+        ? {
+            type: "thinking",
+            component: "ThinkingPart",
+            className: "chat-thinking-label",
+            html: `<div class="chat-thinking-label">Thinking…</div>`,
+          }
+        : {
+            type: "thinking",
+            component: "ThinkingPart",
+            className: "chat-thinking",
+            html:
+              `<details class="chat-thinking"><summary>Thinking…</summary>` +
+              `<div>${escapeHtml(part.text)}</div></details>`,
+          };
     case "tool": {
       const glyph = toolGlyph(part.status);
-      const preview = truncate(argsPreview(part.args).replace(/\s+/g, " "), 80);
+      const view = toolView(part);
       const summary =
         `<summary><span class="chat-tool-glyph">${glyph}</span>` +
         `<span class="chat-tool-name">${escapeHtml(part.name)}</span>` +
-        (preview
-          ? `<span class="chat-tool-preview">${escapeHtml(preview)}</span>`
+        (view.primary
+          ? `<span class="chat-tool-preview">${escapeHtml(view.primary)}</span>`
+          : "") +
+        (view.secondary
+          ? `<span class="chat-tool-desc">${escapeHtml(view.secondary)}</span>`
           : "") +
         `</summary>`;
-      const args =
-        part.args !== undefined
-          ? `<pre class="chat-tool-args">${escapeHtml(
-              JSON.stringify(part.args, null, 2),
-            )}</pre>`
-          : "";
+      const body = renderToolBody(view.body);
       const output = part.output
         ? `<pre class="chat-tool-output">${escapeHtml(part.output)}</pre>`
         : "";
@@ -121,7 +288,7 @@ export function renderPart(part: ChatPart): RenderedPart {
         type: "tool",
         component: "ToolPart",
         className: "chat-tool",
-        html: `<details class="chat-tool" data-status="${part.status}">${summary}${args}${output}</details>`,
+        html: `<details class="chat-tool" data-status="${part.status}">${summary}${body}${output}</details>`,
       };
     }
   }
