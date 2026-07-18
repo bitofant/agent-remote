@@ -128,9 +128,39 @@ function Bubble({ message, streaming }: { message: ChatMessage; streaming?: bool
 // the free-text field alone (which then becomes required).
 const OTHER = "Other";
 
+// The LLM's verdict on a pending card. Auto-acting verdicts (accept/confirm/
+// answer) are NOT applied immediately: the card counts down `delayMs` with a
+// ring animation on the target button and fires only if the user doesn't
+// intervene. `deny` never auto-acts — it just highlights Deny + pre-fills a
+// reason for the user to confirm.
+type AutoDecision =
+  | { type: "accept"; value: string; delayMs: number }
+  | { type: "confirm"; delayMs: number }
+  | { type: "answer"; answers: Record<string, string>; delayMs: number }
+  | { type: "deny"; note: string };
+
+// ≈ character count of a canonical 2-question AskUserQuestion call — the
+// reference size at which the auto-action countdown hits its 10s ceiling.
+const AUTO_ACTION_REF_CHARS = 681;
+
+// Grace period before an auto-action fires, scaled by how much the card asks
+// the user to review: 2s (trivial) … 10s (a screenful). Gives time to react.
+function autoActionDelayMs(contentChars: number): number {
+  const ratio = Math.min(1, contentChars / AUTO_ACTION_REF_CHARS);
+  return Math.round((2 + 8 * ratio) * 1000);
+}
+
+// How much there is to read in a card, for the delay above.
+function requestContentChars(req: ChatUiRequest): number {
+  if (req.kind === "questions") return JSON.stringify(req.questions ?? []).length;
+  const toolChars = req.tool ? JSON.stringify(req.tool).length : 0;
+  return toolChars || (req.message ?? req.title ?? "").length;
+}
+
 function UiRequestCard({
   request,
   onRespond,
+  decision,
 }: {
   request: ChatUiRequest;
   onRespond: (response: {
@@ -140,6 +170,9 @@ function UiRequestCard({
     answers?: Record<string, string>;
     note?: string;
   }) => void;
+  // Optional LLM verdict. Auto-acting verdicts count down (with a ring on the
+  // target button) before firing; the user can cancel by interacting.
+  decision?: AutoDecision;
 }) {
   const [value, setValue] = useState("");
   // Rejection reason (Deny/No/Cancel), fed back to the model as the deny message.
@@ -152,6 +185,71 @@ function UiRequestCard({
   // Selected option labels per question (`questions` kind); multi-select holds many.
   const [picks, setPicks] = useState<Record<string, string[]>>({});
   const questions = request.questions ?? [];
+
+  // --- Auto-action countdown ---------------------------------------------
+  // Once cancelled it stays cancelled; the auto-action never fires for this
+  // card. Any click on a control, or focusing an input/textarea, cancels.
+  const [cancelled, setCancelled] = useState(false);
+  const firedRef = useRef(false);
+  const denySuggested = decision?.type === "deny";
+  const autoActive = !!decision && decision.type !== "deny" && !cancelled;
+
+  // Latest onRespond, so the countdown effect needn't depend on it (it's a
+  // fresh closure each render; depending on it would reset the timer).
+  const onRespondRef = useRef(onRespond);
+  onRespondRef.current = onRespond;
+
+  const cancelAuto = () => setCancelled(true);
+  // Cancel on interaction with any control inside the card (but not e.g.
+  // selecting text in a diff), matching "clicks a button / focuses the field".
+  const onCardInteract = (e: React.SyntheticEvent) => {
+    if (!autoActive) return;
+    const el = e.target as HTMLElement;
+    if (el.closest("button, input, textarea, select")) cancelAuto();
+  };
+
+  // Adopt the LLM's terse deny reason when it arrives (async, after mount).
+  useEffect(() => {
+    if (decision?.type === "deny" && decision.note)
+      setNote((n) => n || decision.note);
+  }, [decision]);
+
+  // Reflect an auto-answer's choices in the UI so the user sees what's about to
+  // be submitted while the countdown runs.
+  useEffect(() => {
+    if (decision?.type !== "answer") return;
+    const next: Record<string, string[]> = {};
+    for (const q of questions) {
+      const a = decision.answers[q.question];
+      if (a != null)
+        next[q.question] = q.multiSelect ? a.split(",").map((s) => s.trim()) : [a];
+    }
+    setPicks(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decision]);
+
+  // The countdown itself. Cleared if cancelled (autoActive flips false) or on
+  // unmount (the card is resolved). Fires exactly once.
+  useEffect(() => {
+    if (!autoActive || firedRef.current || !decision) return;
+    const t = setTimeout(() => {
+      firedRef.current = true;
+      const fire = onRespondRef.current;
+      if (decision.type === "accept") fire({ value: decision.value });
+      else if (decision.type === "confirm") fire({ confirmed: true });
+      else if (decision.type === "answer") fire({ answers: decision.answers });
+    }, decision.delayMs);
+    return () => clearTimeout(t);
+  }, [autoActive, decision]);
+
+  // Ring timing for whichever button the countdown will "press".
+  const autoDelayStyle = autoActive
+    ? ({
+        ["--auto-duration" as string]: `${
+          (decision as { delayMs: number }).delayMs
+        }ms`,
+      } as React.CSSProperties)
+    : undefined;
   // Answer = chosen label(s) + appended free text. The synthetic "Other" label
   // is dropped — its free text stands in for it.
   const answerFor = (question: string) => {
@@ -179,7 +277,12 @@ function UiRequestCard({
       return { ...p, [question]: next };
     });
   return (
-    <div className="chat-request">
+    <div
+      className="chat-request"
+      // Any deliberate interaction with a control cancels a pending auto-action.
+      onPointerDownCapture={onCardInteract}
+      onFocusCapture={onCardInteract}
+    >
       <div className="chat-request-title">{request.title}</div>
       {request.message && (
         <div className="chat-request-message">{request.message}</div>
@@ -262,6 +365,10 @@ function UiRequestCard({
       <div className="chat-request-actions">
         {request.kind === "questions" && (
           <button
+            className={
+              autoActive && decision?.type === "answer" ? "auto-press" : ""
+            }
+            style={decision?.type === "answer" ? autoDelayStyle : undefined}
             disabled={!allAnswered}
             onClick={() =>
               onRespond({
@@ -276,9 +383,18 @@ function UiRequestCard({
         )}
         {request.kind === "confirm" && (
           <>
-            <button onClick={() => onRespond({ confirmed: true })}>Yes</button>
+            <button
+              className={
+                autoActive && decision?.type === "confirm" ? "auto-press" : ""
+              }
+              style={decision?.type === "confirm" ? autoDelayStyle : undefined}
+              onClick={() => onRespond({ confirmed: true })}
+            >
+              Yes
+            </button>
             {/* Rejection requires a reason (sent as the deny message). */}
             <button
+              className={denySuggested ? "deny-suggested" : ""}
               disabled={!note.trim()}
               onClick={() => onRespond({ confirmed: false, note })}
             >
@@ -287,18 +403,34 @@ function UiRequestCard({
           </>
         )}
         {request.kind === "select" &&
-          (request.options ?? []).map((opt) => (
-            <button
-              key={opt}
-              // "Deny" requires a typed reason (sent as the deny message).
-              disabled={opt === "Deny" && !note.trim()}
-              onClick={() =>
-                onRespond(opt === "Deny" ? { value: opt, note } : { value: opt })
-              }
-            >
-              {opt}
-            </button>
-          ))}
+          (request.options ?? []).map((opt) => {
+            const isAutoAccept =
+              autoActive &&
+              decision?.type === "accept" &&
+              opt === decision.value;
+            return (
+              <button
+                key={opt}
+                className={
+                  isAutoAccept
+                    ? "auto-press"
+                    : denySuggested && (opt === "Deny" || opt === "Cancel")
+                      ? "deny-suggested"
+                      : ""
+                }
+                style={isAutoAccept ? autoDelayStyle : undefined}
+                // "Deny" requires a typed reason (sent as the deny message).
+                disabled={opt === "Deny" && !note.trim()}
+                onClick={() =>
+                  onRespond(
+                    opt === "Deny" ? { value: opt, note } : { value: opt },
+                  )
+                }
+              >
+                {opt}
+              </button>
+            );
+          })}
         {request.kind === "input" && (
           <>
             <input
@@ -323,6 +455,15 @@ function UiRequestCard({
   );
 }
 
+// Per-session AI-assistant settings (mirrors App's shape; structural). Purely a
+// prop — ChatView owns none of this state.
+export interface AssistantSettings {
+  enabled: boolean;
+  canAcceptPermissions: boolean;
+  canAnswerQuestions: boolean;
+  instructions: string;
+}
+
 export function ChatView({
   client,
   sessionId,
@@ -330,6 +471,8 @@ export function ChatView({
   exited,
   canResume,
   onResume,
+  assistant,
+  llmAvailable,
 }: {
   client: Client;
   sessionId: string;
@@ -340,6 +483,10 @@ export function ChatView({
   // (not a harness command), so it lives alongside the real commands here.
   canResume: boolean;
   onResume: () => void;
+  // Optional LLM-assist settings for this session (null = off), plus whether the
+  // endpoint is currently reachable. Best-effort: any failure is a silent no-op.
+  assistant: AssistantSettings | null;
+  llmAvailable: boolean;
 }) {
   const [state, setState] = useState<ChatState>(() => {
     // Synchronous initial read; the effect below subscribes for updates.
@@ -414,6 +561,99 @@ export function ChatView({
         requestId,
         ...response,
       });
+
+  // --- Optional LLM assist ------------------------------------------------
+  // Evaluate each pending request at most once, producing a per-request
+  // `AutoDecision`. The card then counts down (with a ring on the target
+  // button) before an auto-accept/answer fires — cancellable by the user. Deny
+  // never auto-acts: it just highlights Deny + pre-fills a reason.
+  const evaluatedRef = useRef<Set<string>>(new Set());
+  const [decisions, setDecisions] = useState<Record<string, AutoDecision>>({});
+
+  const setDecision = (id: string, d: AutoDecision) =>
+    setDecisions((prev) => ({ ...prev, [id]: d }));
+
+  useEffect(() => {
+    // Forget decisions for requests that are no longer pending, so a re-used id
+    // can be evaluated again and the map can't grow unbounded.
+    const liveIds = new Set(state.pendingRequests.map((r) => r.id));
+    for (const id of evaluatedRef.current) {
+      if (!liveIds.has(id)) evaluatedRef.current.delete(id);
+    }
+    setDecisions((prev) => {
+      const next: Record<string, AutoDecision> = {};
+      let changed = false;
+      for (const [id, s] of Object.entries(prev)) {
+        if (liveIds.has(id)) next[id] = s;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+
+    if (!assistant?.enabled || !llmAvailable) return;
+
+    for (const req of state.pendingRequests) {
+      if (evaluatedRef.current.has(req.id)) continue;
+      const isPermission = req.kind === "select" || req.kind === "confirm";
+      const isQuestions = req.kind === "questions";
+      const want =
+        (isPermission && assistant.canAcceptPermissions) ||
+        (isQuestions && assistant.canAnswerQuestions);
+      if (!want) continue;
+      evaluatedRef.current.add(req.id);
+
+      const delayMs = autoActionDelayMs(requestContentChars(req));
+      const body = {
+        kind: req.kind,
+        tool: req.tool,
+        options: req.options,
+        questions: req.questions,
+        instructions: assistant.instructions,
+        capabilities: {
+          permissions: assistant.canAcceptPermissions,
+          questions: assistant.canAnswerQuestions,
+        },
+      };
+      void fetch("/api/llm-evaluate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then((r) => (r.ok ? r.json() : { available: false }))
+        .then((d: {
+          available?: boolean;
+          action?: string;
+          reason?: string;
+          answers?: Record<string, string>;
+        }) => {
+          if (!d.available || !d.action) return;
+          if (d.action === "allow") {
+            if (req.kind === "confirm") {
+              setDecision(req.id, { type: "confirm", delayMs });
+            } else {
+              // First option that isn't a rejection is the "accept" choice.
+              const accept = (req.options ?? []).find(
+                (o) => o !== "Deny" && o !== "Cancel",
+              );
+              if (accept)
+                setDecision(req.id, { type: "accept", value: accept, delayMs });
+            }
+          } else if (d.action === "deny") {
+            // Never auto-deny: surface the reason and let the user confirm.
+            setDecision(req.id, { type: "deny", note: d.reason ?? "" });
+          } else if (d.action === "answer" && d.answers) {
+            setDecision(req.id, {
+              type: "answer",
+              answers: d.answers,
+              delayMs,
+            });
+          }
+        })
+        .catch(() => {
+          // Best-effort: a failed evaluation just leaves the card manual.
+        });
+    }
+  }, [state.pendingRequests, assistant, llmAvailable]);
 
   const recentNotices = state.notices.slice(-3);
   const [showCommands, setShowCommands] = useState(false);
@@ -498,7 +738,12 @@ export function ChatView({
           </div>
         ))}
         {state.pendingRequests.map((req) => (
-          <UiRequestCard key={req.id} request={req} onRespond={respond(req.id)} />
+          <UiRequestCard
+            key={req.id}
+            request={req}
+            onRespond={respond(req.id)}
+            decision={decisions[req.id]}
+          />
         ))}
         {recentNotices.map((n, i) => (
           <div key={`${n.at}-${i}`} className={`chat-notice ${n.level}`}>

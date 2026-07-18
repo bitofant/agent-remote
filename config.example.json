@@ -10,9 +10,9 @@
     }
   },
   "llm": {
-    "provider": "llama.cpp",
-    "baseUrl": "http://localhost:8080/v1",
-    "model": ""
+    "provider": "vllm",
+    "baseUrl": "http://localhost:8000/v1",
+    "model": "default"
   },
   "server": {
     "port": 4000
