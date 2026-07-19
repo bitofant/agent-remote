@@ -5,6 +5,7 @@
   --text: #bfbdb6;
   --muted: #6b7280;
   --accent: #39bae6;
+  --danger: #e05252;
 }
 
 * {
@@ -344,6 +345,14 @@ body {
   border-color: var(--accent);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+}
+
+/* AI-assistant enabled but the LLM endpoint is unreachable: make the broken
+   state obvious without otherwise disrupting the UI. */
+.header-icon-button.assistant-button.unavailable {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, var(--bg));
 }
 
 .add-session {
@@ -1585,6 +1594,119 @@ body {
   font-size: 13px;
   resize: vertical;
 }
+/* The LLM declined to auto-accept: draw the eye to Deny (still user-driven). */
+.chat-request-actions button.deny-suggested {
+  background: var(--danger);
+  color: #fff;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 55%, transparent);
+}
+.chat-request-actions button.deny-suggested:disabled {
+  box-shadow: none;
+}
+
+/* Auto-action countdown: a ring is painted clockwise around the button the LLM
+   is about to "press"; when the sweep completes (same duration as the JS
+   timer), the button fires. Cancelled by removing the class. Degrades to no
+   ring if @property is unsupported — the timer still fires. */
+@property --auto-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.chat-request-actions button.auto-press {
+  position: relative;
+}
+.chat-request-actions button.auto-press::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 9px;
+  padding: 3px;
+  background: conic-gradient(#fff var(--auto-angle), transparent 0deg);
+  /* Mask to just the ring (border), not the fill. */
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: auto-press-sweep var(--auto-duration, 4s) linear forwards;
+  pointer-events: none;
+}
+@keyframes auto-press-sweep {
+  from {
+    --auto-angle: 0deg;
+  }
+  to {
+    --auto-angle: 360deg;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-request-actions button.auto-press::after {
+    animation: none;
+    background: none;
+  }
+}
+
+/* AI-assistant config dialog (reuses the resume-dialog shell). */
+.assistant-dialog-body {
+  gap: 12px;
+  padding: 14px;
+}
+.assistant-warning {
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg));
+}
+.assistant-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-field-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.assistant-instructions {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.assistant-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.assistant-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.assistant-enable {
+  padding: 8px 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 /* Free-text "Other…" answer for a question. */
 .chat-question-other {
   display: block;

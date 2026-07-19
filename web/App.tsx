@@ -43,6 +43,23 @@ interface EditorTab {
   file: string | null;
 }
 
+// Per-chat-session AI-assistant mode. Purely client-side state: which
+// capabilities the optional LLM may exercise on this session's cards, plus
+// free-text instructions. Backed by the best-effort /api/llm-* endpoints.
+interface AssistantSettings {
+  enabled: boolean;
+  canAcceptPermissions: boolean;
+  canAnswerQuestions: boolean;
+  instructions: string;
+}
+
+const DEFAULT_ASSISTANT: AssistantSettings = {
+  enabled: false,
+  canAcceptPermissions: true,
+  canAnswerQuestions: false,
+  instructions: "",
+};
+
 // Tracks the on-screen keyboard via the visual viewport. `height` is the
 // visible height the app is pinned to while the keyboard is up. `open` stays
 // false on desktop, so keyboard-gated UI never shows there.
@@ -97,6 +114,9 @@ const SPARKLE_ICON =
   "M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z";
 // The Greek letter π (bar + two legs).
 const PI_ICON = "M4 5h16v3H4zM6.5 8h3v11h-3zM14.5 8h3v11h-3z";
+// Material `smart_toy` (robot head) — the optional LLM UI assistant.
+const ROBOT_ICON =
+  "M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z";
 
 // Per-harness glyphs, keyed by adapter id. Unknown harnesses fall back to a
 // first-letter badge, so new adapters still render without a UI change.
@@ -225,6 +245,16 @@ function Workspace({
   const [resumable, setResumable] = useState<ResumableSession[]>([]);
   // Resume-session picker dialog (opened from the chat header's Resume button).
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  // Per-chat-session AI-assistant settings (keyed by session id).
+  const [assistant, setAssistant] = useState<Record<string, AssistantSettings>>(
+    {},
+  );
+  // Health of the optional LLM endpoint (polled), for the assistant button color.
+  const [llmAvailable, setLlmAvailable] = useState(false);
+  // AI-assistant config dialog + its working draft.
+  const [assistantDialogOpen, setAssistantDialogOpen] = useState(false);
+  const [assistantDraft, setAssistantDraft] =
+    useState<AssistantSettings>(DEFAULT_ASSISTANT);
   const [newFolder, setNewFolder] = useState("");
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -260,6 +290,28 @@ function Workspace({
       client.disconnect();
     };
   }, [client]);
+
+  // Poll the optional LLM endpoint's health (best-effort; drives the assistant
+  // button color and gates evaluation). Failure just means "unavailable".
+  useEffect(() => {
+    let cancelled = false;
+    const check = () => {
+      fetch("/api/llm-status")
+        .then((r) => (r.ok ? r.json() : { available: false }))
+        .then((s: { available?: boolean }) => {
+          if (!cancelled) setLlmAvailable(!!s.available);
+        })
+        .catch(() => {
+          if (!cancelled) setLlmAvailable(false);
+        });
+    };
+    check();
+    const t = setInterval(check, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
 
   // Auto-select newly created sessions: focus their folder and make them active.
   useEffect(() => {
@@ -318,12 +370,30 @@ function Workspace({
   useEffect(() => {
     setResumeDialogOpen(false);
   }, [activeFolder]);
+  // The assistant dialog is scoped to the active session; close it on a switch.
+  useEffect(() => {
+    setAssistantDialogOpen(false);
+  }, [activeFolder]);
 
   const forgetResumable = (key: string) => {
     void fetch(`/api/resumable?key=${encodeURIComponent(key)}`, {
       method: "DELETE",
     }).finally(refreshResumable);
   };
+
+  // Drop assistant settings for sessions that no longer exist.
+  useEffect(() => {
+    setAssistant((prev) => {
+      const live = new Set(sessions.map((s) => s.id));
+      const next: Record<string, AssistantSettings> = {};
+      let changed = false;
+      for (const [id, s] of Object.entries(prev)) {
+        if (live.has(id)) next[id] = s;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [sessions]);
 
   // Close the add-session dropdown on an outside click.
   useEffect(() => {
@@ -396,6 +466,35 @@ function Workspace({
   // Chat sessions have their own composer; terminal-only UI (key-bar, select
   // mode, command builder) is gated off for them.
   const activeIsChat = activeSessionObj?.ui === "chat";
+  // Active session's AI-assistant settings + button state.
+  const activeAssistant =
+    activeSessionId !== null ? assistant[activeSessionId] : undefined;
+  const assistantEnabled = !!activeAssistant?.enabled;
+
+  // Clicking the assistant button toggles it off when enabled, else opens the
+  // config dialog seeded from any existing settings.
+  const onAssistantButton = () => {
+    if (activeSessionId === null) return;
+    if (assistantEnabled) {
+      setAssistant((prev) => ({
+        ...prev,
+        [activeSessionId]: { ...prev[activeSessionId], enabled: false },
+      }));
+      return;
+    }
+    setAssistantDraft(activeAssistant ?? DEFAULT_ASSISTANT);
+    setAssistantDialogOpen(true);
+  };
+
+  const enableAssistant = () => {
+    if (activeSessionId === null) return;
+    setAssistant((prev) => ({
+      ...prev,
+      [activeSessionId]: { ...assistantDraft, enabled: true },
+    }));
+    setAssistantDialogOpen(false);
+  };
+
   // Show the Shift+Tab key when the active session is an agent — either a
   // claude/pi harness, or a Terminal session currently running one of them.
   const agentRunning =
@@ -529,6 +628,30 @@ function Workspace({
                     title="Select text"
                   >
                     <Icon path={SELECT_ICON} />
+                  </button>
+                )}
+                {/* Optional LLM assistant: enabled → accent; enabled but the
+                    endpoint is down → red; off → neutral. Chat sessions only. */}
+                {activeIsChat && (
+                  <button
+                    className={`header-icon-button assistant-button ${
+                      assistantEnabled
+                        ? llmAvailable
+                          ? "active"
+                          : "unavailable"
+                        : ""
+                    }`}
+                    onClick={onAssistantButton}
+                    aria-pressed={assistantEnabled}
+                    title={
+                      assistantEnabled
+                        ? llmAvailable
+                          ? "AI assistant on — click to disable"
+                          : "AI assistant on, but the LLM is unavailable"
+                        : "AI assistant"
+                    }
+                  >
+                    <Icon path={ROBOT_ICON} />
                   </button>
                 )}
                 {!isNarrow ? (
@@ -735,6 +858,8 @@ function Workspace({
                         exited={s.status === "exited"}
                         canResume={resumable.length > 0}
                         onResume={() => setResumeDialogOpen(true)}
+                        assistant={assistant[s.id] ?? null}
+                        llmAvailable={llmAvailable}
                       />
                     ))}
                 </Suspense>
@@ -892,6 +1017,89 @@ function Workspace({
                         </div>
                       ))
                     )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {assistantDialogOpen && activeIsChat && (
+              <div
+                className="resume-overlay"
+                onClick={() => setAssistantDialogOpen(false)}
+              >
+                <div
+                  className="resume-dialog assistant-dialog"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="resume-dialog-head">
+                    <span>AI assistant</span>
+                    <button
+                      className="resume-dialog-close"
+                      aria-label="Close"
+                      onClick={() => setAssistantDialogOpen(false)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="resume-dialog-body assistant-dialog-body">
+                    {!llmAvailable && (
+                      <div className="assistant-warning">
+                        The LLM endpoint is currently unavailable. You can still
+                        enable this — it will start acting once the endpoint is
+                        reachable.
+                      </div>
+                    )}
+                    <label className="assistant-field">
+                      <span className="assistant-field-label">
+                        Instructions (optional)
+                      </span>
+                      <textarea
+                        className="assistant-instructions"
+                        rows={3}
+                        placeholder="e.g. only allow bash calls for git tooling"
+                        value={assistantDraft.instructions}
+                        onChange={(e) =>
+                          setAssistantDraft((d) => ({
+                            ...d,
+                            instructions: e.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="assistant-check">
+                      <input
+                        type="checkbox"
+                        checked={assistantDraft.canAcceptPermissions}
+                        onChange={(e) =>
+                          setAssistantDraft((d) => ({
+                            ...d,
+                            canAcceptPermissions: e.target.checked,
+                          }))
+                        }
+                      />
+                      Can accept permissions
+                    </label>
+                    <label className="assistant-check">
+                      <input
+                        type="checkbox"
+                        checked={assistantDraft.canAnswerQuestions}
+                        onChange={(e) =>
+                          setAssistantDraft((d) => ({
+                            ...d,
+                            canAnswerQuestions: e.target.checked,
+                          }))
+                        }
+                      />
+                      Can answer questions
+                    </label>
+                    <div className="assistant-dialog-actions">
+                      <button
+                        className="assistant-enable"
+                        onClick={enableAssistant}
+                      >
+                        Enable
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -86,6 +86,51 @@ export interface FileContent {
   content: string;
 }
 
+// ---------------------------------------------------------------------------
+// Optional LLM assist (best-effort). An OpenAI-compatible endpoint (default
+// local vLLM) can judge permission prompts / answer questions on the user's
+// behalf. Entirely additive: any failure degrades to the normal manual UI.
+// These are REST-only payloads (no WS/reducer involvement).
+// ---------------------------------------------------------------------------
+
+/** Health of the configured LLM endpoint, returned by `GET /api/llm-status`.
+ * `available` is false whenever the endpoint is unreachable or reports no
+ * models; the UI treats that as "assist unavailable" and never errors. */
+export interface LlmStatus {
+  available: boolean;
+  /** Resolved model id in use (first from /v1/models when configured
+   * "default"), or null when unavailable. */
+  model: string | null;
+}
+
+/** Request body for `POST /api/llm-evaluate`. Mirrors a pending
+ * `ChatUiRequest` plus the session's assistant-mode instructions/capabilities.
+ * Harness-agnostic. */
+export interface LlmEvaluateRequest {
+  kind: "confirm" | "select" | "input" | "questions";
+  /** The tool a permission prompt is about, if any. */
+  tool?: { name: string; args?: unknown };
+  /** Choices for a `select` permission prompt. */
+  options?: string[];
+  /** Structured questions for a `questions` prompt. */
+  questions?: ChatQuestion[];
+  /** Free-text user instructions (may be empty → default safety rubric). */
+  instructions: string;
+  capabilities: { permissions: boolean; questions: boolean };
+}
+
+/** Normalized LLM decision, returned by `POST /api/llm-evaluate`. `available`
+ * is false when the endpoint couldn't be used; otherwise `action` says what the
+ * UI should do. `none` = abstain (leave for the user). */
+export interface LlmDecision {
+  available: boolean;
+  action?: "allow" | "deny" | "answer" | "none";
+  /** Terse reason (shown when denying). */
+  reason?: string;
+  /** Answers for a `questions` prompt: question text → chosen label(s). */
+  answers?: Record<string, string>;
+}
+
 /** A dynamically-resolved argument suggestion (e.g. a live container name).
  * Returned by `GET /api/resolve?id=…&cwd=…`. */
 export interface CommandArgSuggestion {

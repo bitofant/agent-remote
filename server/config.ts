@@ -43,6 +43,12 @@ export function loadConfig(): Config {
     const config = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Config;
     // Tolerate an older config.json with no users list; nobody is enabled.
     config.users ??= [];
+    // Tolerate an older config.json with no llm block; default to local vLLM.
+    config.llm ??= {
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      model: "default",
+    };
     return config;
   } catch (err) {
     throw new Error(
