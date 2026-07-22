@@ -860,6 +860,7 @@ function Workspace({
                         onResume={() => setResumeDialogOpen(true)}
                         assistant={assistant[s.id] ?? null}
                         llmAvailable={llmAvailable}
+                        keyboardOpen={keyboard.open}
                       />
                     ))}
                 </Suspense>

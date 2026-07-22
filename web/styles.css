@@ -996,6 +996,12 @@ body {
   transform: scale(0.92);
 }
 
+/* Toggled on (e.g. the `/` slash-command button in the chat key-bar). */
+.key-button.active {
+  background: var(--bg);
+  color: var(--accent);
+}
+
 /* Sticky modifier (Ctrl) armed for one keystroke: subtle filled accent. */
 .key-button.armed {
   background: var(--bg);
@@ -1780,6 +1786,17 @@ body {
   color: #e5534b;
   white-space: pre-wrap;
   user-select: text;
+}
+
+/* Mobile key-bar for the chat composer: keys the soft keyboard lacks but
+   prompt-writing needs (backtick, newline). Sits just above the composer, only
+   while the on-screen keyboard is up. Reuses .key-button. */
+.chat-key-bar {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 8px 8px 0;
+  background: var(--panel);
 }
 
 /* Composer: in-flow at the bottom like .key-bar, so it rides above the mobile
