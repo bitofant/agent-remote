@@ -473,6 +473,7 @@ export function ChatView({
   onResume,
   assistant,
   llmAvailable,
+  keyboardOpen,
 }: {
   client: Client;
   sessionId: string;
@@ -487,6 +488,9 @@ export function ChatView({
   // endpoint is currently reachable. Best-effort: any failure is a silent no-op.
   assistant: AssistantSettings | null;
   llmAvailable: boolean;
+  // True while the mobile on-screen keyboard is up (desktop stays false). Gates
+  // the chat key-bar of keys the soft keyboard lacks but composing prompts needs.
+  keyboardOpen: boolean;
 }) {
   const [state, setState] = useState<ChatState>(() => {
     // Synchronous initial read; the effect below subscribes for updates.
@@ -664,6 +668,26 @@ export function ChatView({
     textareaRef.current?.focus();
   };
 
+  // Insert literal text at the composer's cursor (used by the mobile key-bar for
+  // keys the soft keyboard lacks: backtick, newline). Keeps the caret after the
+  // inserted text and re-grows the textarea to fit.
+  const insertAtCursor = (text: string) => {
+    const ta = textareaRef.current;
+    const start = ta ? ta.selectionStart : draft.length;
+    const end = ta ? ta.selectionEnd : draft.length;
+    const next = draft.slice(0, start) + text + draft.slice(end);
+    setDraft(next);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const caret = start + text.length;
+      el.focus();
+      el.setSelectionRange(caret, caret);
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    });
+  };
+
   return (
     <div
       className="chat-view"
@@ -784,9 +808,44 @@ export function ChatView({
           ))}
         </div>
       )}
+      {!exited && keyboardOpen && (
+        <div className="chat-key-bar">
+          {(state.commands.length > 0 || canResume) && (
+            <button
+              className={`key-button${showCommands ? " active" : ""}`}
+              aria-label="Slash commands"
+              title="Slash commands"
+              // Keep focus so the mobile keyboard stays up.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setShowCommands((s) => !s)}
+            >
+              /
+            </button>
+          )}
+          <button
+            className="key-button"
+            aria-label="Backtick"
+            // Keep focus so the mobile keyboard stays up.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertAtCursor("`")}
+          >
+            `
+          </button>
+          <button
+            className="key-button"
+            aria-label="Newline"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertAtCursor("\n")}
+          >
+            ⏎
+          </button>
+        </div>
+      )}
       {!exited && (
         <div className="chat-composer">
-          {(state.commands.length > 0 || canResume) && (
+          {/* On mobile the `/` toggle lives in the key-bar (above) so it's not
+              duplicated here while the keyboard is up. */}
+          {!keyboardOpen && (state.commands.length > 0 || canResume) && (
             <button
               className={`chat-slash${showCommands ? " active" : ""}`}
               title="Slash commands"
