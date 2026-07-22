@@ -50,9 +50,19 @@ Node backend  ──spawns & supervises──▶  agent CLI processes in a PTY
 - **Pluggable harnesses** — add a new agent by writing an adapter, not by
   changing the UI.
 
-### Planned: LLM-powered convenience features
+### LLM-powered convenience features
 
-Optional features that use an LLM to make a wall of sessions easier to manage:
+Optional features that use an LLM to make a wall of sessions easier to manage.
+
+Available today:
+
+- **AI-assistant mode** — point it at any OpenAI-compatible endpoint (a local
+  model works fine) and it can answer an agent's permission prompts and
+  multiple-choice questions on your behalf, following your instructions. It's
+  best-effort and fail-safe: if the endpoint is unreachable, sessions fall back
+  to the normal manual prompts.
+
+Planned:
 
 - **Session summaries** — a short, always-current description of what each
   session is doing and where it stands.
@@ -70,7 +80,8 @@ npm run dev          # single-port dev server with hot reload
 ```
 
 Then open the printed local URL (default <http://localhost:4000>) in your
-browser and launch a session from the sidebar.
+browser. The app is login-gated — create an account on first visit, sign in,
+and launch a session from the sidebar.
 
 For a production run:
 
