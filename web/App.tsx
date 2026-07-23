@@ -118,11 +118,15 @@ const PI_ICON = "M4 5h16v3H4zM6.5 8h3v11h-3zM14.5 8h3v11h-3z";
 const ROBOT_ICON =
   "M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z";
 
+// Material `desktop_windows` (monitor + stand) — for the local agent harness.
+const COMPUTER_ICON =
+  "M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h5v2H7v2h10v-2h-2v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11z";
+
 // Per-harness glyphs, keyed by adapter id. Unknown harnesses fall back to a
 // first-letter badge, so new adapters still render without a UI change.
 const HARNESS_ICONS: Record<string, string> = {
   claude: SPARKLE_ICON,
-  "claude-local": SPARKLE_ICON,
+  "claude-local": COMPUTER_ICON,
   pi: PI_ICON,
   terminal: TERMINAL_ICON,
 };
@@ -658,7 +662,7 @@ function Workspace({
                 {!isNarrow ? (
                   // Wide: every option inline as an icon button, no [+] menu.
                   <>
-                    {harnesses.map((h) => (
+                    {harnesses.filter((h) => h.id !== QUICK_HARNESS_ID).map((h) => (
                       <button
                         key={h.id}
                         className="header-icon-button"
@@ -677,6 +681,19 @@ function Workspace({
                     >
                       <Icon path={EDIT_ICON} />
                     </button>
+                    {harnesses
+                      .filter((h) => h.id === QUICK_HARNESS_ID)
+                      .map((h) => (
+                        <button
+                          key={h.id}
+                          className="header-icon-button"
+                          onClick={() => client.start(h.id, activeFolder)}
+                          title={`New ${h.name} session`}
+                          aria-label={`New ${h.name} session`}
+                        >
+                          <HarnessGlyph id={h.id} name={h.name} />
+                        </button>
+                      ))}
                   </>
                 ) : (
                   // Narrow: [+] holds the coding agents + File edit; Terminal is
