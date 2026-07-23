@@ -18,7 +18,7 @@ export function buildAdapters(config: Config): Map<string, HarnessAdapter> {
     // token-free end-to-end testing of the chat UI.
     const adapter = createClaudeAdapter(config.harnesses.claudeLocal, {
       id: "claude-local",
-      name: "Claude Code (local)",
+      name: "Local Claude",
     });
     adapters.set(adapter.id, adapter);
   }
