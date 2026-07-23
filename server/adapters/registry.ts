@@ -13,6 +13,15 @@ export function buildAdapters(config: Config): Map<string, HarnessAdapter> {
     const adapter = createClaudeAdapter(config.harnesses.claude);
     adapters.set(adapter.id, adapter);
   }
+  if (config.harnesses.claudeLocal?.enabled) {
+    // Same Claude adapter, pointed at a local endpoint via its `env` (vLLM), for
+    // token-free end-to-end testing of the chat UI.
+    const adapter = createClaudeAdapter(config.harnesses.claudeLocal, {
+      id: "claude-local",
+      name: "Claude Code (local)",
+    });
+    adapters.set(adapter.id, adapter);
+  }
   if (config.harnesses.pi?.enabled) {
     const adapter = createPiAdapter(config.harnesses.pi);
     adapters.set(adapter.id, adapter);

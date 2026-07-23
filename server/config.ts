@@ -7,6 +7,11 @@ import { resolve } from "node:path";
 export interface HarnessConfig {
   enabled: boolean;
   command: string;
+  /** Extra env for the harness process, merged over the server's own env.
+   * Used by claude-local to point the CLI at a local OpenAI/Anthropic-compatible
+   * endpoint (e.g. vLLM) via ANTHROPIC_BASE_URL + ANTHROPIC_DEFAULT_*_MODEL, so
+   * chat sessions can be tested end-to-end without spending Claude tokens. */
+  env?: Record<string, string>;
 }
 
 export interface LlmConfig {
@@ -18,6 +23,10 @@ export interface LlmConfig {
 export interface Config {
   harnesses: {
     claude: HarnessConfig;
+    /** Optional second Claude adapter pointed at a local endpoint (via `env`)
+     * for token-free end-to-end testing of the chat UI. Same adapter as
+     * `claude`, different id/name/env. */
+    claudeLocal?: HarnessConfig;
     pi: HarnessConfig;
     terminal: HarnessConfig;
   };

@@ -122,6 +122,7 @@ const ROBOT_ICON =
 // first-letter badge, so new adapters still render without a UI change.
 const HARNESS_ICONS: Record<string, string> = {
   claude: SPARKLE_ICON,
+  "claude-local": SPARKLE_ICON,
   pi: PI_ICON,
   terminal: TERMINAL_ICON,
 };
@@ -200,7 +201,7 @@ const KEY_GROUPS: Record<KeyGroup, KeyDef[]> = {
 const SHIFT_TAB_KEY: KeyDef = { label: "⇧Tab", aria: "Shift Tab", seq: "\x1b[Z" };
 
 // AI coding-agent harnesses; their sessions always want Shift+Tab even when idle.
-const AGENT_HARNESS_IDS = new Set(["claude", "pi"]);
+const AGENT_HARNESS_IDS = new Set(["claude", "claude-local", "pi"]);
 
 // True when a live command line is an agent CLI (e.g. `claude`/`pi` launched
 // from a Terminal session, where only the running command reveals the agent).

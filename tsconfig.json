@@ -12,5 +12,6 @@
     "noEmit": true,
     "types": []
   },
-  "include": ["web", "shared", "vite.config.ts"]
+  "include": ["web", "shared", "vite.config.ts"],
+  "exclude": ["**/*.test.ts"]
 }
