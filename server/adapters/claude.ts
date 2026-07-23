@@ -488,6 +488,30 @@ class ClaudeChatSession implements ChatSession {
           this.handlers?.onResumable?.(msg.session_id);
           if (msg.permissionMode)
             this.emit({ type: "mode-changed", current: msg.permissionMode });
+        } else if (msg.subtype === "compact_boundary") {
+          // Context was compacted: history is replaced by a summary (manual
+          // /compact or auto when the window fills). Surface it as a notice so
+          // the transcript marks the boundary instead of silently dropping
+          // history — harness-agnostic, the UI already renders notices.
+          const meta = msg.compact_metadata;
+          const tokens =
+            typeof meta?.post_tokens === "number"
+              ? ` (${meta.pre_tokens} → ${meta.post_tokens} tokens)`
+              : "";
+          const how = meta?.trigger === "auto" ? "auto" : "manual";
+          this.emit({
+            type: "notice",
+            level: "info",
+            text: `Compacted context${tokens} [${how}]`,
+          });
+        } else if (msg.subtype === "status" && msg.compact_result === "failed") {
+          // Compaction attempt failed — report it rather than leaving the user
+          // wondering why /compact did nothing.
+          this.emit({
+            type: "notice",
+            level: "error",
+            text: `Compaction failed${msg.compact_error ? `: ${msg.compact_error}` : ""}`,
+          });
         }
         break;
       case "user": {
