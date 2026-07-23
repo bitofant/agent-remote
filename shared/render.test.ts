@@ -71,8 +71,63 @@ describe("toolView", () => {
     expect(view.body).toEqual({ kind: "none" });
   });
 
-  it("falls back to pretty JSON for an unknown tool", () => {
+  // Tools without an Edit/Write/Bash/Read shape used to dump raw JSON as their
+  // subject. They now pick a legible field-driven subject (harness-agnostic —
+  // recognizes arg fields, not tool names) while keeping full args in the body.
+  it("previews a query tool (ToolSearch/WebSearch) by its query", () => {
+    const view = toolView(toolPart({ query: "select:Read,Edit", max_results: 5 }));
+    expect(view.primary).toBe("select:Read,Edit");
+    expect(view.body.kind).toBe("json");
+  });
+
+  it("previews a WebFetch by url with the prompt as secondary", () => {
+    const view = toolView(
+      toolPart({ url: "https://example.com/docs/page", prompt: "summarize the page" }),
+    );
+    expect(view.primary).toBe("…/docs/page"); // path-like → shortened
+    expect(view.secondary).toBe("summarize the page");
+    expect(view.body.kind).toBe("json");
+  });
+
+  it("previews an Agent by its description with the subagent as secondary", () => {
+    const view = toolView(
+      toolPart({ description: "find the reducer", prompt: "long task…", subagent_type: "Explore" }),
+    );
+    expect(view.primary).toBe("find the reducer");
+    expect(view.secondary).toBe("Explore");
+    expect(view.body.kind).toBe("json");
+  });
+
+  it("previews a Skill by its skill name", () => {
+    const view = toolView(toolPart({ skill: "code-review", args: "--fix" }));
+    expect(view.primary).toBe("code-review");
+    expect(view.secondary).toBe("--fix");
+    expect(view.body.kind).toBe("json");
+  });
+
+  it("previews a Grep by its pattern with the path as secondary", () => {
+    const view = toolView(toolPart({ pattern: "toolView", path: "shared", output_mode: "content" }));
+    expect(view.primary).toBe("toolView");
+    expect(view.secondary).toBe("shared");
+    expect(view.body.kind).toBe("json");
+  });
+
+  it("previews an MCP tool by its query field", () => {
+    const view = toolView(toolPart({ query: "from:alice", label_ids: ["INBOX"] }));
+    expect(view.primary).toBe("from:alice");
+    expect(view.body.kind).toBe("json");
+  });
+
+  it("collapses whitespace and truncates a long subject", () => {
+    const long = "word ".repeat(40).trim();
+    const view = toolView(toolPart({ query: `a\n${long}` }));
+    expect(view.primary.length).toBeLessThanOrEqual(81); // 80 + ellipsis
+    expect(view.primary).not.toContain("\n");
+  });
+
+  it("falls back to pretty JSON for a tool with no recognized field", () => {
     const view = toolView(toolPart({ foo: 1, bar: 2 }));
+    expect(view.primary).not.toMatch(/^\{/); // never a raw JSON subject
     expect(view.body.kind).toBe("json");
     if (view.body.kind === "json") {
       expect(view.body.text).toBe(JSON.stringify({ foo: 1, bar: 2 }, null, 2));

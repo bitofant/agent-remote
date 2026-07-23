@@ -44,10 +44,15 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
     case "busy": {
       if (event.busy) return { ...state, busy: true };
       // Going idle: flush any half-streamed assistant message into history so
-      // an abort (which may skip assistant-end) never leaves it stuck.
-      const messages = state.streaming
-        ? capMessages([...state.messages, state.streaming])
-        : state.messages;
+      // an abort (which may skip assistant-end) never leaves it stuck — but
+      // only if it has visible content (empty parts → no blank bubble).
+      const flushed = state.streaming
+        ? { ...state.streaming, parts: finalizeParts(state.streaming.parts) }
+        : null;
+      const messages =
+        flushed && flushed.parts.length > 0
+          ? capMessages([...state.messages, flushed])
+          : state.messages;
       return { ...state, busy: false, streaming: null, queued: [], messages };
     }
 
@@ -110,13 +115,13 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 
     case "assistant-end": {
       if (!state.streaming) return state;
-      const finalized = {
-        ...state.streaming,
-        parts: dropEmptyThinking(state.streaming.parts),
-      };
+      const parts = finalizeParts(state.streaming.parts);
+      // A turn that reduces to nothing (only an empty thinking/text part) must
+      // not leave a blank bubble in history — drop it entirely.
+      if (parts.length === 0) return { ...state, streaming: null };
       return {
         ...state,
-        messages: capMessages([...state.messages, finalized]),
+        messages: capMessages([...state.messages, { ...state.streaming, parts }]),
         streaming: null,
       };
     }
@@ -189,6 +194,16 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 function dropEmptyThinking(parts: ChatPart[]): ChatPart[] {
   return parts.filter(
     (p) => !(p.type === "thinking" && p.text.trim() === ""),
+  );
+}
+
+/** Finalize a streaming turn's parts before it lands in history: drop empty
+ * thinking parts (as above) and empty text parts (a whitespace-only text part
+ * renders as an empty <div>). Callers drop the whole message if nothing
+ * remains, so blank assistant bubbles never reach the transcript. */
+function finalizeParts(parts: ChatPart[]): ChatPart[] {
+  return dropEmptyThinking(parts).filter(
+    (p) => !(p.type === "text" && p.text.trim() === ""),
   );
 }
 
