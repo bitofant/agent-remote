@@ -201,10 +201,11 @@ export interface ChatQuestion {
  * agent may stall until it is answered. */
 export interface ChatUiRequest {
   id: string;
-  kind: "confirm" | "select" | "input" | "questions";
+  kind: "confirm" | "select" | "input" | "questions" | "plan";
   title: string;
+  /** For `plan`: the proposed plan (markdown). Also the generic prompt body. */
   message?: string;
-  /** Choices, for `select` only. */
+  /** Choices, for `select`; also the accept/keep-planning labels for `plan`. */
   options?: string[];
   /** Placeholder/prefill hint, for `input` only. */
   placeholder?: string;

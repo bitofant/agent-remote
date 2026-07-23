@@ -1600,6 +1600,28 @@ body {
   font-size: 13px;
   resize: vertical;
 }
+/* Plan proposal (ExitPlanMode): the plan renders as markdown in a bounded,
+   scrollable block; Accept is emphasised with an accent ring. */
+.chat-plan {
+  margin-top: 8px;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.chat-plan > :first-child {
+  margin-top: 0;
+}
+.chat-plan > :last-child {
+  margin-bottom: 0;
+}
+.chat-request-actions button.chat-plan-accept {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
 /* The LLM declined to auto-accept: draw the eye to Deny (still user-driven). */
 .chat-request-actions button.deny-suggested {
   background: var(--danger);

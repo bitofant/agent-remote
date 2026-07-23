@@ -182,6 +182,9 @@ function UiRequestCard({
   const [others, setOthers] = useState<Record<string, string>>({});
   const isPermission =
     request.kind === "select" || request.kind === "confirm";
+  // A plan proposal (ExitPlanMode): accept (exit plan mode + auto-accept edits)
+  // or keep planning with optional refinement instructions.
+  const isPlan = request.kind === "plan";
   // Selected option labels per question (`questions` kind); multi-select holds many.
   const [picks, setPicks] = useState<Record<string, string[]>>({});
   const questions = request.questions ?? [];
@@ -284,9 +287,20 @@ function UiRequestCard({
       onFocusCapture={onCardInteract}
     >
       <div className="chat-request-title">{request.title}</div>
-      {request.message && (
-        <div className="chat-request-message">{request.message}</div>
-      )}
+      {/* A plan renders as markdown (it's Claude's proposal); other cards show a
+          plain message line. */}
+      {isPlan
+        ? request.message && (
+            <div
+              className="chat-plan"
+              dangerouslySetInnerHTML={{
+                __html: renderMarkdown(request.message),
+              }}
+            />
+          )
+        : request.message && (
+            <div className="chat-request-message">{request.message}</div>
+          )}
       {/* Permission cards render the tool through the same rich toolView the
           transcript uses (diff/code/path), expanded, instead of raw arg JSON. */}
       {request.tool && (
@@ -352,12 +366,17 @@ function UiRequestCard({
             />
           </div>
         ))}
-      {/* Reasoning box for permission cards — sent as the deny message. */}
-      {isPermission && (
+      {/* Reasoning box: for permission cards it's the deny message; for a plan
+          it's optional refinement instructions sent with "Keep planning". */}
+      {(isPermission || isPlan) && (
         <textarea
           className="chat-request-note"
           value={note}
-          placeholder="Reason (required to reject) — sent to the model as the deny message"
+          placeholder={
+            isPlan
+              ? "Instructions to refine the plan (optional) — sent with Keep planning"
+              : "Reason (required to reject) — sent to the model as the deny message"
+          }
           rows={2}
           onChange={(e) => setNote(e.target.value)}
         />
@@ -442,6 +461,30 @@ function UiRequestCard({
               }}
             />
             <button onClick={() => onRespond({ value })}>Send</button>
+          </>
+        )}
+        {isPlan && (
+          <>
+            {/* Accept: exits plan mode and auto-accepts subsequent edits. */}
+            <button
+              className="chat-plan-accept"
+              onClick={() =>
+                onRespond({ value: request.options?.[0] ?? "Accept plan" })
+              }
+            >
+              Accept plan &amp; auto-accept edits
+            </button>
+            {/* Keep planning: sends any typed instructions back to refine. */}
+            <button
+              onClick={() =>
+                onRespond({
+                  value: request.options?.[1] ?? "Keep planning",
+                  note,
+                })
+              }
+            >
+              Keep planning
+            </button>
           </>
         )}
         <button
