@@ -56,6 +56,48 @@ describe("applyChatEvent", () => {
     expect(state.messages[0].parts).toEqual([{ type: "text", text: "answer" }]);
   });
 
+  it("appends no message when a turn finalizes with only an empty thinking part", () => {
+    // An assistant turn that reduces to nothing must not leave a blank bubble.
+    const state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "part-start", kind: "thinking" }, // never gets a delta
+      { type: "assistant-end" },
+    ]);
+    expect(state.streaming).toBeNull();
+    expect(state.messages).toEqual([]);
+  });
+
+  it("drops an empty text part and appends no message when it's the only one", () => {
+    const state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "part-start", kind: "text" },
+      { type: "part-delta", delta: "   " },
+      { type: "assistant-end" },
+    ]);
+    expect(state.messages).toEqual([]);
+  });
+
+  it("still finalizes a turn with real text (guard against over-dropping)", () => {
+    const state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "part-start", kind: "thinking" }, // empty, dropped
+      { type: "part-start", kind: "text" },
+      { type: "part-delta", delta: "hi" },
+      { type: "assistant-end" },
+    ]);
+    expect(state.messages[0].parts).toEqual([{ type: "text", text: "hi" }]);
+  });
+
+  it("appends no message when an idle flush leaves only empty parts", () => {
+    const state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "part-start", kind: "thinking" },
+      { type: "busy", busy: false },
+    ]);
+    expect(state.streaming).toBeNull();
+    expect(state.messages).toEqual([]);
+  });
+
   it("keeps a thinking part that has text (pi streams reasoning)", () => {
     const state = reduce([
       { type: "assistant-start", messageId: "m1" },

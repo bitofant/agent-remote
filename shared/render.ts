@@ -153,7 +153,13 @@ export function toolView(
       },
     };
   // Read-like: a path with an optional line range; output carries the content.
-  if (filePath !== undefined) {
+  // Skip when the call is really a search (Grep/Glob carry `path` alongside a
+  // `pattern`/`query`) — those render better through the field-driven subject.
+  if (
+    filePath !== undefined &&
+    str(a.pattern) === undefined &&
+    str(a.query) === undefined
+  ) {
     const range =
       offset !== undefined
         ? `lines ${offset}${limit !== undefined ? `–${offset + limit}` : "+"}`
@@ -162,14 +168,89 @@ export function toolView(
           : undefined;
     return { primary: shortenPath(filePath), secondary: range, body: { kind: "none" } };
   }
-  // Unknown tool: keep the generic single-value preview, pretty-print the rest.
+  // Any other tool (ToolSearch, WebFetch/WebSearch, Agent, Skill, Grep/Glob,
+  // Task*, NotebookEdit, MCP tools, …): derive a legible subject from a
+  // recognized arg field instead of dumping raw JSON. Field-driven, not
+  // tool-name-driven, so custom/MCP tools are covered too; full args stay in
+  // the body.
+  let primaryField: string | undefined;
+  let primaryVal: string | undefined;
+  for (const f of SUBJECT_FIELDS) {
+    const v = str(a[f]);
+    if (v !== undefined) {
+      primaryField = f;
+      primaryVal = v;
+      break;
+    }
+  }
+  // No known field? Use the first string value so the subject is still legible.
+  if (primaryVal === undefined)
+    for (const [k, v] of Object.entries(a))
+      if (typeof v === "string") {
+        primaryField = k;
+        primaryVal = v;
+        break;
+      }
+  let secondaryVal: string | undefined;
+  for (const f of SECONDARY_FIELDS) {
+    if (f === primaryField) continue;
+    const v = str(a[f]);
+    if (v !== undefined) {
+      secondaryVal = v;
+      break;
+    }
+  }
   return {
-    primary: truncate(argsPreview(part.args).replace(/\s+/g, " "), 80),
+    primary: primaryVal !== undefined ? subject(primaryVal) : "",
+    secondary: secondaryVal !== undefined ? subject(secondaryVal) : undefined,
     body:
       part.args !== undefined
         ? { kind: "json", text: JSON.stringify(part.args, null, 2) }
         : { kind: "none" },
   };
+}
+
+/** Fields (in priority order) whose value makes the best collapsed subject for
+ * an otherwise-unrecognized tool. Ordered so the most identifying arg wins:
+ * `query` (ToolSearch/WebSearch), `url` (WebFetch), `pattern` (Grep/Glob),
+ * `skill` (Skill), `description`/`subagent_type` (Agent), `task_id` (Task*),
+ * `notebook_path` (NotebookEdit), etc. */
+const SUBJECT_FIELDS = [
+  "query",
+  "url",
+  "pattern",
+  "description",
+  "prompt",
+  "skill",
+  "command_name",
+  "name",
+  "title",
+  "subagent_type",
+  "notebook_path",
+  "task_id",
+  "taskId",
+  "id",
+  "message",
+];
+
+/** A muted second detail, when present and distinct from the primary field. */
+const SECONDARY_FIELDS = [
+  "subagent_type",
+  "path",
+  "glob",
+  "status",
+  "args",
+  "prompt",
+  "description",
+];
+
+/** Collapse whitespace and shorten a raw arg value into a one-line subject:
+ * path-like values get their last two segments, others are truncated to 80. */
+function subject(v: string): string {
+  const s = v.replace(/\s+/g, " ").trim();
+  return s.includes("/") && !s.includes(" ")
+    ? truncate(shortenPath(s), 80)
+    : truncate(s, 80);
 }
 
 /** The HTML for a tool body (mirrors ChatView's ToolBody rendering). */

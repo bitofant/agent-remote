@@ -15,7 +15,7 @@
 
 import type { ChatMessage, ChatPart } from "../shared/protocol.js";
 import type { RenderedMessage } from "../shared/render.js";
-import { argsPreview, renderMessage } from "../shared/render.js";
+import { argsPreview, renderMessage, toolView } from "../shared/render.js";
 import { listChatRenderLog } from "../server/db.js";
 
 const flag = (name: string): string | undefined =>
@@ -57,7 +57,10 @@ const ISSUES: Record<string, Detector> = {
     p?.type === "text" && /<[a-z][\s\S]*?>/i.test(p.text) ? `raw HTML/angle-brackets: ${p.text.slice(0, 60)}` : null,
   longThinking: (p) => (p?.type === "thinking" && p.text.length > 4000 ? `${p.text.length} chars` : null),
   jsonArgsPreview: (p) =>
-    p?.type === "tool" && argsPreview(p.args).trimStart().startsWith("{") ? `${p.name}: preview is raw JSON` : null,
+    // Flag on the actual displayed subject (toolView.primary), not raw
+    // argsPreview — otherwise Bash/Edit/etc. false-positive despite rendering
+    // fine, and the report can't confirm the tool-preview fix.
+    p?.type === "tool" && toolView(p).primary.trimStart().startsWith("{") ? `${p.name}: preview is raw JSON` : null,
   emptyArgsPreview: (p) => (p?.type === "tool" && !argsPreview(p.args) ? `${p.name}: no preview` : null),
   toolNoOutput: (p) =>
     p?.type === "tool" && !p.output && (p.status === "done" || p.status === "error") ? `${p.name}: ${p.status}, no output` : null,
