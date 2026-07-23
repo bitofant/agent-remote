@@ -4,6 +4,19 @@
       "enabled": true,
       "command": "claude"
     },
+    "claudeLocal": {
+      "enabled": false,
+      "command": "claude",
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:8000",
+        "ANTHROPIC_API_KEY": "dummy",
+        "ANTHROPIC_AUTH_TOKEN": "dummy",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-model",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-model",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-model",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+      }
+    },
     "pi": {
       "enabled": true,
       "command": "pi"

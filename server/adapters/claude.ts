@@ -104,16 +104,24 @@ function sortModels(models: readonly ModelInfo[]): ModelInfo[] {
 // subprocess and exposes canUseTool / setModel / supportedCommands), so it's a
 // ChatSession, not a ChatTranslator like pi. All Claude/SDK specifics stay here.
 // Billing: no ANTHROPIC_API_KEY → the CLI auths from the user's subscription.
-export function createClaudeAdapter(cfg: HarnessConfig): HarnessAdapter {
+//
+// `overrides` lets the registry build a second instance (id "claude-local")
+// whose `cfg.env` points the CLI at a local endpoint (vLLM) for token-free
+// end-to-end testing; the production instance leaves env unset so the
+// subscription/OAuth path is untouched.
+export function createClaudeAdapter(
+  cfg: HarnessConfig,
+  overrides?: { id?: string; name?: string },
+): HarnessAdapter {
   return {
-    id: "claude",
-    name: "Claude Code",
+    id: overrides?.id ?? "claude",
+    name: overrides?.name ?? "Claude Code",
     // Unused for the chat path (SDK spawns its own executable) but interface-required.
     invocation(_opts: SessionOptions): { command: string; args: string[] } {
       return { command: cfg.command, args: [] };
     },
     createChatSession(opts: SessionOptions): ChatSession {
-      return new ClaudeChatSession(opts);
+      return new ClaudeChatSession(opts, cfg.env);
     },
   };
 }
@@ -146,7 +154,11 @@ class ClaudeChatSession implements ChatSession {
     (answers: Record<string, string> | null) => void
   >();
 
-  constructor(private opts: SessionOptions) {}
+  constructor(
+    private opts: SessionOptions,
+    /** Extra env for the CLI subprocess (claude-local points at vLLM). */
+    private env?: Record<string, string>,
+  ) {}
 
   start(handlers: ChatSessionHandlers): void {
     this.handlers = handlers;
@@ -165,6 +177,9 @@ class ClaudeChatSession implements ChatSession {
         // resume restores the model's context but does NOT stream history back —
         // we rebuild the visible transcript ourselves in replayHistory.
         ...(this.opts.resume ? { resume: this.opts.resume } : {}),
+        // Configured env (claude-local → vLLM). The SDK REPLACES the subprocess
+        // env rather than merging, so spread process.env to keep PATH/HOME/etc.
+        ...(this.env ? { env: { ...process.env, ...this.env } } : {}),
         includePartialMessages: true,
         abortController: this.abort,
         // Declaring canUseTool is what makes Claude send structured permission
