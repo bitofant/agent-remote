@@ -56,6 +56,16 @@ const ALWAYS_ALLOW = "Always allow";
 // installing a scoped rule (mirrors the TUI), so it gets a mode-oriented label.
 const ALLOW_ALL_EDITS = "Allow all edits";
 
+// Plan-approval labels. Claude in plan mode signals "plan ready" by calling the
+// ExitPlanMode tool; we surface a `plan` card with these two paths (mirrors the
+// TUI): accept the plan (exit plan mode + auto-accept edits) or keep planning
+// (feed instructions back; stay in plan mode).
+const ACCEPT_PLAN = "Accept plan";
+const KEEP_PLANNING = "Keep planning";
+
+// The tool Claude calls to leave plan mode; its input carries the plan text.
+const EXIT_PLAN_TOOL = "ExitPlanMode";
+
 // Tools whose "always" means switch to acceptEdits mode, not a per-call rule.
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
@@ -217,6 +227,39 @@ class ClaudeChatSession implements ChatSession {
                       ? "Claude has a few questions"
                       : "Claude has a question",
                   questions,
+                },
+              });
+              return;
+            }
+            // Plan approval: ExitPlanMode isn't a normal permission — render a
+            // dedicated `plan` card. Accept (allow) exits plan mode and flips to
+            // acceptEdits so the follow-through auto-accepts; Keep planning
+            // (deny) feeds the typed instructions back and stays in plan mode.
+            if (toolName === EXIT_PLAN_TOOL) {
+              const planId = randomUUID();
+              const plan =
+                typeof (toolInput as { plan?: unknown })?.plan === "string"
+                  ? ((toolInput as { plan: string }).plan)
+                  : "";
+              this.permResolvers.set(planId, (decision, note) => {
+                if (decision === "deny") {
+                  resolve({
+                    behavior: "deny",
+                    message: note?.trim() || "Keep planning.",
+                  });
+                } else {
+                  resolve({ behavior: "allow", updatedInput: toolInput });
+                  this.applyMode("acceptEdits");
+                }
+              });
+              this.emit({
+                type: "ui-request",
+                request: {
+                  id: planId,
+                  kind: "plan",
+                  title: "Claude proposed a plan",
+                  message: plan,
+                  options: [ACCEPT_PLAN, KEEP_PLANNING],
                 },
               });
               return;
@@ -416,7 +459,9 @@ class ClaudeChatSession implements ChatSession {
         const denied =
           action.cancelled === true ||
           action.confirmed === false ||
-          action.value === DENY;
+          action.value === DENY ||
+          // Keep planning is a rejection of ExitPlanMode (feeds instructions back).
+          action.value === KEEP_PLANNING;
         const decision: PermDecision = denied
           ? "deny"
           : action.value === ALWAYS_ALLOW || action.value === ALLOW_ALL_EDITS

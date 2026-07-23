@@ -4,7 +4,7 @@
 // endpoint — but they ARE real model calls, so callers self-skip via `endpointUp`.
 import { loadConfig } from "../config.js";
 import { buildAdapters } from "./registry.js";
-import type { ChatEvent, ChatUiRequest } from "../../shared/protocol.js";
+import type { ChatAction, ChatEvent, ChatUiRequest } from "../../shared/protocol.js";
 import type { ChatSession } from "./types.js";
 
 /** The claude-local harness under test, or null when it isn't configured. */
@@ -74,7 +74,8 @@ export class ChatDriver {
   readonly permissions: ChatUiRequest[] = [];
   /** Resume key reported by the session (SDK session id), if any. */
   resumeKey?: string;
-  private waiters: Array<() => void> = [];
+  private turnWaiters: Array<() => void> = [];
+  private condWaiters: Array<{ ok: () => boolean; resolve: () => void }> = [];
 
   constructor(private readonly session: ChatSession) {}
 
@@ -91,28 +92,55 @@ export class ChatDriver {
           });
         }
         // busy:false marks a whole turn done (SDK `result`).
-        if (e.type === "busy" && e.busy === false) this.wake();
+        if (e.type === "busy" && e.busy === false) this.turnWaiters.shift()?.();
+        // Fire any condition waiters whose predicate now holds.
+        this.condWaiters = this.condWaiters.filter((w) => {
+          if (!w.ok()) return true;
+          w.resolve();
+          return false;
+        });
       },
       onResumable: (key) => {
         this.resumeKey = key;
       },
-      onExit: () => this.wake(),
+      onExit: () => this.turnWaiters.shift()?.(),
     });
     return this;
   }
 
-  /** Send a prompt and resolve when the resulting turn completes. */
+  /** Send a prompt and resolve when the resulting turn completes (busy:false).
+   * Don't use for a prompt that will BLOCK on a request you must answer from the
+   * event stream (e.g. a plan) — use `send` + `waitFor` for those. */
   prompt(text: string, timeoutMs = 80_000): Promise<void> {
-    const turn = new Promise<void>((resolve) => this.waiters.push(resolve));
+    const turn = new Promise<void>((resolve) => this.turnWaiters.push(resolve));
     this.session.action({ type: "prompt", text });
     return withTimeout(turn, timeoutMs, "turn did not complete in time");
   }
 
-  close(): void {
-    this.session.close();
+  /** Send a prompt without waiting for the turn to finish. */
+  send(text: string): void {
+    this.session.action({ type: "prompt", text });
   }
 
-  private wake(): void {
-    this.waiters.shift()?.();
+  /** Forward any action to the session (set-mode, ui-response, …). */
+  act(action: ChatAction): void {
+    this.session.action(action);
+  }
+
+  /** Resolve once `predicate` holds — checked immediately and after each event. */
+  waitFor(
+    predicate: () => boolean,
+    timeoutMs = 80_000,
+    message = "condition not met in time",
+  ): Promise<void> {
+    if (predicate()) return Promise.resolve();
+    const p = new Promise<void>((resolve) =>
+      this.condWaiters.push({ ok: predicate, resolve }),
+    );
+    return withTimeout(p, timeoutMs, message);
+  }
+
+  close(): void {
+    this.session.close();
   }
 }

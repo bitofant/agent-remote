@@ -10,5 +10,8 @@ export default defineConfig({
     include: ["**/*.e2e.test.ts"],
     testTimeout: 120_000,
     hookTimeout: 120_000,
+    // One live vLLM endpoint — run files sequentially so concurrent turns don't
+    // starve each other (degrades model output/latency and causes timeouts).
+    fileParallelism: false,
   },
 });
