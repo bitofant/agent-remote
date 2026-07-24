@@ -471,6 +471,11 @@ function Workspace({
   // Chat sessions have their own composer; terminal-only UI (key-bar, select
   // mode, command builder) is gated off for them.
   const activeIsChat = activeSessionObj?.ui === "chat";
+  // /resume should only offer sessions from the same harness as the active
+  // chat tab — resuming a claude session in pi (or vice-versa) is nonsense.
+  const resumableForActive = activeSessionObj
+    ? resumable.filter((r) => r.harnessId === activeSessionObj.harnessId)
+    : resumable;
   // Active session's AI-assistant settings + button state.
   const activeAssistant =
     activeSessionId !== null ? assistant[activeSessionId] : undefined;
@@ -874,7 +879,9 @@ function Workspace({
                         sessionId={s.id}
                         active={s.id === activeSessionId}
                         exited={s.status === "exited"}
-                        canResume={resumable.length > 0}
+                        canResume={
+                          resumable.some((r) => r.harnessId === s.harnessId)
+                        }
                         onResume={() => setResumeDialogOpen(true)}
                         assistant={assistant[s.id] ?? null}
                         llmAvailable={llmAvailable}
@@ -994,12 +1001,12 @@ function Workspace({
                     </button>
                   </div>
                   <div className="resume-dialog-body">
-                    {resumable.length === 0 ? (
+                    {resumableForActive.length === 0 ? (
                       <div className="resume-empty">
                         No sessions to resume in this folder.
                       </div>
                     ) : (
-                      resumable.map((r) => (
+                      resumableForActive.map((r) => (
                         <div key={r.resumeKey} className="resume-item">
                           <button
                             className="resume-item-open"
