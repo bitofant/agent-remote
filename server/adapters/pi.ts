@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { HarnessConfig } from "../config.js";
 import type {
   ChatAction,
@@ -21,8 +24,15 @@ export function createPiAdapter(cfg: HarnessConfig): HarnessAdapter {
   return {
     id: "pi",
     name: "pi",
-    invocation(_opts: SessionOptions): { command: string; args: string[] } {
-      return { command: cfg.command, args: ["--mode", "rpc"] };
+    // pi resumes via a caller-chosen `--session-id`: the session layer mints one
+    // (also our resume key) and threads it in through `opts.resume`.
+    resumable: true,
+    invocation(opts: SessionOptions): { command: string; args: string[] } {
+      const args = ["--mode", "rpc"];
+      // `--session-id` creates the session if missing and reloads it (restoring
+      // context) when it already exists — same flag for fresh and resumed runs.
+      if (opts.resume) args.push("--session-id", opts.resume);
+      return { command: cfg.command, args };
     },
     createChatTranslator(): ChatTranslator {
       return new PiRpcTranslator();
@@ -83,6 +93,14 @@ class PiRpcTranslator implements ChatTranslator {
    * skills) once at startup so the UI can offer a `/` palette. */
   init(): string {
     return '{"type":"get_commands"}\n';
+  }
+
+  /** Rebuild a resumed conversation from pi's on-disk session JSONL — the RPC
+   * stream doesn't replay history on `--session-id` reload. Best-effort: any
+   * read/parse failure yields an empty transcript (context is still restored). */
+  async replayHistory(opts: SessionOptions): Promise<ChatEvent[]> {
+    if (!opts.resume) return [];
+    return readPiSessionHistory(opts.cwd, opts.resume);
   }
 
   push(chunk: string): ChatEvent[] {
@@ -328,6 +346,137 @@ class PiRpcTranslator implements ChatTranslator {
 
 function messageRole(message: PiLine["message"]): string | undefined {
   return typeof message === "object" ? message?.role : undefined;
+}
+
+// --- resume: read pi's on-disk session transcript ---------------------------
+
+/** One persisted content block inside a pi session `message` line. */
+interface PiStoredBlock {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  id?: string;
+  name?: string;
+  arguments?: unknown;
+}
+/** One persisted `message` line in a pi session JSONL file. */
+interface PiStoredMessage {
+  type?: string;
+  message?: {
+    role?: string;
+    content?: PiStoredBlock[];
+    // toolResult lines carry the linkage/result at the message level.
+    toolCallId?: string;
+    isError?: boolean;
+  };
+}
+
+/** Root of pi's session store (project subdirs live under here). */
+function piSessionsRoot(): string {
+  return join(homedir(), ".pi", "agent", "sessions");
+}
+
+/** pi mangles a project cwd into a session subdir name: `--` + path segments
+ * joined by `-` + `--` (e.g. `/tmp/x-y` → `--tmp-x-y--`). */
+function mangleCwd(cwd: string): string {
+  return `--${cwd.split("/").filter(Boolean).join("-")}--`;
+}
+
+/** Locate the JSONL file for a session id: try the mangled project subdir
+ * first, then fall back to scanning every subdir (ids are UUIDs — unique). */
+function findSessionFile(cwd: string, sessionId: string): string | undefined {
+  const root = piSessionsRoot();
+  const suffix = `_${sessionId}.jsonl`;
+  const inDir = (dir: string): string | undefined => {
+    try {
+      const name = readdirSync(dir).find((f) => f.endsWith(suffix));
+      return name ? join(dir, name) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const preferred = inDir(join(root, mangleCwd(cwd)));
+  if (preferred) return preferred;
+  let subdirs: string[];
+  try {
+    subdirs = readdirSync(root);
+  } catch {
+    return undefined;
+  }
+  for (const sub of subdirs) {
+    const hit = inDir(join(root, sub));
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** Parse a pi session file into normalized chat events, folding whole stored
+ * messages through the same event vocabulary the live stream produces so
+ * replayed bubbles match freshly-streamed ones. */
+function readPiSessionHistory(cwd: string, sessionId: string): ChatEvent[] {
+  const file = findSessionFile(cwd, sessionId);
+  if (!file) return [];
+  let lines: string[];
+  try {
+    lines = readFileSync(file, "utf8").split("\n");
+  } catch {
+    return [];
+  }
+  const events: ChatEvent[] = [];
+  for (const raw of lines) {
+    if (!raw) continue;
+    let entry: PiStoredMessage;
+    try {
+      entry = JSON.parse(raw) as PiStoredMessage;
+    } catch {
+      continue;
+    }
+    if (entry.type !== "message" || !entry.message) continue;
+    const msg = entry.message;
+    const content = Array.isArray(msg.content) ? msg.content : [];
+    if (msg.role === "user") {
+      const text = content
+        .map((b) => (b.type === "text" ? (b.text ?? "") : ""))
+        .join("");
+      if (text)
+        events.push({
+          type: "user-message",
+          message: {
+            id: randomUUID(),
+            role: "user",
+            parts: [{ type: "text", text }],
+            createdAt: Date.now(),
+          },
+        });
+    } else if (msg.role === "assistant") {
+      events.push({ type: "assistant-start", messageId: randomUUID() });
+      for (const block of content) {
+        if (block.type === "text" && block.text) {
+          events.push({ type: "part-start", kind: "text" });
+          events.push({ type: "part-delta", delta: block.text });
+        } else if (block.type === "thinking" && block.thinking) {
+          events.push({ type: "part-start", kind: "thinking" });
+          events.push({ type: "part-delta", delta: block.thinking });
+        } else if (block.type === "toolCall" && block.id) {
+          events.push({
+            type: "tool-call",
+            toolId: block.id,
+            name: block.name ?? "tool",
+            args: block.arguments,
+          });
+        }
+      }
+      events.push({ type: "assistant-end" });
+    } else if (msg.role === "toolResult" && msg.toolCallId) {
+      events.push({
+        type: "tool-end",
+        toolId: msg.toolCallId,
+        output: contentText(content),
+        isError: msg.isError === true,
+      });
+    }
+  }
+  return events;
 }
 
 /** Flatten pi's tool-result content (array of text/image blocks) to text. */

@@ -46,6 +46,12 @@ export interface ChatTranslator {
   /** Translate a client action into stdin bytes, plus any synthetic events to
    * apply locally (e.g. echoing the user's prompt as a chat message). */
   encode(action: ChatAction): { data: string; events: ChatEvent[] };
+  /** Optional: rebuild a resumed session's transcript as normalized events. The
+   * live wire stream does NOT replay history on resume, so the session layer
+   * calls this (only when `opts.resume` is set) to restore the visible
+   * transcript from the harness's own on-disk session store. Best-effort:
+   * harness-specific, resolves to `[]` if history can't be read. */
+  replayHistory?(opts: SessionOptions): Promise<ChatEvent[]>;
 }
 
 /** Callbacks a ChatSession uses to surface activity to the session layer. */
@@ -77,6 +83,12 @@ export interface HarnessAdapter {
   readonly id: string;
   /** Human-readable label for the UI. */
   readonly name: string;
+  /** Optional: this harness can resume prior chat sessions. When set on a
+   * translator-based chat adapter, the session layer mints a stable resume key
+   * per session, threads it into `invocation()` via `SessionOptions.resume`
+   * (both fresh and resumed), and persists it (`onResumable`). Session-based
+   * chat adapters (ChatSession) report their own key instead and ignore this. */
+  readonly resumable?: boolean;
   /** Build the CLI invocation for a new session. */
   invocation(opts: SessionOptions): HarnessInvocation;
   /** Optional: create a parser that extracts session events from this harness's

@@ -156,6 +156,12 @@ export class SessionManager {
     this.sessions.set(info.id, session);
 
     for (const l of this.listeners) l.onStarted(info);
+    // Fan out a synchronously-minted resume key (translator chat harnesses, e.g.
+    // pi) only now that the session is registered — listeners (e.g. the DB
+    // persister) resolve session info/folder by id. Session-based chat harnesses
+    // (claude) report their key later, asynchronously, from their own handler.
+    if (session.resumeKey)
+      for (const l of this.listeners) l.onResumable?.(info.id, session.resumeKey);
     return info;
   }
 
@@ -247,21 +253,31 @@ export class SessionManager {
     opts: SessionOptions,
     info: SessionInfo,
   ): Session {
-    const invocation = adapter.invocation(opts);
+    // Resumable translator harnesses (e.g. pi) use one opaque id as both the
+    // on-disk session handle (passed to the CLI) and the resume key we persist:
+    // reuse it when resuming, mint a fresh one otherwise. The adapter's
+    // invocation() turns it into its own CLI flag.
+    const resumeKey = adapter.resumable ? (opts.resume ?? randomUUID()) : undefined;
+    const effectiveOpts = resumeKey ? { ...opts, resume: resumeKey } : opts;
+    const invocation = adapter.invocation(effectiveOpts);
     const child = spawnPiped(invocation.command, invocation.args, {
       cwd: opts.cwd,
       env: { ...process.env, ...invocation.env },
       stdio: ["pipe", "pipe", "pipe"],
     });
 
+    const translator = adapter.createChatTranslator!();
     const session: Session = {
       info,
       buffer: "",
       folder: opts.cwd,
       child,
-      translator: adapter.createChatTranslator!(),
+      translator,
       chat: emptyChatState(),
+      resumeKey,
     };
+    // The onResumable fan-out happens in start(), AFTER the session is registered
+    // (listeners look the session up by id) — see the note there.
 
     // setEncoding decodes utf8 across chunk boundaries so the translator only
     // sees whole characters.
@@ -299,8 +315,21 @@ export class SessionManager {
     });
 
     // Optional RPC handshake / capability query the translator wants sent first.
-    const initData = session.translator!.init?.();
+    const initData = translator.init?.();
     if (initData) child.stdin.write(initData);
+
+    // On resume, the wire stream doesn't replay prior turns — rebuild the
+    // visible transcript from the harness's on-disk session store (best-effort;
+    // the model's context is restored regardless).
+    if (opts.resume && translator.replayHistory) {
+      void translator
+        .replayHistory(effectiveOpts)
+        .then((events) => {
+          if (session.info.status === "exited") return;
+          for (const event of events) this.applyChat(session, event);
+        })
+        .catch(() => {});
+    }
 
     return session;
   }
