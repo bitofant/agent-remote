@@ -73,17 +73,24 @@ interface PiLine {
   command?: string;
   success?: boolean;
   data?: { commands?: { name?: string; description?: string }[] };
-  // auto_retry_start / extension_error / compaction_end
+  // auto_retry_start / auto_retry_end / extension_error / compaction_end
   error?: string;
   errorMessage?: string;
   attempt?: number;
   maxAttempts?: number;
+  finalError?: string;
+  // agent_end: an automatic retry (transient error / overflow compaction) is
+  // about to follow, so the run isn't finished — keep busy held until settled.
+  willRetry?: boolean;
 }
 
 class PiRpcTranslator implements ChatTranslator {
   private lineBuffer = "";
   /** Whether pi is currently running an agent loop; decides whether a prompt
-   * must be sent with streamingBehavior (pi rejects a bare prompt mid-run). */
+   * must be sent with streamingBehavior (pi rejects a bare prompt mid-run).
+   * Held from agent_start until agent_settled (NOT the earlier agent_end, which
+   * may be followed by an automatic retry / compaction / queued continuation),
+   * so the busy indicator doesn't flicker to idle mid-run. */
   private busy = false;
   /** Whether an assistant message is currently streaming (only assistant
    * message_start/end are surfaced; user/toolResult messages are not). */
@@ -176,9 +183,20 @@ class PiRpcTranslator implements ChatTranslator {
       case "agent_start":
         this.busy = true;
         return [{ type: "busy", busy: true }];
-      case "agent_end":
-        this.busy = false;
+      case "agent_end": {
+        // One low-level run finished; its assistant message is closed. But if a
+        // retry is queued, the loop continues — stay busy so the UI doesn't drop
+        // to idle between the failure and the retry.
         this.assistantOpen = false;
+        if (line.willRetry) return [];
+        this.busy = false;
+        return [{ type: "busy", busy: false }];
+      }
+      case "agent_settled":
+        // Authoritative end of the whole run (no retry/compaction/queue left).
+        // Idempotent with agent_end; also the safety net that guarantees busy
+        // clears even after a retry or compaction continuation.
+        this.busy = false;
         return [{ type: "busy", busy: false }];
 
       case "message_start":
@@ -282,6 +300,24 @@ class PiRpcTranslator implements ChatTranslator {
             text: `Retrying after error (attempt ${line.attempt ?? "?"}/${line.maxAttempts ?? "?"})…`,
           },
         ];
+      case "auto_retry_end":
+        // A retry either recovered or gave up after max attempts. Surface both
+        // so a run that silently died after retries isn't a mystery.
+        return line.success
+          ? [
+              {
+                type: "notice",
+                level: "info",
+                text: `Recovered after retry (attempt ${line.attempt ?? "?"}).`,
+              },
+            ]
+          : [
+              {
+                type: "notice",
+                level: "error",
+                text: `Retry failed after ${line.attempt ?? "?"} attempt(s): ${line.finalError ?? "unknown error"}`,
+              },
+            ];
       case "extension_error":
         return [
           {
