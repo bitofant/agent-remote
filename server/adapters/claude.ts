@@ -24,10 +24,7 @@ import type {
   HarnessAdapter,
   SessionOptions,
 } from "./types.js";
-
-// Model switcher ordering (smallest → largest); only applied when every model
-// is a known family (otherwise unknown models can't be ranked → SDK order).
-const KNOWN_MODEL_ORDER = ["haiku", "sonnet", "opus", "fable", "mythos"];
+import { menuLabel, menuModels } from "./model-menu.js";
 
 // Runtime permission-mode toggle (curated subset of PermissionMode, omits
 // bypassPermissions/dontAsk). `id` is passed to query.setPermissionMode.
@@ -97,17 +94,6 @@ function parseQuestions(input: unknown): ChatQuestion[] {
         .filter((o) => typeof o.label === "string")
         .map((o) => ({ label: o.label as string, description: o.description })),
     }));
-}
-
-function modelRank(m: ModelInfo): number {
-  const id = m.value.toLowerCase();
-  return KNOWN_MODEL_ORDER.findIndex((family) => id.includes(family));
-}
-
-// Sort smallest → largest only when every model is a known family; else SDK order.
-function sortModels(models: readonly ModelInfo[]): ModelInfo[] {
-  if (models.some((m) => modelRank(m) === -1)) return [...models];
-  return [...models].sort((a, b) => modelRank(a) - modelRank(b));
 }
 
 // Claude Code adapter. Drives the Claude Agent SDK (which owns its own
@@ -352,15 +338,18 @@ class ClaudeChatSession implements ChatSession {
         q.supportedModels(),
         q.supportedCommands(),
       ]);
-      // Reflect the seeded DEFAULT_MODEL as current; fall back to the first row.
+      // Apply the menu policy (latest-per-family, prior major on a bump), then
+      // reflect the seeded DEFAULT_MODEL as current; fall back to the first row.
+      // Deriving `current` from the pruned menu keeps it in sync with what's shown.
+      const menu = menuModels(models);
       const defaultModel =
-        models.find((m: ModelInfo) => m.value.toLowerCase().includes(DEFAULT_MODEL)) ??
-        models[0];
+        menu.find((m: ModelInfo) => m.value.toLowerCase().includes(DEFAULT_MODEL)) ??
+        menu[0];
       this.emit({
         type: "models",
-        models: sortModels(models).map((m: ModelInfo) => ({
+        models: menu.map((m: ModelInfo) => ({
           id: m.value,
-          label: m.displayName,
+          label: menuLabel(m),
           description: m.description,
         })),
         current: defaultModel?.value ?? null,
