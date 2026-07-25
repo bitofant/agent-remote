@@ -22,11 +22,11 @@ import { recordChatRenders, forgetChatRenders } from "./chatLog.js";
 import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
 import { listDir, readTextFile, writeTextFile } from "./files.js";
 import { authedUser, handleAuthRoute } from "./auth.js";
-import { startLlmPolling, llmStatus, evaluate } from "./llm.js";
+import { startLlmPolling, llmStatus } from "./llm.js";
+import { attachAssistant } from "./assistant.js";
 import type {
   ClientMessage,
   HarnessInfo,
-  LlmEvaluateRequest,
   ServerMessage,
 } from "../shared/protocol.js";
 
@@ -42,6 +42,11 @@ const PORT = config.server?.port ?? 4000;
 // Best-effort LLM assist: poll the configured endpoint's health in the
 // background. Never blocks startup; unavailable is fine.
 startLlmPolling(config.llm);
+
+// Backend AI-assistant mode: a server-global decider that auto-answers chat
+// permission/question cards for sessions that enabled it — runs regardless of
+// whether any browser is connected. See server/assistant.ts.
+attachAssistant(manager);
 
 const harnesses: HarnessInfo[] = [...adapters.values()].map((a) => ({
   id: a.id,
@@ -207,22 +212,12 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
     );
     return sendJson(res, listChatRenderLog(limit, session));
   }
-  // Optional LLM assist. Status is cheap/cached; evaluate is stateless and
-  // fail-safe (assistant-mode state lives entirely client-side).
+  // Optional LLM assist: the UI polls health for the assistant-mode button
+  // color/gate. The actual evaluation runs on the backend (server/assistant.ts),
+  // not over REST — so AI-assistant mode works with no browser open.
   if (req.method === "GET" && url === "/api/llm-status") {
     if (!authedUser(req, config)) return sendUnauthorized(res);
     return sendJson(res, llmStatus());
-  }
-  if (req.method === "POST" && url === "/api/llm-evaluate") {
-    if (!authedUser(req, config)) return sendUnauthorized(res);
-    void readTextBody(req)
-      .then((body) => evaluate(JSON.parse(body) as LlmEvaluateRequest))
-      .then(
-        (decision) => sendJson(res, decision),
-        // Any failure (bad body, endpoint down) is a non-event for the UI.
-        () => sendJson(res, { available: false }),
-      );
-    return;
   }
   // File editor: list/read/write under a known folder root (files.ts confines
   // every path to it).
