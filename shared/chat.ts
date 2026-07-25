@@ -13,6 +13,7 @@ import type {
 const MAX_MESSAGES = 200;
 const MAX_TOOL_OUTPUT = 20_000;
 const MAX_NOTICES = 20;
+const MAX_TRACES = 20;
 
 export function emptyChatState(): ChatState {
   return {
@@ -34,6 +35,7 @@ export function emptyChatState(): ChatState {
       instructions: "",
     },
     autoDecisions: {},
+    assistantTraces: [],
   };
 }
 
@@ -209,6 +211,30 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         ...state,
         autoDecisions: without(state.autoDecisions, event.requestId),
       };
+
+    case "assistant-trace": {
+      // Anchor the trace to the turn it explains: the message currently
+      // streaming when the card fired (its tool call lives there), falling back
+      // to the latest message. This survives the streaming→finalized handoff
+      // (same message id), so the bubble stays inline beside that turn in both
+      // phases — and is clock-independent (no timestamp interleaving).
+      const anchorMessageId =
+        event.trace.anchorMessageId ??
+        state.streaming?.id ??
+        state.messages[state.messages.length - 1]?.id;
+      return {
+        ...state,
+        assistantTraces: [
+          ...state.assistantTraces,
+          { ...event.trace, anchorMessageId },
+        ].slice(-MAX_TRACES),
+      };
+    }
+
+    // Unknown/newer event (e.g. a server ahead of this client during a deploy):
+    // leave state untouched rather than returning undefined and crashing the UI.
+    default:
+      return state;
   }
 }
 

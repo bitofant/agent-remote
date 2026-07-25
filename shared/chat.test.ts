@@ -204,6 +204,70 @@ describe("applyChatEvent", () => {
     expect(state.currentModel).toBe("sonnet");
   });
 
+  it("anchors an AI-mode trace to the streaming turn, surviving finalization", () => {
+    // Trace fires mid-turn (while the assistant message with the tool is
+    // streaming); it must anchor to that message id and keep it after the turn
+    // finalizes — so the UI renders it inline beside that turn in both phases.
+    let state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "tool-call", toolId: "t1", name: "Edit", args: {} },
+      {
+        type: "assistant-trace",
+        trace: {
+          requestId: "r1",
+          kind: "select",
+          prompt: "SYSTEM:\n…\n\nUSER:\n…",
+          response: '{"allow":true}',
+          outcome: "allow",
+          summary: "Allowed",
+          at: 123,
+        },
+      },
+    ]);
+    expect(state.assistantTraces).toHaveLength(1);
+    expect(state.assistantTraces[0].anchorMessageId).toBe("m1");
+    // Finalize the turn: the message keeps id m1, so the anchor still matches.
+    state = applyChatEvent(state, { type: "assistant-end" });
+    state = applyChatEvent(state, {
+      type: "tool-end",
+      toolId: "t1",
+      output: "ok",
+      isError: false,
+    });
+    expect(state.messages[0].id).toBe("m1");
+    expect(state.assistantTraces[0].anchorMessageId).toBe("m1");
+  });
+
+  it("caps AI-mode traces at 20 (keeps the most recent)", () => {
+    const events: ChatEvent[] = Array.from({ length: 25 }, (_, i) => ({
+      type: "assistant-trace",
+      trace: {
+        requestId: `r${i}`,
+        kind: "confirm",
+        prompt: "p",
+        response: "x",
+        outcome: "allow",
+        summary: `s${i}`,
+        at: i,
+      },
+    }));
+    const state = reduce(events);
+    expect(state.assistantTraces).toHaveLength(20);
+    expect(state.assistantTraces[state.assistantTraces.length - 1].summary).toBe(
+      "s24",
+    );
+  });
+
+  it("leaves state untouched for an unknown/newer event (deploy-skew safety)", () => {
+    const before = reduce([{ type: "busy", busy: true }]);
+    // Simulate a server ahead of this client emitting an event type it doesn't
+    // know: the reducer must return the same state, never undefined.
+    const after = applyChatEvent(before, {
+      type: "some-future-event",
+    } as unknown as ChatEvent);
+    expect(after).toBe(before);
+  });
+
   it("ignores stream events with no active streaming message", () => {
     // part-delta / tool-call before assistant-start are no-ops, not throws.
     const before = emptyChatState();

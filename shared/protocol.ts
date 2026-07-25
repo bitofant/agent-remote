@@ -116,6 +116,9 @@ export interface LlmEvaluateRequest {
   questions?: ChatQuestion[];
   /** Free-text user instructions (may be empty → default safety rubric). */
   instructions: string;
+  /** The session's workspace root (its launch folder). Lets the default rubric
+   * auto-allow file edits/writes whose target path is inside it or a subfolder. */
+  workspace?: string;
   capabilities: { permissions: boolean; questions: boolean };
 }
 
@@ -129,6 +132,11 @@ export interface LlmDecision {
   reason?: string;
   /** Answers for a `questions` prompt: question text → chosen label(s). */
   answers?: Record<string, string>;
+  /** Diagnostic trace of the deliberation: the prompt sent to the LLM, its
+   * surfaced reasoning, and the raw response. Present whenever the endpoint was
+   * actually queried (even on abstain/error), so the UI can show what AI-mode
+   * did. */
+  trace?: { prompt: string; thoughts?: string; response: string };
 }
 
 /** A dynamically-resolved argument suggestion (e.g. a live container name).
@@ -272,6 +280,39 @@ export interface AssistantDecision {
   delayMs: number;
 }
 
+/** A record of one AI-assistant deliberation over a pending card: the prompt
+ * sent to the LLM, the model's surfaced reasoning/response, and a one-line
+ * summary of the resulting decision. Surfaced in the transcript as a
+ * collapsible AI-mode bubble so the user can see what AI-mode did and why.
+ * Transient/diagnostic — capped in ChatState, not persisted across restarts. */
+export interface AssistantTrace {
+  /** Id of the card this deliberation was about. */
+  requestId: string;
+  /** Which dialog kind was judged. */
+  kind: "confirm" | "select" | "questions";
+  /** The full prompt sent to the LLM (system + user), human-readable. */
+  prompt: string;
+  /** The model's surfaced reasoning, if any (e.g. `reasoning_content`). */
+  thoughts?: string;
+  /** The raw model response text. */
+  response: string;
+  /** Structured outcome for the trace bubble's colored verdict word:
+   * allow (green) / deny (red) / answer / abstain / error. */
+  outcome: "allow" | "deny" | "answer" | "abstain" | "error";
+  /** Terse reason for the outcome, shown inline after the verdict word. */
+  reason?: string;
+  /** One-line outcome summary (e.g. "Allowed", "Denied — …", "Answered",
+   * "Abstained", "No response from endpoint"). Plain-text form for the
+   * render-log / accessibility; the bubble uses `outcome` + `reason`. */
+  summary: string;
+  at: number;
+  /** Id of the assistant message this deliberation belongs to (the turn whose
+   * tool call the card was about), so the UI can render it inline right after
+   * that turn instead of pinned at the bottom. Assigned by the reducer when the
+   * trace is folded in. */
+  anchorMessageId?: string;
+}
+
 /** Full renderable state of a chat session. The server snapshots this on
  * (re)connect; both sides keep it current via `applyChatEvent`. */
 export interface ChatState {
@@ -303,6 +344,10 @@ export interface ChatState {
    * about to do (drives the countdown ring in each card). Cleared when the
    * request resolves or a user intervenes. */
   autoDecisions: Record<string, AssistantDecision>;
+  /** Recent AI-assistant deliberations (prompt/thoughts/response), oldest
+   * first, capped. Rendered as collapsible AI-mode bubbles for visibility into
+   * what the assistant did. */
+  assistantTraces: AssistantTrace[];
 }
 
 /** Normalized streaming events a chat adapter emits. */
@@ -340,7 +385,10 @@ export type ChatEvent =
   | { type: "assistant-decision"; decision: AssistantDecision }
   /** A pending AI-assistant verdict was withdrawn (user intervened, or the
    * request resolved) — clients drop its countdown. */
-  | { type: "assistant-decision-cleared"; requestId: string };
+  | { type: "assistant-decision-cleared"; requestId: string }
+  /** The backend AI-assistant deliberated over a card (whenever the LLM was
+   * queried). Folded into ChatState as a collapsible AI-mode bubble. */
+  | { type: "assistant-trace"; trace: AssistantTrace };
 
 /** Actions the browser can take on a chat session. */
 export type ChatAction =

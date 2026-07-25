@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -7,6 +8,7 @@ import {
 } from "react";
 import type {
   AssistantDecision,
+  AssistantTrace,
   ChatMessage,
   ChatPart,
   ChatState,
@@ -120,6 +122,77 @@ function Bubble({ message, streaming }: { message: ChatMessage; streaming?: bool
       })}
       {streaming && message.parts.length === 0 && (
         <span className="chat-cursor" />
+      )}
+    </div>
+  );
+}
+
+// Material `smart_toy` (robot head) — the AI-assistant (LLM UI-mode) glyph;
+// matches the header toggle in App.tsx.
+const ROBOT_ICON =
+  "M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z";
+
+// Colored verdict word shown at the head of each AI-mode trace bubble.
+const TRACE_VERDICT: Record<AssistantTrace["outcome"], string> = {
+  allow: "Allow",
+  deny: "Deny",
+  answer: "Answer",
+  abstain: "Abstain",
+  error: "No response",
+};
+
+// AI-mode deliberation bubble: whenever the backend assistant queried the LLM
+// about a card, it records what prompt it sent and the model's thoughts/reply.
+// Collapsed, it's a single line — colored verdict word + as much of the reason
+// as fits; tapping the line toggles the prompt/thoughts/response details.
+function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="chat-assistant-trace" data-outcome={trace.outcome}>
+      <div
+        className="chat-assistant-trace-head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((o) => !o);
+          }
+        }}
+      >
+        <svg
+          className="chat-assistant-trace-icon"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path d={ROBOT_ICON} fill="currentColor" />
+        </svg>
+        <span className="chat-assistant-trace-verdict">
+          {TRACE_VERDICT[trace.outcome]}
+        </span>
+        {trace.reason && (
+          <span className="chat-assistant-trace-reason">{trace.reason}</span>
+        )}
+      </div>
+      {open && (
+        <div className="chat-assistant-trace-details">
+          <div className="chat-assistant-trace-section">
+            <div className="chat-assistant-trace-label">Prompt</div>
+            <pre>{trace.prompt}</pre>
+          </div>
+          {trace.thoughts && (
+            <div className="chat-assistant-trace-section">
+              <div className="chat-assistant-trace-label">Thoughts</div>
+              <pre>{trace.thoughts}</pre>
+            </div>
+          )}
+          <div className="chat-assistant-trace-section">
+            <div className="chat-assistant-trace-label">Response</div>
+            <pre>{trace.response || "(no response)"}</pre>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -565,6 +638,20 @@ export function ChatView({
   const recentNotices = state.notices.slice(-3);
   const [showCommands, setShowCommands] = useState(false);
 
+  // AI-mode trace bubbles render inline right after the assistant turn they
+  // explain (anchorMessageId), so the deliberation sits beside its tool call.
+  const tracesFor = (messageId: string) =>
+    state.assistantTraces
+      .filter((t) => t.anchorMessageId === messageId)
+      .map((t, i) => (
+        <AssistantTraceBubble key={`trace-${t.requestId}-${t.at}-${i}`} trace={t} />
+      ));
+  const renderedIds = new Set(state.messages.map((m) => m.id));
+  if (state.streaming) renderedIds.add(state.streaming.id);
+  const orphanTraces = state.assistantTraces.filter(
+    (t) => !t.anchorMessageId || !renderedIds.has(t.anchorMessageId),
+  );
+
   const insertCommand = (name: string) => {
     setDraft((d) => (d ? `${d} /${name} ` : `/${name} `));
     setShowCommands(false);
@@ -654,11 +741,22 @@ export function ChatView({
           </div>
         )}
         {state.messages.map((m) => (
-          <Bubble key={m.id} message={m} />
+          <Fragment key={m.id}>
+            <Bubble message={m} />
+            {tracesFor(m.id)}
+          </Fragment>
         ))}
         {state.streaming && (
-          <Bubble key={state.streaming.id} message={state.streaming} streaming />
+          <Fragment key={state.streaming.id}>
+            <Bubble message={state.streaming} streaming />
+            {tracesFor(state.streaming.id)}
+          </Fragment>
         )}
+        {/* Traces whose anchor turn is no longer rendered (e.g. capped out of
+            history) fall back to the end so they're never lost. */}
+        {orphanTraces.map((t, i) => (
+          <AssistantTraceBubble key={`trace-${t.requestId}-${t.at}-${i}`} trace={t} />
+        ))}
         {state.queued.map((text, i) => (
           <div key={`q-${i}`} className="chat-bubble user queued">
             {text}

@@ -107,13 +107,18 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 const PERMISSION_SYSTEM = [
   "You gate tool-call permission prompts for a developer's AI coding agent.",
   "Decide whether to auto-ALLOW the requested tool call.",
-  "You will be given the tool name, its arguments (JSON), and optional user",
-  "instructions. If user instructions are present, ALLOW only when the call",
-  "clearly satisfies them. With no instructions, ALLOW only trivially safe,",
-  "common, reversible dev operations (e.g. reading files, `ls`, `git status`,",
-  "`git diff`, `git log`). Do NOT allow anything destructive, networked, or",
-  "state-changing when in doubt (e.g. `rm`, `curl | sh`, force pushes, writes",
-  "outside the workspace, credential access).",
+  "You will be given the tool name, its arguments (JSON), an optional workspace",
+  "directory, and optional user instructions. If user instructions are present,",
+  "ALLOW only when the call clearly satisfies them. With no instructions, ALLOW:",
+  "(a) trivially safe, common, reversible read operations (e.g. reading files,",
+  "`ls`, `git status`, `git diff`, `git log`); and (b) file edits/writes/creates",
+  "whose target path is inside the workspace directory or a subfolder of it —",
+  "this includes relative paths (which are within the workspace) and absolute",
+  "paths under the workspace root. Do NOT allow anything destructive, networked,",
+  "or state-changing when in doubt (e.g. `rm`, `curl | sh`, force pushes,",
+  "arbitrary shell mutations, writes to files OUTSIDE the workspace, credential",
+  "access) — a path outside the workspace, or `..` escaping it, is never allowed",
+  "by default.",
   'Reply with ONLY JSON: {"allow": boolean, "reason": "<terse, <=12 words>"}.',
   "The reason is required and must be terse; it is shown when denying.",
 ].join(" ");
@@ -129,7 +134,7 @@ const QUESTIONS_SYSTEM = [
 async function chat(
   system: string,
   user: string,
-): Promise<string> {
+): Promise<{ content: string; reasoning?: string }> {
   const body = {
     model: status.model,
     messages: [
@@ -147,8 +152,19 @@ async function chat(
       body: JSON.stringify(body),
     },
     EVAL_TIMEOUT_MS,
-  )) as { choices?: { message?: { content?: string } }[] };
-  return data?.choices?.[0]?.message?.content ?? "";
+  )) as {
+    choices?: {
+      message?: { content?: string; reasoning_content?: string };
+    }[];
+  };
+  const msg = data?.choices?.[0]?.message;
+  const reasoning = msg?.reasoning_content?.trim();
+  return { content: msg?.content ?? "", reasoning: reasoning || undefined };
+}
+
+/** Render the outgoing prompt for the diagnostic trace shown in the UI. */
+function tracePrompt(system: string, user: string): string {
+  return `SYSTEM:\n${system}\n\nUSER:\n${user}`;
 }
 
 /** Judge a pending UI request. Returns a normalized decision, or
@@ -157,52 +173,75 @@ export async function evaluate(
   req: LlmEvaluateRequest,
 ): Promise<LlmDecision> {
   if (!status.available || !status.model) return { available: false };
-  try {
-    const instructions = (req.instructions ?? "").trim();
+  const instructions = (req.instructions ?? "").trim();
 
-    if (req.kind === "questions" && req.capabilities.questions) {
-      const payload = {
-        instructions: instructions || null,
-        questions: (req.questions ?? []).map((q) => ({
-          question: q.question,
-          multiSelect: q.multiSelect ?? false,
-          options: q.options.map((o) => o.label),
-        })),
-      };
-      const out = parseJsonObject(
-        await chat(QUESTIONS_SYSTEM, JSON.stringify(payload)),
-      );
-      const raw = out?.answers;
-      if (!raw || typeof raw !== "object") return { available: true, action: "none" };
-      const answers: Record<string, string> = {};
+  if (req.kind === "questions" && req.capabilities.questions) {
+    const user = JSON.stringify({
+      instructions: instructions || null,
+      questions: (req.questions ?? []).map((q) => ({
+        question: q.question,
+        multiSelect: q.multiSelect ?? false,
+        options: q.options.map((o) => o.label),
+      })),
+    });
+    let reply: { content: string; reasoning?: string };
+    try {
+      reply = await chat(QUESTIONS_SYSTEM, user);
+    } catch {
+      return { available: false };
+    }
+    const trace = {
+      prompt: tracePrompt(QUESTIONS_SYSTEM, user),
+      thoughts: reply.reasoning,
+      response: reply.content,
+    };
+    const out = parseJsonObject(reply.content);
+    const raw = out?.answers;
+    const answers: Record<string, string> = {};
+    if (raw && typeof raw === "object") {
       for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
         if (typeof v === "string") answers[k] = v;
-        else if (Array.isArray(v)) answers[k] = v.filter((x) => typeof x === "string").join(", ");
+        else if (Array.isArray(v))
+          answers[k] = v.filter((x) => typeof x === "string").join(", ");
       }
-      if (Object.keys(answers).length === 0) return { available: true, action: "none" };
-      return { available: true, action: "answer", answers };
     }
-
-    if ((req.kind === "select" || req.kind === "confirm") && req.capabilities.permissions) {
-      const payload = {
-        instructions: instructions || null,
-        tool: req.tool?.name ?? null,
-        arguments: req.tool?.args ?? null,
-      };
-      const out = parseJsonObject(
-        await chat(PERMISSION_SYSTEM, JSON.stringify(payload)),
-      );
-      if (!out || typeof out.allow !== "boolean") return { available: true, action: "none" };
-      const reason = typeof out.reason === "string" ? out.reason : "";
-      return {
-        available: true,
-        action: out.allow ? "allow" : "deny",
-        reason,
-      };
-    }
-
-    return { available: true, action: "none" };
-  } catch {
-    return { available: false };
+    if (Object.keys(answers).length === 0)
+      return { available: true, action: "none", trace };
+    return { available: true, action: "answer", answers, trace };
   }
+
+  if (
+    (req.kind === "select" || req.kind === "confirm") &&
+    req.capabilities.permissions
+  ) {
+    const user = JSON.stringify({
+      instructions: instructions || null,
+      workspace: req.workspace ?? null,
+      tool: req.tool?.name ?? null,
+      arguments: req.tool?.args ?? null,
+    });
+    let reply: { content: string; reasoning?: string };
+    try {
+      reply = await chat(PERMISSION_SYSTEM, user);
+    } catch {
+      return { available: false };
+    }
+    const trace = {
+      prompt: tracePrompt(PERMISSION_SYSTEM, user),
+      thoughts: reply.reasoning,
+      response: reply.content,
+    };
+    const out = parseJsonObject(reply.content);
+    if (!out || typeof out.allow !== "boolean")
+      return { available: true, action: "none", trace };
+    const reason = typeof out.reason === "string" ? out.reason : "";
+    return {
+      available: true,
+      action: out.allow ? "allow" : "deny",
+      reason,
+      trace,
+    };
+  }
+
+  return { available: true, action: "none" };
 }
