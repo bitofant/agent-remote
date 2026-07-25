@@ -138,6 +138,16 @@ describe.skipIf(!config || !enabled || !up || !llmUp)(
       );
       expect(done, "the Edit request was never resolved by the backend").toBeDefined();
 
+      // (c2) The deliberation was surfaced as an AI-mode trace bubble for the
+      // same card, carrying the prompt sent to the LLM and its response.
+      const trace = events.find(
+        (e): e is Extract<ChatEvent, { type: "assistant-trace" }> =>
+          e.type === "assistant-trace" && e.trace.requestId === reqId,
+      );
+      expect(trace, "backend never emitted an assistant-trace").toBeDefined();
+      expect(trace!.trace.prompt).toContain("USER:");
+      expect(trace!.trace.summary.length).toBeGreaterThan(0);
+
       // (d) Soft, model-dependent: the edit actually landed on disk.
       const editCall = events.find(
         (e): e is Extract<ChatEvent, { type: "tool-call" }> =>

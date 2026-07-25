@@ -14,7 +14,11 @@
 //
 // Harness-agnostic: it only reads ChatState and drives the manager, like a UI.
 import type { SessionManager } from "./sessions/manager.js";
-import type { AssistantDecision, ChatUiRequest } from "../shared/protocol.js";
+import type {
+  AssistantDecision,
+  AssistantTrace,
+  ChatUiRequest,
+} from "../shared/protocol.js";
 import { evaluate, llmStatus } from "./llm.js";
 
 // Same grace-delay curve the UI used: 2s (trivial card) … 10s (a screenful),
@@ -125,12 +129,28 @@ export function attachAssistant(manager: SessionManager): () => void {
         options: req.options,
         questions: req.questions,
         instructions: settings.instructions,
+        workspace: manager.sessionFolder(sessionId),
         capabilities: {
           permissions: settings.canAcceptPermissions,
           questions: settings.canAnswerQuestions,
         },
       })
         .then((verdict) => {
+          // Whenever the LLM was actually queried, surface what it saw and said
+          // as a collapsible AI-mode bubble — visible with or without a browser.
+          if (verdict.trace) {
+            manager.postAssistantTrace(sessionId, {
+              requestId: req.id,
+              kind: req.kind as "confirm" | "select" | "questions",
+              prompt: verdict.trace.prompt,
+              thoughts: verdict.trace.thoughts,
+              response: verdict.trace.response,
+              outcome: outcomeOf(verdict),
+              reason: verdict.reason,
+              summary: summarizeVerdict(verdict),
+              at: Date.now(),
+            });
+          }
           if (!verdict.available || !verdict.action || verdict.action === "none") {
             handled.delete(req.id);
             return;
@@ -169,6 +189,44 @@ export function attachAssistant(manager: SessionManager): () => void {
         });
     },
   });
+}
+
+/** Structured outcome for the trace bubble's colored verdict word. */
+function outcomeOf(verdict: {
+  available: boolean;
+  action?: string;
+}): AssistantTrace["outcome"] {
+  if (!verdict.available) return "error";
+  switch (verdict.action) {
+    case "allow":
+      return "allow";
+    case "deny":
+      return "deny";
+    case "answer":
+      return "answer";
+    default:
+      return "abstain";
+  }
+}
+
+/** One-line outcome summary for the AI-mode trace bubble header. */
+function summarizeVerdict(verdict: {
+  available: boolean;
+  action?: string;
+  reason?: string;
+  answers?: Record<string, string>;
+}): string {
+  if (!verdict.available) return "No response from endpoint";
+  switch (verdict.action) {
+    case "allow":
+      return verdict.reason ? `Allowed — ${verdict.reason}` : "Allowed";
+    case "deny":
+      return verdict.reason ? `Denied — ${verdict.reason}` : "Denied";
+    case "answer":
+      return "Answered";
+    default:
+      return "Abstained (left for you)";
+  }
 }
 
 /** Map the LLM verdict to a broadcastable decision, or null if inapplicable. */

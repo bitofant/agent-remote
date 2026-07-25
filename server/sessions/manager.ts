@@ -13,6 +13,7 @@ import type {
 } from "../adapters/types.js";
 import type {
   AssistantDecision,
+  AssistantTrace,
   ChatAction,
   ChatEvent,
   ChatState,
@@ -391,6 +392,15 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session?.chat)
       this.applyChat(session, { type: "assistant-decision", decision });
+  }
+
+  /** Record an AI-assistant deliberation (prompt/thoughts/response) for a card,
+   * surfaced in the transcript as a collapsible AI-mode bubble. Used by the
+   * backend decider whenever the LLM was queried; no-op for non-chat sessions. */
+  postAssistantTrace(sessionId: string, trace: AssistantTrace): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.chat)
+      this.applyChat(session, { type: "assistant-trace", trace });
   }
 
   input(sessionId: string, data: string): void {
