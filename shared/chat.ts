@@ -27,6 +27,13 @@ export function emptyChatState(): ChatState {
     modes: [],
     currentMode: null,
     commands: [],
+    assistant: {
+      enabled: false,
+      canAcceptPermissions: true,
+      canAnswerQuestions: false,
+      instructions: "",
+    },
+    autoDecisions: {},
   };
 }
 
@@ -158,6 +165,7 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         pendingRequests: state.pendingRequests.filter(
           (r) => r.id !== event.requestId,
         ),
+        autoDecisions: without(state.autoDecisions, event.requestId),
       };
 
     case "notice":
@@ -183,7 +191,36 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 
     case "commands":
       return { ...state, commands: event.commands };
+
+    case "assistant-config":
+      return { ...state, assistant: event.settings };
+
+    case "assistant-decision":
+      return {
+        ...state,
+        autoDecisions: {
+          ...state.autoDecisions,
+          [event.decision.requestId]: event.decision,
+        },
+      };
+
+    case "assistant-decision-cleared":
+      return {
+        ...state,
+        autoDecisions: without(state.autoDecisions, event.requestId),
+      };
   }
+}
+
+/** Return a copy of `map` without `key` (unchanged if the key is absent). */
+function without<T>(
+  map: Record<string, T>,
+  key: string,
+): Record<string, T> {
+  if (!(key in map)) return map;
+  const next = { ...map };
+  delete next[key];
+  return next;
 }
 
 /** Drop content-less thinking parts. A thinking part with no text (claude never

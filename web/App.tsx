@@ -43,9 +43,10 @@ interface EditorTab {
   file: string | null;
 }
 
-// Per-chat-session AI-assistant mode. Purely client-side state: which
-// capabilities the optional LLM may exercise on this session's cards, plus
-// free-text instructions. Backed by the best-effort /api/llm-* endpoints.
+// Per-chat-session AI-assistant mode. The BACKEND owns this now (it lives in
+// the session's ChatState and the server auto-answers cards even with no
+// browser open); the UI just reads it from ChatState and writes it back via the
+// `set-assistant` chat action. This shape mirrors protocol's AssistantSettings.
 interface AssistantSettings {
   enabled: boolean;
   canAcceptPermissions: boolean;
@@ -250,10 +251,10 @@ function Workspace({
   const [resumable, setResumable] = useState<ResumableSession[]>([]);
   // Resume-session picker dialog (opened from the chat header's Resume button).
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
-  // Per-chat-session AI-assistant settings (keyed by session id).
-  const [assistant, setAssistant] = useState<Record<string, AssistantSettings>>(
-    {},
-  );
+  // AI-assistant settings of the active chat session, mirrored from its
+  // backend-owned ChatState (null when the active tab isn't a chat session).
+  const [activeAssistant, setActiveAssistant] =
+    useState<AssistantSettings | null>(null);
   // Health of the optional LLM endpoint (polled), for the assistant button color.
   const [llmAvailable, setLlmAvailable] = useState(false);
   // AI-assistant config dialog + its working draft.
@@ -386,20 +387,6 @@ function Workspace({
     }).finally(refreshResumable);
   };
 
-  // Drop assistant settings for sessions that no longer exist.
-  useEffect(() => {
-    setAssistant((prev) => {
-      const live = new Set(sessions.map((s) => s.id));
-      const next: Record<string, AssistantSettings> = {};
-      let changed = false;
-      for (const [id, s] of Object.entries(prev)) {
-        if (live.has(id)) next[id] = s;
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [sessions]);
-
   // Close the add-session dropdown on an outside click.
   useEffect(() => {
     if (!addMenuOpen) return;
@@ -476,20 +463,34 @@ function Workspace({
   const resumableForActive = activeSessionObj
     ? resumable.filter((r) => r.harnessId === activeSessionObj.harnessId)
     : resumable;
-  // Active session's AI-assistant settings + button state.
-  const activeAssistant =
-    activeSessionId !== null ? assistant[activeSessionId] : undefined;
+  // Mirror the active chat session's backend-owned assistant settings so the
+  // header button/dialog reflect what the server will actually do (and update
+  // live when another client or the backend changes it).
+  useEffect(() => {
+    if (!activeIsChat || activeSessionId === null) {
+      setActiveAssistant(null);
+      return;
+    }
+    const { initial, unsubscribe } = client.subscribeChat(
+      activeSessionId,
+      (s) => setActiveAssistant(s.assistant),
+    );
+    setActiveAssistant(initial.assistant);
+    return unsubscribe;
+  }, [client, activeSessionId, activeIsChat]);
+
   const assistantEnabled = !!activeAssistant?.enabled;
 
   // Clicking the assistant button toggles it off when enabled, else opens the
-  // config dialog seeded from any existing settings.
+  // config dialog seeded from the current (backend) settings. Both write back
+  // to the backend via the `set-assistant` action.
   const onAssistantButton = () => {
     if (activeSessionId === null) return;
     if (assistantEnabled) {
-      setAssistant((prev) => ({
-        ...prev,
-        [activeSessionId]: { ...prev[activeSessionId], enabled: false },
-      }));
+      client.chatAction(activeSessionId, {
+        type: "set-assistant",
+        settings: { ...(activeAssistant ?? DEFAULT_ASSISTANT), enabled: false },
+      });
       return;
     }
     setAssistantDraft(activeAssistant ?? DEFAULT_ASSISTANT);
@@ -498,10 +499,10 @@ function Workspace({
 
   const enableAssistant = () => {
     if (activeSessionId === null) return;
-    setAssistant((prev) => ({
-      ...prev,
-      [activeSessionId]: { ...assistantDraft, enabled: true },
-    }));
+    client.chatAction(activeSessionId, {
+      type: "set-assistant",
+      settings: { ...assistantDraft, enabled: true },
+    });
     setAssistantDialogOpen(false);
   };
 
@@ -883,8 +884,6 @@ function Workspace({
                           resumable.some((r) => r.harnessId === s.harnessId)
                         }
                         onResume={() => setResumeDialogOpen(true)}
-                        assistant={assistant[s.id] ?? null}
-                        llmAvailable={llmAvailable}
                         keyboardOpen={keyboard.open}
                       />
                     ))}

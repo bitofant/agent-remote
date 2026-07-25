@@ -239,6 +239,39 @@ export interface ChatCommand {
   description?: string;
 }
 
+/** Per-chat-session AI-assistant mode. Lives in `ChatState` (owned by the
+ * backend, replayed on connect, synced to every client) so the SERVER can
+ * auto-answer permission/question cards via the optional LLM even when no
+ * browser is connected. Toggled from the UI via the `set-assistant` action. */
+export interface AssistantSettings {
+  /** Master switch: the server auto-answers this session's cards when true. */
+  enabled: boolean;
+  /** May auto-answer tool permission prompts (`select`/`confirm`). */
+  canAcceptPermissions: boolean;
+  /** May auto-answer AskUserQuestion dialogs (`questions`). */
+  canAnswerQuestions: boolean;
+  /** Free-text user instructions the LLM follows (empty → default safety rubric). */
+  instructions: string;
+}
+
+/** The backend AI-assistant's verdict on a pending card, broadcast to every
+ * client so they render the SAME countdown UI they always have. Auto-acting
+ * verdicts (accept/confirm/answer) show a ring for `delayMs`, then the BACKEND
+ * applies them — so it happens with or without a browser open. `deny` never
+ * auto-acts: it highlights Deny + prefills the reason for a human to confirm. */
+export interface AssistantDecision {
+  requestId: string;
+  action: "accept" | "confirm" | "answer" | "deny";
+  /** For `accept`: the option label the countdown will choose. */
+  value?: string;
+  /** For `answer`: question text → chosen label(s). */
+  answers?: Record<string, string>;
+  /** For `deny`: terse reason, prefilled into the note field. */
+  reason?: string;
+  /** Grace window (ms) before an auto-acting verdict is applied. */
+  delayMs: number;
+}
+
 /** Full renderable state of a chat session. The server snapshots this on
  * (re)connect; both sides keep it current via `applyChatEvent`. */
 export interface ChatState {
@@ -263,6 +296,13 @@ export interface ChatState {
   currentMode: string | null;
   /** Slash commands the session exposes (empty if none/unsupported). */
   commands: ChatCommand[];
+  /** Backend-owned AI-assistant mode for this session (see AssistantSettings).
+   * The server auto-answers cards when `enabled`; synced to all clients. */
+  assistant: AssistantSettings;
+  /** Pending AI-assistant verdicts keyed by request id — what the backend is
+   * about to do (drives the countdown ring in each card). Cleared when the
+   * request resolves or a user intervenes. */
+  autoDecisions: Record<string, AssistantDecision>;
 }
 
 /** Normalized streaming events a chat adapter emits. */
@@ -291,7 +331,16 @@ export type ChatEvent =
   /** The current permission mode changed (e.g. via `set-mode`). */
   | { type: "mode-changed"; current: string }
   /** Available slash commands (sent on init; may be re-sent if they change). */
-  | { type: "commands"; commands: ChatCommand[] };
+  | { type: "commands"; commands: ChatCommand[] }
+  /** AI-assistant mode changed (toggle/config). Server-authoritative; folded
+   * into ChatState and fanned out to every client. */
+  | { type: "assistant-config"; settings: AssistantSettings }
+  /** The backend AI-assistant decided how to answer a pending card; clients show
+   * the countdown. The backend applies it (or a user intervenes first). */
+  | { type: "assistant-decision"; decision: AssistantDecision }
+  /** A pending AI-assistant verdict was withdrawn (user intervened, or the
+   * request resolved) — clients drop its countdown. */
+  | { type: "assistant-decision-cleared"; requestId: string };
 
 /** Actions the browser can take on a chat session. */
 export type ChatAction =
@@ -311,7 +360,13 @@ export type ChatAction =
       note?: string;
     }
   | { type: "set-model"; model: string }
-  | { type: "set-mode"; mode: string };
+  | { type: "set-mode"; mode: string }
+  /** Toggle/configure backend AI-assistant mode for this session. Handled by
+   * the manager itself (not the adapter) — harness-agnostic. */
+  | { type: "set-assistant"; settings: AssistantSettings }
+  /** User intervened on a card the AI-assistant was about to auto-answer: cancel
+   * its pending verdict so only a manual response resolves it. Harness-agnostic. */
+  | { type: "cancel-assistant"; requestId: string };
 
 /** Messages the browser sends to the backend. */
 export type ClientMessage =

@@ -12,6 +12,7 @@ import type {
   SessionOptions,
 } from "../adapters/types.js";
 import type {
+  AssistantDecision,
   ChatAction,
   ChatEvent,
   ChatState,
@@ -355,6 +356,24 @@ export class SessionManager {
   chatAction(sessionId: string, action: ChatAction): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.info.status !== "running") return;
+    // AI-assistant mode is backend-owned and harness-agnostic — handle its
+    // actions here (fold into ChatState + fan out), never in the adapter. The
+    // decision-cleared event also reaches the assistant decider (a listener),
+    // which cancels its pending auto-response for this request.
+    if (action.type === "set-assistant") {
+      this.applyChat(session, {
+        type: "assistant-config",
+        settings: action.settings,
+      });
+      return;
+    }
+    if (action.type === "cancel-assistant") {
+      this.applyChat(session, {
+        type: "assistant-decision-cleared",
+        requestId: action.requestId,
+      });
+      return;
+    }
     if (session.chatSession) {
       session.chatSession.action(action);
       return;
@@ -363,6 +382,15 @@ export class SessionManager {
     const { data, events } = session.translator.encode(action);
     if (data) session.child.stdin.write(data);
     for (const event of events) this.applyChat(session, event);
+  }
+
+  /** Broadcast an AI-assistant verdict for a pending card (drives the countdown
+   * ring in every client). Used by the backend decider; no-op for non-chat/
+   * absent sessions. */
+  postAssistantDecision(sessionId: string, decision: AssistantDecision): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.chat)
+      this.applyChat(session, { type: "assistant-decision", decision });
   }
 
   input(sessionId: string, data: string): void {
