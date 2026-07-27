@@ -258,6 +258,41 @@ describe("applyChatEvent", () => {
     );
   });
 
+  it("folds a usage snapshot into ChatState.usage (replacing any prior)", () => {
+    const first = reduce([
+      {
+        type: "usage",
+        usage: {
+          available: false,
+          subscriptionType: null,
+          windows: [],
+          sessionCostUsd: 0.5,
+          at: 1,
+        },
+      },
+    ]);
+    expect(first.usage?.available).toBe(false);
+    expect(first.usage?.sessionCostUsd).toBe(0.5);
+
+    // A newer snapshot replaces the old one wholesale.
+    const second = applyChatEvent(first, {
+      type: "usage",
+      usage: {
+        available: true,
+        subscriptionType: "max",
+        windows: [
+          { key: "seven_day", label: "Week — all models", utilization: 16, resetsAt: "2026-07-31T15:59:00Z" },
+        ],
+        sessionCostUsd: 1.25,
+        at: 2,
+      },
+    });
+    expect(second.usage?.available).toBe(true);
+    expect(second.usage?.subscriptionType).toBe("max");
+    expect(second.usage?.windows).toHaveLength(1);
+    expect(second.usage?.windows[0].utilization).toBe(16);
+  });
+
   it("leaves state untouched for an unknown/newer event (deploy-skew safety)", () => {
     const before = reduce([{ type: "busy", busy: true }]);
     // Simulate a server ahead of this client emitting an event type it doesn't

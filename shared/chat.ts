@@ -28,6 +28,7 @@ export function emptyChatState(): ChatState {
     modes: [],
     currentMode: null,
     commands: [],
+    usage: null,
     assistant: {
       enabled: false,
       canAcceptPermissions: true,
@@ -193,6 +194,9 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 
     case "commands":
       return { ...state, commands: event.commands };
+
+    case "usage":
+      return { ...state, usage: event.usage };
 
     case "assistant-config":
       return { ...state, assistant: event.settings };
