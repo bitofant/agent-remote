@@ -229,6 +229,11 @@ class ClaudeChatSession implements ChatSession {
         // env rather than merging, so spread process.env to keep PATH/HOME/etc.
         ...(this.env ? { env: { ...process.env, ...this.env } } : {}),
         includePartialMessages: true,
+        // Predicted next-prompt suggestions (the TUI's follow-up hint). Emitted
+        // as a `prompt_suggestion` SDK message after each turn (never the first);
+        // mapped to a `prompt-suggestion` ChatEvent. Nearly free (rides the
+        // parent's prompt cache).
+        promptSuggestions: true,
         abortController: this.abort,
         // Declaring canUseTool is what makes Claude send structured permission
         // requests instead of silently sandboxing/denying.
@@ -645,6 +650,12 @@ class ClaudeChatSession implements ChatSession {
         this.streamedThisTurn = false;
         this.toolBlocks.clear();
         this.emit({ type: "busy", busy: false });
+        break;
+      case "prompt_suggestion":
+        // Predicted next user prompt (arrives just after `result`). Surface it as
+        // a composer hint; the reducer clears it on the next prompt.
+        if (typeof msg.suggestion === "string" && msg.suggestion.trim())
+          this.emit({ type: "prompt-suggestion", suggestion: msg.suggestion });
         break;
     }
   }
