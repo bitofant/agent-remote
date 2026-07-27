@@ -17,6 +17,8 @@ import type {
   ChatAction,
   ChatEvent,
   ChatQuestion,
+  ChatUsage,
+  ChatUsageWindow,
 } from "../../shared/protocol.js";
 import type {
   ChatSession,
@@ -94,6 +96,56 @@ function parseQuestions(input: unknown): ChatQuestion[] {
         .filter((o) => typeof o.label === "string")
         .map((o) => ({ label: o.label as string, description: o.description })),
     }));
+}
+
+// Ordered rate-limit window key → label map; also the display order. Windows
+// absent from the SDK response are skipped.
+const USAGE_WINDOWS: { key: string; label: string }[] = [
+  { key: "five_hour", label: "Current session (5h)" },
+  { key: "seven_day", label: "Week — all models" },
+  { key: "seven_day_opus", label: "Week — Opus" },
+  { key: "seven_day_sonnet", label: "Week — Sonnet" },
+  { key: "seven_day_oauth_apps", label: "Week — OAuth apps" },
+];
+
+interface UsageWindowRaw {
+  utilization?: number | null;
+  resets_at?: string | null;
+}
+interface UsageResponseRaw {
+  session?: { total_cost_usd?: number };
+  subscription_type?: string | null;
+  rate_limits_available?: boolean;
+  rate_limits?: Record<string, UsageWindowRaw | null | undefined> | null;
+}
+
+// Normalize the SDK's experimental `/usage` payload into the harness-agnostic
+// ChatUsage. Only windows present in the response are surfaced; utilization is
+// clamped to 0–100. When plan rate limits don't apply (API-key / local / 3rd-
+// party) `available` is false and `windows` is empty.
+function normalizeUsage(data: unknown): ChatUsage {
+  const d = (data ?? {}) as UsageResponseRaw;
+  const available = d.rate_limits_available === true;
+  const limits = d.rate_limits ?? {};
+  const windows: ChatUsageWindow[] = available
+    ? USAGE_WINDOWS.flatMap(({ key, label }) => {
+        const w = limits[key];
+        if (!w) return [];
+        const util =
+          typeof w.utilization === "number"
+            ? Math.max(0, Math.min(100, w.utilization))
+            : null;
+        return [{ key, label, utilization: util, resetsAt: w.resets_at ?? null }];
+      })
+    : [];
+  return {
+    available,
+    subscriptionType: d.subscription_type ?? null,
+    windows,
+    sessionCostUsd:
+      typeof d.session?.total_cost_usd === "number" ? d.session.total_cost_usd : 0,
+    at: Date.now(),
+  };
 }
 
 // Claude Code adapter. Drives the Claude Agent SDK (which owns its own
@@ -476,6 +528,27 @@ class ClaudeChatSession implements ChatSession {
       case "set-mode":
         this.applyMode(action.mode as PermissionMode);
         break;
+      case "usage":
+        void this.reportUsage();
+        break;
+    }
+  }
+
+  /** Fetch the structured `/usage` data (session cost + plan rate-limit
+   * utilization windows) and emit it as a normalized `usage` event. Best-effort:
+   * any error surfaces as a notice and leaves the prior snapshot in place. */
+  private async reportUsage(): Promise<void> {
+    const q = this.q;
+    if (!q) return;
+    try {
+      const data = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      this.emit({ type: "usage", usage: normalizeUsage(data) });
+    } catch (e) {
+      this.emit({
+        type: "notice",
+        level: "error",
+        text: `Usage unavailable: ${(e as Error).message}`,
+      });
     }
   }
 

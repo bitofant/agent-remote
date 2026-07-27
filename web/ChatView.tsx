@@ -13,6 +13,7 @@ import type {
   ChatPart,
   ChatState,
   ChatUiRequest,
+  ChatUsage,
 } from "../shared/protocol";
 import { renderMarkdown, toolGlyph, toolView } from "../shared/render";
 import type { ToolBody } from "../shared/render";
@@ -534,6 +535,118 @@ function UiRequestCard({
   );
 }
 
+// Small bar-chart glyph for the usage button (matches the "charts as an icon"
+// ask). Inherits color via currentColor.
+function UsageIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="1" y="9" width="3" height="6" rx="0.5" fill="currentColor" />
+      <rect x="6.5" y="5" width="3" height="10" rx="0.5" fill="currentColor" />
+      <rect x="12" y="2" width="3" height="13" rx="0.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Format an ISO reset timestamp as a short, human "resets …" string.
+function formatReset(iso: string | null): string | null {
+  if (!iso) return null;
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return null;
+  const now = Date.now();
+  const diffMs = t.getTime() - now;
+  if (diffMs <= 0) return "resetting now";
+  const day = t.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const time = t.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const hours = diffMs / 3_600_000;
+  const rel =
+    hours < 24
+      ? `in ${hours < 1 ? `${Math.round(hours * 60)}m` : `${Math.round(hours)}h`}`
+      : `${day}, ${time}`;
+  return `resets ${rel}`;
+}
+
+// Utilization → severity class (drives the bar color: calm → warn → hot).
+function usageLevel(pct: number): string {
+  if (pct >= 90) return "hot";
+  if (pct >= 70) return "warn";
+  return "ok";
+}
+
+// The usage/limits popover: a progress bar per rate-limit window plus session
+// cost. Reads the harness-agnostic ChatUsage snapshot; degrades gracefully when
+// the snapshot is absent (loading) or plan limits don't apply (API-key/local).
+function UsagePanel({
+  usage,
+  onRefresh,
+  onClose,
+}: {
+  usage: ChatUsage | null;
+  onRefresh: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="chat-usage-panel" role="dialog" aria-label="Usage and limits">
+      <div className="chat-usage-head">
+        <span className="chat-usage-title">
+          Usage &amp; limits
+          {usage?.subscriptionType && (
+            <span className="chat-usage-plan">{usage.subscriptionType}</span>
+          )}
+        </span>
+        <span className="chat-usage-actions">
+          <button type="button" onClick={onRefresh} title="Refresh">
+            ↻
+          </button>
+          <button type="button" onClick={onClose} title="Close" aria-label="Close">
+            ×
+          </button>
+        </span>
+      </div>
+      {usage === null ? (
+        <div className="chat-usage-empty">Loading…</div>
+      ) : !usage.available ? (
+        <div className="chat-usage-empty">
+          Plan limits aren’t reported for this session.
+        </div>
+      ) : usage.windows.length === 0 ? (
+        <div className="chat-usage-empty">No limit windows reported.</div>
+      ) : (
+        <div className="chat-usage-bars">
+          {usage.windows.map((w) => {
+            const pct = w.utilization;
+            const reset = formatReset(w.resetsAt);
+            return (
+              <div className="chat-usage-row" key={w.key}>
+                <div className="chat-usage-labels">
+                  <span className="chat-usage-name">{w.label}</span>
+                  <span className="chat-usage-pct">
+                    {pct === null ? "—" : `${Math.round(pct)}%`}
+                  </span>
+                </div>
+                <div className="chat-usage-track">
+                  <div
+                    className={`chat-usage-fill ${pct === null ? "ok" : usageLevel(pct)}`}
+                    style={{ width: `${Math.max(0, Math.min(100, pct ?? 0))}%` }}
+                  />
+                </div>
+                {reset && <div className="chat-usage-reset">{reset}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {usage && usage.sessionCostUsd > 0 && (
+        <div className="chat-usage-cost">
+          Session cost: ${usage.sessionCostUsd.toFixed(2)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatView({
   client,
   sessionId,
@@ -563,6 +676,8 @@ export function ChatView({
     return initial;
   });
   const [draft, setDraft] = useState("");
+  // Usage indicator: which sessions expose `/usage`, and whether the panel is open.
+  const [usageOpen, setUsageOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // Sticky autoscroll: follow new output only while the user is at the bottom.
@@ -683,7 +798,9 @@ export function ChatView({
       className="chat-view"
       style={{ display: active ? "flex" : "none" }}
     >
-      {(state.models.length > 0 || state.modes.length > 0) && (
+      {(state.models.length > 0 ||
+        state.modes.length > 0 ||
+        state.commands.some((c) => c.name === "usage")) && (
         <div className="chat-header">
           {state.models.length > 0 && (
             <label className="chat-model">
@@ -731,6 +848,34 @@ export function ChatView({
                 ))}
               </select>
             </label>
+          )}
+          {state.commands.some((c) => c.name === "usage") && (
+            <div className="chat-usage-wrap">
+              <button
+                type="button"
+                className={`chat-usage-btn${usageOpen ? " open" : ""}`}
+                title="Usage & limits"
+                aria-label="Usage & limits"
+                aria-expanded={usageOpen}
+                onClick={() => {
+                  const next = !usageOpen;
+                  setUsageOpen(next);
+                  // Refresh on open so the numbers are current.
+                  if (next) client.chatAction(sessionId, { type: "usage" });
+                }}
+              >
+                <UsageIcon />
+              </button>
+              {usageOpen && (
+                <UsagePanel
+                  usage={state.usage}
+                  onRefresh={() =>
+                    client.chatAction(sessionId, { type: "usage" })
+                  }
+                  onClose={() => setUsageOpen(false)}
+                />
+              )}
+            </div>
           )}
         </div>
       )}

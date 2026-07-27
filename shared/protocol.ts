@@ -247,6 +247,37 @@ export interface ChatCommand {
   description?: string;
 }
 
+/** One rate-limit window's utilization, rendered as a progress bar in the
+ * usage indicator. */
+export interface ChatUsageWindow {
+  /** Stable key (e.g. "five_hour", "seven_day", "seven_day_opus"). */
+  key: string;
+  /** Human label ("5-hour", "Week — all models", "Week — Opus"). */
+  label: string;
+  /** Percent of the window used, 0–100, or null if unknown. */
+  utilization: number | null;
+  /** ISO 8601 timestamp when the window resets, or null. */
+  resetsAt: string | null;
+}
+
+/** Normalized `/usage` snapshot: plan rate-limit utilization plus session cost.
+ * Emitted by harnesses that expose it (claude); harnesses that don't never emit
+ * a `usage` event, so `ChatState.usage` stays null. `available` is false for
+ * API-key / local / 3rd-party sessions where plan limits don't apply — the UI
+ * then shows "not available" instead of bars. Harness-agnostic. */
+export interface ChatUsage {
+  /** Whether plan rate limits apply (false → no `windows`, show a notice). */
+  available: boolean;
+  /** Subscription tier ('pro' | 'max' | 'team' | 'enterprise') or null. */
+  subscriptionType: string | null;
+  /** Rate-limit windows to chart (only populated when `available`). */
+  windows: ChatUsageWindow[];
+  /** Cost accrued by the current session, USD. */
+  sessionCostUsd: number;
+  /** Capture time (ms since epoch). */
+  at: number;
+}
+
 /** Per-chat-session AI-assistant mode. Lives in `ChatState` (owned by the
  * backend, replayed on connect, synced to every client) so the SERVER can
  * auto-answer permission/question cards via the optional LLM even when no
@@ -337,6 +368,9 @@ export interface ChatState {
   currentMode: string | null;
   /** Slash commands the session exposes (empty if none/unsupported). */
   commands: ChatCommand[];
+  /** Latest `/usage` snapshot for the usage indicator, or null until fetched /
+   * for harnesses that don't report usage. */
+  usage: ChatUsage | null;
   /** Backend-owned AI-assistant mode for this session (see AssistantSettings).
    * The server auto-answers cards when `enabled`; synced to all clients. */
   assistant: AssistantSettings;
@@ -377,6 +411,8 @@ export type ChatEvent =
   | { type: "mode-changed"; current: string }
   /** Available slash commands (sent on init; may be re-sent if they change). */
   | { type: "commands"; commands: ChatCommand[] }
+  /** A refreshed `/usage` snapshot (in response to a `usage` action). */
+  | { type: "usage"; usage: ChatUsage }
   /** AI-assistant mode changed (toggle/config). Server-authoritative; folded
    * into ChatState and fanned out to every client. */
   | { type: "assistant-config"; settings: AssistantSettings }
@@ -409,6 +445,9 @@ export type ChatAction =
     }
   | { type: "set-model"; model: string }
   | { type: "set-mode"; mode: string }
+  /** Fetch a fresh `/usage` snapshot; the adapter replies with a `usage` event.
+   * No-op for harnesses that don't report usage. */
+  | { type: "usage" }
   /** Toggle/configure backend AI-assistant mode for this session. Handled by
    * the manager itself (not the adapter) — harness-agnostic. */
   | { type: "set-assistant"; settings: AssistantSettings }
