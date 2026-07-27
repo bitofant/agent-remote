@@ -29,6 +29,7 @@ export function emptyChatState(): ChatState {
     currentMode: null,
     commands: [],
     usage: null,
+    promptSuggestion: null,
     assistant: {
       enabled: false,
       canAcceptPermissions: true,
@@ -49,6 +50,8 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
       return {
         ...state,
         messages: capMessages([...state.messages, event.message]),
+        // A new prompt makes the prior turn's suggestion stale — drop it.
+        promptSuggestion: null,
       };
 
     case "busy": {
@@ -197,6 +200,9 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 
     case "usage":
       return { ...state, usage: event.usage };
+
+    case "prompt-suggestion":
+      return { ...state, promptSuggestion: event.suggestion };
 
     case "assistant-config":
       return { ...state, assistant: event.settings };

@@ -773,6 +773,21 @@ export function ChatView({
     textareaRef.current?.focus();
   };
 
+  // Prefill the composer with a predicted next prompt (the TUI's follow-up
+  // suggestion) for the user to review/edit — never auto-sent. Focuses and grows.
+  const useSuggestion = (text: string) => {
+    setDraft(text);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      const caret = text.length;
+      el.setSelectionRange(caret, caret);
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    });
+  };
+
   // Insert literal text at the composer's cursor (used by the mobile key-bar for
   // keys the soft keyboard lacks: backtick, newline). Keeps the caret after the
   // inserted text and re-grows the textarea to fit.
@@ -992,6 +1007,19 @@ export function ChatView({
             ⏎
           </button>
         </div>
+      )}
+      {/* Predicted next prompt (the TUI's follow-up hint). Only while idle with
+          an empty composer, so it never fights what the user is typing; a tap
+          prefills the composer for review (never auto-sends). */}
+      {!exited && state.promptSuggestion && !state.busy && !draft.trim() && (
+        <button
+          className="chat-suggestion"
+          title="Use this suggested prompt"
+          onClick={() => useSuggestion(state.promptSuggestion!)}
+        >
+          <span className="chat-suggestion-glyph">✎</span>
+          <span className="chat-suggestion-text">{state.promptSuggestion}</span>
+        </button>
       )}
       {!exited && (
         <div className="chat-composer">

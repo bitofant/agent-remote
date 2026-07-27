@@ -293,6 +293,30 @@ describe("applyChatEvent", () => {
     expect(second.usage?.windows[0].utilization).toBe(16);
   });
 
+  it("folds a next-prompt suggestion and clears it on the next prompt", () => {
+    // A prompt_suggestion arrives after a turn → held for the composer hint.
+    const withSuggestion = reduce([
+      { type: "prompt-suggestion", suggestion: "Add a test for that" },
+    ]);
+    expect(withSuggestion.promptSuggestion).toBe("Add a test for that");
+
+    // Sending a new prompt makes the prior suggestion stale — drop it.
+    const afterPrompt = applyChatEvent(withSuggestion, {
+      type: "user-message",
+      message: {
+        id: "u9",
+        role: "user",
+        parts: [{ type: "text", text: "different idea" }],
+        createdAt: 0,
+      },
+    });
+    expect(afterPrompt.promptSuggestion).toBeNull();
+  });
+
+  it("starts with no prompt suggestion", () => {
+    expect(emptyChatState().promptSuggestion).toBeNull();
+  });
+
   it("leaves state untouched for an unknown/newer event (deploy-skew safety)", () => {
     const before = reduce([{ type: "busy", busy: true }]);
     // Simulate a server ahead of this client emitting an event type it doesn't

@@ -1893,6 +1893,39 @@ body {
   background: var(--panel);
 }
 
+/* Next-prompt suggestion chip (the TUI's follow-up hint) above the composer.
+   A tap prefills the composer; low-key so it reads as a hint, not a message. */
+.chat-suggestion {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 8px 0;
+  padding: 8px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  text-align: left;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chat-suggestion:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.chat-suggestion-glyph {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.chat-suggestion-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Composer: in-flow at the bottom like .key-bar, so it rides above the mobile
    keyboard when the app is pinned to the visual viewport. */
 .chat-composer {
