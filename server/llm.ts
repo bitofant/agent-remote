@@ -125,6 +125,19 @@ const PERMISSION_SYSTEM = [
   "The reason is required and must be terse; it is shown when denying.",
 ].join(" ");
 
+const SUGGESTION_SYSTEM = [
+  "You predict the developer's likely NEXT message(s) to their AI coding agent,",
+  "given the conversation so far. Return 1 to 3 concise, natural follow-up",
+  "prompts the developer would plausibly send next (e.g. a logical next step, a",
+  "test, a refinement, or a review request). Write each in the developer's",
+  "voice, imperative, one sentence, no preamble or quotes. Return MORE THAN ONE",
+  "only when the options are SUBSTANTIALLY DISTINCT directions — never trivial",
+  "rewordings of the same idea; prefer a single strong suggestion over redundant",
+  "ones. If no sensible follow-up exists, return an empty array. Order best",
+  "first.",
+  'Reply with ONLY JSON: {"suggestions": ["<next prompt>", ...]}.',
+].join(" ");
+
 const QUESTIONS_SYSTEM = [
   "You answer multiple-choice questions posed by an AI coding agent on the",
   "developer's behalf, following any user instructions. Choose the single best",
@@ -167,6 +180,40 @@ async function chat(
 /** Render the outgoing prompt for the diagnostic trace shown in the UI. */
 function tracePrompt(system: string, user: string): string {
   return `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+}
+
+/** Max distinct suggestions surfaced to the composer. */
+const MAX_SUGGESTIONS = 3;
+
+/** Predict 1–3 substantially-distinct next user prompts from a rendered
+ * transcript, for the composer's suggestion chips. Best-effort: returns `[]`
+ * when the endpoint is unavailable, anything fails, or the model declines.
+ * Harnesses that emit their own suggestions (e.g. Claude) never reach here. */
+export async function suggestNextPrompt(
+  transcript: string,
+): Promise<string[]> {
+  if (!status.available || !status.model || !transcript.trim()) return [];
+  let reply: { content: string; reasoning?: string };
+  try {
+    reply = await chat(SUGGESTION_SYSTEM, transcript);
+  } catch {
+    return [];
+  }
+  const out = parseJsonObject(reply.content);
+  const raw = Array.isArray(out?.suggestions) ? out.suggestions : [];
+  const seen = new Set<string>();
+  const suggestions: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const text = item.trim();
+    // Dedupe case-insensitively so a chatty model can't emit near-identical chips.
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    suggestions.push(text);
+    if (suggestions.length >= MAX_SUGGESTIONS) break;
+  }
+  return suggestions;
 }
 
 /** Judge a pending UI request. Returns a normalized decision, or

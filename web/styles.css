@@ -1893,14 +1893,25 @@ body {
   background: var(--panel);
 }
 
-/* Next-prompt suggestion chip (the TUI's follow-up hint) above the composer.
-   A tap prefills the composer; low-key so it reads as a hint, not a message. */
+/* Next-prompt suggestion chips (the TUI's follow-up hints) above the composer.
+   0–3 chips wrap horizontally, capped at two rows (overflow clipped); each is
+   low-key so they read as hints, not messages. A tap prefills the composer with
+   the full prompt even when the chip text is truncated. */
+.chat-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 8px 0;
+  /* ~two chip rows (chip ≈ 34px + 8px row gap); a 3rd row is clipped. */
+  max-height: 76px;
+  overflow: hidden;
+}
 .chat-suggestion {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  max-width: 100%;
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin: 8px 8px 0;
   padding: 8px 12px;
   border: 1px dashed var(--border);
   border-radius: 10px;

@@ -24,6 +24,7 @@ import { listDir, readTextFile, writeTextFile } from "./files.js";
 import { authedUser, handleAuthRoute } from "./auth.js";
 import { startLlmPolling, llmStatus } from "./llm.js";
 import { attachAssistant } from "./assistant.js";
+import { attachSuggestions } from "./suggestions.js";
 import type {
   ClientMessage,
   HarnessInfo,
@@ -47,6 +48,12 @@ startLlmPolling(config.llm);
 // permission/question cards for sessions that enabled it — runs regardless of
 // whether any browser is connected. See server/assistant.ts.
 attachAssistant(manager);
+
+// Harness-agnostic next-prompt suggestions: for chat harnesses that don't emit
+// their own (pi and future ones — Claude does, so it's skipped), synthesize a
+// composer-chip suggestion from the transcript after each turn. See
+// server/suggestions.ts. Best-effort; no-op when the LLM endpoint is down.
+attachSuggestions(manager, adapters);
 
 const harnesses: HarnessInfo[] = [...adapters.values()].map((a) => ({
   id: a.id,

@@ -1008,19 +1008,29 @@ export function ChatView({
           </button>
         </div>
       )}
-      {/* Predicted next prompt (the TUI's follow-up hint). Only while idle with
-          an empty composer, so it never fights what the user is typing; a tap
-          prefills the composer for review (never auto-sends). */}
-      {!exited && state.promptSuggestion && !state.busy && !draft.trim() && (
-        <button
-          className="chat-suggestion"
-          title="Use this suggested prompt"
-          onClick={() => useSuggestion(state.promptSuggestion!)}
-        >
-          <span className="chat-suggestion-glyph">✎</span>
-          <span className="chat-suggestion-text">{state.promptSuggestion}</span>
-        </button>
-      )}
+      {/* Predicted next prompts (the TUI's follow-up hints; 0–3, substantially
+          distinct). Only while idle with an empty composer, so they never fight
+          what the user is typing; a tap prefills the composer with the FULL
+          prompt for review (never auto-sends) even when the chip is truncated.
+          Chips wrap horizontally, capped at two rows via CSS. */}
+      {!exited &&
+        state.promptSuggestions.length > 0 &&
+        !state.busy &&
+        !draft.trim() && (
+          <div className="chat-suggestions">
+            {state.promptSuggestions.map((suggestion, i) => (
+              <button
+                key={i}
+                className="chat-suggestion"
+                title={suggestion}
+                onClick={() => useSuggestion(suggestion)}
+              >
+                <span className="chat-suggestion-glyph">✎</span>
+                <span className="chat-suggestion-text">{suggestion}</span>
+              </button>
+            ))}
+          </div>
+        )}
       {!exited && (
         <div className="chat-composer">
           {/* On mobile the `/` toggle lives in the key-bar (above) so it's not

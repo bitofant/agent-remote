@@ -89,6 +89,12 @@ export interface HarnessAdapter {
    * (both fresh and resumed), and persists it (`onResumable`). Session-based
    * chat adapters (ChatSession) report their own key instead and ignore this. */
   readonly resumable?: boolean;
+  /** Optional: this harness already emits its own predicted next-prompt
+   * suggestions (a `prompt-suggestion` ChatEvent), e.g. Claude's CLI follow-up
+   * hint. The harness-agnostic suggestion generator (server/suggestions.ts)
+   * skips such harnesses so it never double-generates; harnesses without native
+   * suggestions get one synthesized from the transcript instead. */
+  readonly nativePromptSuggestions?: boolean;
   /** Build the CLI invocation for a new session. */
   invocation(opts: SessionOptions): HarnessInvocation;
   /** Optional: create a parser that extracts session events from this harness's
