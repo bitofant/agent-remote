@@ -394,6 +394,15 @@ export class SessionManager {
       this.applyChat(session, { type: "assistant-decision", decision });
   }
 
+  /** Surface predicted next-prompt suggestions (composer chips) for a chat
+   * session. Used by the harness-agnostic suggestion generator for harnesses
+   * without native suggestions; no-op for non-chat/absent sessions. */
+  postPromptSuggestions(sessionId: string, suggestions: string[]): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.chat)
+      this.applyChat(session, { type: "prompt-suggestion", suggestions });
+  }
+
   /** Record an AI-assistant deliberation (prompt/thoughts/response) for a card,
    * surfaced in the transcript as a collapsible AI-mode bubble. Used by the
    * backend decider whenever the LLM was queried; no-op for non-chat sessions. */

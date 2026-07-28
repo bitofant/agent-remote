@@ -164,6 +164,9 @@ export function createClaudeAdapter(
   return {
     id: overrides?.id ?? "claude",
     name: overrides?.name ?? "Claude Code",
+    // The CLI emits its own `prompt_suggestion` (see promptSuggestions:true in
+    // ClaudeChatSession) → the generic suggestion generator skips this harness.
+    nativePromptSuggestions: true,
     // Unused for the chat path (SDK spawns its own executable) but interface-required.
     invocation(_opts: SessionOptions): { command: string; args: string[] } {
       return { command: cfg.command, args: [] };
@@ -654,8 +657,13 @@ class ClaudeChatSession implements ChatSession {
       case "prompt_suggestion":
         // Predicted next user prompt (arrives just after `result`). Surface it as
         // a composer hint; the reducer clears it on the next prompt.
+        // Claude's CLI emits a single suggestion; the schema is a list (the
+        // synthesized generator may offer several) so wrap it as one.
         if (typeof msg.suggestion === "string" && msg.suggestion.trim())
-          this.emit({ type: "prompt-suggestion", suggestion: msg.suggestion });
+          this.emit({
+            type: "prompt-suggestion",
+            suggestions: [msg.suggestion.trim()],
+          });
         break;
     }
   }

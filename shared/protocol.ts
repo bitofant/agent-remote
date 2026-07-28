@@ -371,10 +371,12 @@ export interface ChatState {
   /** Latest `/usage` snapshot for the usage indicator, or null until fetched /
    * for harnesses that don't report usage. */
   usage: ChatUsage | null;
-  /** Predicted next user prompt (the follow-up the TUI suggests), or null. Set
-   * by a `prompt-suggestion` event after a turn; cleared on the next prompt.
-   * Empty for harnesses that don't report one. */
-  promptSuggestion: string | null;
+  /** Predicted next user prompts (the follow-ups the TUI suggests), 0–3 and
+   * substantially distinct. Set by a `prompt-suggestion` event after a turn;
+   * cleared on the next prompt. Empty for harnesses that report none. Native
+   * harnesses (Claude) contribute a single one; the synthesized generator may
+   * offer several. */
+  promptSuggestions: string[];
   /** Backend-owned AI-assistant mode for this session (see AssistantSettings).
    * The server auto-answers cards when `enabled`; synced to all clients. */
   assistant: AssistantSettings;
@@ -417,8 +419,9 @@ export type ChatEvent =
   | { type: "commands"; commands: ChatCommand[] }
   /** A refreshed `/usage` snapshot (in response to a `usage` action). */
   | { type: "usage"; usage: ChatUsage }
-  /** Predicted next user prompt for the composer hint (emitted after a turn). */
-  | { type: "prompt-suggestion"; suggestion: string }
+  /** Predicted next user prompts for the composer hints (emitted after a turn;
+   * 0–3, substantially distinct). Replaces any prior suggestions. */
+  | { type: "prompt-suggestion"; suggestions: string[] }
   /** AI-assistant mode changed (toggle/config). Server-authoritative; folded
    * into ChatState and fanned out to every client. */
   | { type: "assistant-config"; settings: AssistantSettings }
