@@ -353,6 +353,15 @@ export function renderPart(part: ChatPart): RenderedPart {
               `<details class="chat-thinking"><summary>Thinking…</summary>` +
               `<div>${escapeHtml(part.text)}</div></details>`,
           };
+    case "image":
+      return {
+        type: "image",
+        component: "ImagePart",
+        className: "chat-image",
+        html:
+          `<img class="chat-image" src="${escapeHtml(part.url)}"` +
+          ` alt="${escapeHtml(part.name ?? "image")}" loading="lazy" />`,
+      };
     case "tool": {
       const glyph = toolGlyph(part.status);
       const view = toolView(part);
@@ -388,14 +397,20 @@ export function renderMessage(message: ChatMessage): RenderedMessage {
     const text = message.parts
       .map((p) => (p.type === "text" ? p.text : ""))
       .join("");
+    const images = message.parts.filter(
+      (p): p is Extract<ChatPart, { type: "image" }> => p.type === "image",
+    );
+    const textHtml = text ? escapeHtml(text) : "";
+    const imageHtml = images.map((p) => renderPart(p).html).join("");
+    const html = textHtml + imageHtml;
     return {
       id: message.id,
       role: "user",
       bubbleClassName: "chat-bubble user",
       parts: [
-        { type: "text", component: "Bubble", className: "chat-bubble user", html: escapeHtml(text) },
+        { type: "text", component: "Bubble", className: "chat-bubble user", html },
       ],
-      html: escapeHtml(text),
+      html,
     };
   }
   const parts = message.parts.map(renderPart);

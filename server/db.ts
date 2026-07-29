@@ -83,6 +83,20 @@ db.exec(
 db.exec(
   "CREATE INDEX IF NOT EXISTS chat_render_log_updated ON chat_render_log(updated_at)",
 );
+// User-uploaded images (attached to chat prompts). Bytes live on disk under
+// data/uploads/; this table is the ownership record so a stored image can only
+// be served/used by the user who uploaded it. Pruned probabilistically.
+db.exec(
+  `CREATE TABLE IF NOT EXISTS uploads (
+     id TEXT PRIMARY KEY,
+     owner TEXT NOT NULL,
+     media_type TEXT NOT NULL,
+     name TEXT,
+     bytes INTEGER NOT NULL,
+     created_at INTEGER NOT NULL
+   )`,
+);
+db.exec("CREATE INDEX IF NOT EXISTS uploads_created ON uploads(created_at)");
 
 const listStmt = db.prepare(
   "SELECT path, last_used_at AS lastUsedAt FROM folders ORDER BY last_used_at DESC",
@@ -373,6 +387,66 @@ export function getAuthSession(token: string): string | undefined {
 
 export function deleteAuthSession(token: string): void {
   deleteAuthSessionStmt.run(token);
+}
+
+// --- uploads (image attachments) -------------------------------------------
+
+export interface UploadRow {
+  id: string;
+  owner: string;
+  mediaType: string;
+  name: string | null;
+  bytes: number;
+  createdAt: number;
+}
+
+// Keep at most this many upload rows; pruned probabilistically on insert. The
+// on-disk bytes are cleaned up by uploads.ts against this table.
+const UPLOAD_RETENTION = 500;
+const insertUploadStmt = db.prepare(
+  `INSERT INTO uploads (id, owner, media_type, name, bytes, created_at)
+   VALUES (@id, @owner, @mediaType, @name, @bytes, @createdAt)`,
+);
+const getUploadStmt = db.prepare(
+  `SELECT id, owner, media_type AS mediaType, name, bytes, created_at AS createdAt
+   FROM uploads WHERE id = ?`,
+);
+const staleUploadIdsStmt = db.prepare(
+  `SELECT id FROM uploads
+   WHERE id NOT IN (SELECT id FROM uploads ORDER BY created_at DESC LIMIT ?)`,
+);
+const deleteUploadStmt = db.prepare("DELETE FROM uploads WHERE id = ?");
+
+export function insertUpload(row: {
+  id: string;
+  owner: string;
+  mediaType: string;
+  name?: string | null;
+  bytes: number;
+  createdAt?: number;
+}): void {
+  insertUploadStmt.run({
+    ...row,
+    name: row.name ?? null,
+    createdAt: row.createdAt ?? Date.now(),
+  });
+}
+
+export function getUpload(id: string): UploadRow | undefined {
+  return getUploadStmt.get(id) as UploadRow | undefined;
+}
+
+/** Delete a single upload row (paired with removing its file). */
+export function deleteUpload(id: string): void {
+  deleteUploadStmt.run(id);
+}
+
+/** Ids of rows beyond the retention cap, so the caller can delete their files
+ * then their rows. Returns nothing when under the cap. */
+export function staleUploadIds(retention = UPLOAD_RETENTION): string[] {
+  return (staleUploadIdsStmt.all(retention) as { id: string }[]).map(
+    (r) => r.id,
+  );
 }
 
 // --- shutdown --------------------------------------------------------------

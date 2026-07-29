@@ -1335,6 +1335,30 @@ body {
   border-style: dashed;
 }
 
+/* Attached images inside a user bubble (and pending-attachment thumbnails). */
+.chat-bubble-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.chat-bubble-images:first-child {
+  margin-top: 0;
+}
+.chat-image-link {
+  display: inline-flex;
+  line-height: 0;
+}
+.chat-image {
+  max-width: 220px;
+  max-height: 220px;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
 .chat-bubble.assistant {
   align-self: flex-start;
   background: var(--panel);
@@ -1987,6 +2011,101 @@ body {
 .chat-stop {
   background: #e5534b;
   color: #fff;
+}
+
+/* Composer image-attach button — an icon button like .chat-slash (overrides the
+   generic .chat-composer button padding/weight). */
+.chat-attach {
+  flex-shrink: 0;
+  align-self: flex-end;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 18px;
+  font-weight: 400;
+}
+.chat-composer.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+/* Pending-attachment thumbnails, shown above the composer until sent. */
+.chat-attachments {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.chat-attachment {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.chat-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.chat-attachment[data-status="uploading"] img {
+  opacity: 0.5;
+}
+.chat-attachment[data-status="error"] {
+  border-color: #e5534b;
+}
+.chat-attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-attachment-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.chat-attachment-error {
+  position: absolute;
+  bottom: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e5534b;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 16px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* --- chat header: model switcher ----------------------------------------- */

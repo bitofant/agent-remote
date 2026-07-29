@@ -16,10 +16,12 @@ import type { HarnessConfig } from "../config.js";
 import type {
   ChatAction,
   ChatEvent,
+  ChatImageRef,
   ChatQuestion,
   ChatUsage,
   ChatUsageWindow,
 } from "../../shared/protocol.js";
+import { promptParts } from "../../shared/chat.js";
 import type {
   ChatSession,
   ChatSessionHandlers,
@@ -476,7 +478,7 @@ class ClaudeChatSession implements ChatSession {
       case "prompt":
         this.pushInput?.({
           type: "user",
-          message: { role: "user", content: action.text },
+          message: { role: "user", content: buildUserContent(action.text, action.images) },
           parent_tool_use_id: null,
         });
         this.emit({
@@ -484,7 +486,7 @@ class ClaudeChatSession implements ChatSession {
           message: {
             id: randomUUID(),
             role: "user",
-            parts: [{ type: "text", text: action.text }],
+            parts: promptParts(action.text, action.images),
             createdAt: Date.now(),
           },
         });
@@ -810,6 +812,33 @@ class ClaudeChatSession implements ChatSession {
       });
     }
   }
+}
+
+type UserContent = SDKUserMessage["message"]["content"];
+
+/** Build the SDK user-message content for a prompt: a bare string when there
+ * are no images, otherwise an array of text + base64 image content blocks (the
+ * Anthropic content-block shape the Claude Agent SDK accepts). Images without
+ * resolved `data` (server never loaded them) are skipped. */
+export function buildUserContent(
+  text: string,
+  images?: ChatImageRef[],
+): UserContent {
+  const withData = (images ?? []).filter((i) => i.data);
+  if (withData.length === 0) return text;
+  const blocks: Exclude<UserContent, string> = [];
+  if (text) blocks.push({ type: "text", text });
+  for (const img of withData) {
+    blocks.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: img.mediaType as "image/png",
+        data: img.data as string,
+      },
+    });
+  }
+  return blocks;
 }
 
 /** Pushable async iterator: the SDK consumes `stream` as prompt input while we

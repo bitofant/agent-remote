@@ -183,7 +183,29 @@ export type ChatPart =
       /** Cumulative textual output so far (replaced on each update). */
       output: string;
       status: "pending" | "running" | "done" | "error";
+    }
+  /** An image the user attached to a prompt. Carries only a lightweight
+   * reference (never base64) so ChatState snapshots stay small; `url` points at
+   * the auth-gated `GET /api/upload/<id>` serve route. */
+  | {
+      type: "image";
+      id: string;
+      mediaType: string;
+      name?: string;
+      url: string;
     };
+
+/** A reference to a user-uploaded image, produced by `POST /api/upload`. The
+ * client sends `{ id, mediaType, name }` on a prompt; the server injects `data`
+ * (base64) at send time from the upload store — `data` is server-only and is
+ * never sent by the client, persisted, or broadcast. */
+export interface ChatImageRef {
+  id: string;
+  mediaType: string;
+  name?: string;
+  /** Base64 image bytes. Server-populated at send time; never client-sent. */
+  data?: string;
+}
 
 export interface ChatMessage {
   id: string;
@@ -437,7 +459,7 @@ export type ChatEvent =
 
 /** Actions the browser can take on a chat session. */
 export type ChatAction =
-  | { type: "prompt"; text: string }
+  | { type: "prompt"; text: string; images?: ChatImageRef[] }
   | { type: "abort" }
   | {
       type: "ui-response";

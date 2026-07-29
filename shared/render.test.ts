@@ -159,6 +159,20 @@ describe("renderPart", () => {
     expect(part.component).toBe("ToolPart");
     expect(part.html).toContain('data-status="done"');
   });
+
+  it("renders an image part as an <img> with escaped url and alt", () => {
+    const part = renderPart({
+      type: "image",
+      id: "abc",
+      mediaType: "image/png",
+      name: 'a"b<c',
+      url: "/api/upload/abc",
+    });
+    expect(part.component).toBe("ImagePart");
+    expect(part.html).toContain('src="/api/upload/abc"');
+    expect(part.html).toContain('alt="a&quot;b&lt;c"');
+    expect(part.html).not.toContain('alt="a"b<c"');
+  });
 });
 
 describe("renderMessage", () => {
@@ -172,6 +186,27 @@ describe("renderMessage", () => {
     const rendered = renderMessage(msg);
     expect(rendered.bubbleClassName).toBe("chat-bubble user");
     expect(rendered.html).toBe("a &lt;b&gt; &amp; **c**");
+  });
+
+  it("renders attached images in a user bubble alongside text", () => {
+    const msg: ChatMessage = {
+      id: "u2",
+      role: "user",
+      parts: [
+        { type: "text", text: "look" },
+        {
+          type: "image",
+          id: "img1",
+          mediaType: "image/png",
+          url: "/api/upload/img1",
+        },
+      ],
+      createdAt: 0,
+    };
+    const rendered = renderMessage(msg);
+    expect(rendered.html).toContain("look");
+    expect(rendered.html).toContain('<img class="chat-image"');
+    expect(rendered.html).toContain('src="/api/upload/img1"');
   });
 
   it("concatenates each assistant part's html", () => {

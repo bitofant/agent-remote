@@ -9,6 +9,7 @@ import {
 import type {
   AssistantDecision,
   AssistantTrace,
+  ChatImageRef,
   ChatMessage,
   ChatPart,
   ChatState,
@@ -95,7 +96,34 @@ function Bubble({ message, streaming }: { message: ChatMessage; streaming?: bool
     const text = message.parts
       .map((p) => (p.type === "text" ? p.text : ""))
       .join("");
-    return <div className="chat-bubble user">{text}</div>;
+    const images = message.parts.filter((p) => p.type === "image");
+    return (
+      <div className="chat-bubble user">
+        {text}
+        {images.length > 0 && (
+          <div className="chat-bubble-images">
+            {images.map((p, i) =>
+              p.type === "image" ? (
+                <a
+                  key={i}
+                  href={p.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="chat-image-link"
+                >
+                  <img
+                    className="chat-image"
+                    src={p.url}
+                    alt={p.name ?? "image"}
+                    loading="lazy"
+                  />
+                </a>
+              ) : null,
+            )}
+          </div>
+        )}
+      </div>
+    );
   }
   return (
     <div className={`chat-bubble assistant${streaming ? " streaming" : ""}`}>
@@ -197,6 +225,19 @@ function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
       )}
     </div>
   );
+}
+
+// A pending image attachment in the composer: uploaded independently of the
+// prompt, tracked so its thumbnail can show progress/errors. Only `ready`
+// attachments (with a resolved server ref) are sent with the prompt.
+interface Attachment {
+  localId: string;
+  name: string;
+  /** Object URL for the local preview thumbnail. */
+  previewUrl: string;
+  status: "uploading" | "ready" | "error";
+  ref?: ChatImageRef;
+  error?: string;
 }
 
 // Synthetic option offered on every `questions` prompt: pick it to answer with
@@ -676,10 +717,56 @@ export function ChatView({
     return initial;
   });
   const [draft, setDraft] = useState("");
+  // Pending image attachments for the next prompt. Each uploads independently;
+  // only `ready` ones are sent.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   // Usage indicator: which sessions expose `/usage`, and whether the panel is open.
   const [usageOpen, setUsageOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Upload each picked/pasted/dropped image file, tracking per-item status so
+  // thumbnails can show progress and errors without blocking the composer.
+  const addFiles = useCallback(
+    (files: File[]) => {
+      const images = files.filter((f) => f.type.startsWith("image/"));
+      for (const file of images) {
+        const localId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const previewUrl = URL.createObjectURL(file);
+        setAttachments((a) => [
+          ...a,
+          { localId, name: file.name, previewUrl, status: "uploading" },
+        ]);
+        client.uploadImage(file).then(
+          (ref) =>
+            setAttachments((a) =>
+              a.map((it) =>
+                it.localId === localId ? { ...it, status: "ready", ref } : it,
+              ),
+            ),
+          (err: unknown) =>
+            setAttachments((a) =>
+              a.map((it) =>
+                it.localId === localId
+                  ? { ...it, status: "error", error: (err as Error).message }
+                  : it,
+              ),
+            ),
+        );
+      }
+    },
+    [client],
+  );
+
+  const removeAttachment = useCallback((localId: string) => {
+    setAttachments((a) => {
+      const it = a.find((x) => x.localId === localId);
+      if (it) URL.revokeObjectURL(it.previewUrl);
+      return a.filter((x) => x.localId !== localId);
+    });
+  }, []);
   // Sticky autoscroll: follow new output only while the user is at the bottom.
   const nearBottomRef = useRef(true);
 
@@ -713,15 +800,32 @@ export function ChatView({
       el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
 
+  const uploading = attachments.some((a) => a.status === "uploading");
+  const readyImages = attachments
+    .filter((a): a is Attachment & { ref: ChatImageRef } => a.status === "ready")
+    .map((a) => a.ref);
+  const canSend = (draft.trim() !== "" || readyImages.length > 0) && !uploading;
+
   const send = useCallback(() => {
     const text = draft.trim();
-    if (!text) return;
-    client.chatAction(sessionId, { type: "prompt", text });
+    const images = attachments
+      .filter((a): a is Attachment & { ref: ChatImageRef } => a.status === "ready")
+      .map((a) => a.ref);
+    if (!text && images.length === 0) return;
+    // Don't send while an image is still uploading.
+    if (attachments.some((a) => a.status === "uploading")) return;
+    client.chatAction(sessionId, {
+      type: "prompt",
+      text,
+      images: images.length ? images : undefined,
+    });
     setDraft("");
+    for (const a of attachments) URL.revokeObjectURL(a.previewUrl);
+    setAttachments([]);
     nearBottomRef.current = true;
     const ta = textareaRef.current;
     if (ta) ta.style.height = "auto";
-  }, [client, sessionId, draft]);
+  }, [client, sessionId, draft, attachments]);
 
   // Auto-grow the composer with its content (up to the CSS max-height).
   const onDraftChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1006,6 +1110,15 @@ export function ChatView({
           >
             ⏎
           </button>
+          <button
+            className="key-button"
+            aria-label="Attach image"
+            title="Attach image"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            🖼
+          </button>
         </div>
       )}
       {/* Predicted next prompts (the TUI's follow-up hints; 0–3, substantially
@@ -1031,8 +1144,63 @@ export function ChatView({
             ))}
           </div>
         )}
+      {!exited && attachments.length > 0 && (
+        <div className="chat-attachments">
+          {attachments.map((a) => (
+            <div
+              key={a.localId}
+              className="chat-attachment"
+              data-status={a.status}
+              title={a.error ?? a.name}
+            >
+              <img src={a.previewUrl} alt={a.name} />
+              {a.status === "uploading" && (
+                <span className="chat-attachment-spinner" />
+              )}
+              {a.status === "error" && (
+                <span className="chat-attachment-error">!</span>
+              )}
+              <button
+                className="chat-attachment-remove"
+                aria-label="Remove image"
+                onClick={() => removeAttachment(a.localId)}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {!exited && (
-        <div className="chat-composer">
+        <div
+          className={`chat-composer${dragOver ? " drag-over" : ""}`}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes("Files")) {
+              e.preventDefault();
+              setDragOver(true);
+            }
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            const files = Array.from(e.dataTransfer.files);
+            if (files.some((f) => f.type.startsWith("image/"))) {
+              e.preventDefault();
+              addFiles(files);
+            }
+            setDragOver(false);
+          }}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              addFiles(Array.from(e.target.files ?? []));
+              e.target.value = "";
+            }}
+          />
           {/* On mobile the `/` toggle lives in the key-bar (above) so it's not
               duplicated here while the keyboard is up. */}
           {!keyboardOpen && (state.commands.length > 0 || canResume) && (
@@ -1044,12 +1212,27 @@ export function ChatView({
               /
             </button>
           )}
+          <button
+            className="chat-attach"
+            title="Attach image"
+            aria-label="Attach image"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            🖼
+          </button>
           <textarea
             ref={textareaRef}
             rows={1}
             value={draft}
             placeholder={state.busy ? "Steer the agent…" : "Prompt…"}
             onChange={onDraftChange}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files);
+              if (files.some((f) => f.type.startsWith("image/"))) {
+                e.preventDefault();
+                addFiles(files);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -1070,7 +1253,7 @@ export function ChatView({
           )}
           <button
             className="chat-send"
-            disabled={!draft.trim()}
+            disabled={!canSend}
             onClick={send}
           >
             {state.busy ? "Steer" : "Send"}

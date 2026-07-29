@@ -4,10 +4,33 @@
 
 import type {
   ChatEvent,
+  ChatImageRef,
   ChatMessage,
   ChatPart,
   ChatState,
 } from "./protocol.js";
+
+/** The parts of a user prompt bubble: the text (if any) followed by one image
+ * part per attached image. Image parts carry only a lightweight reference
+ * (never base64) plus the auth-gated serve URL. Shared by the harness adapters
+ * (echoing the just-sent prompt) so the transcript shows what was sent. */
+export function promptParts(text: string, images?: ChatImageRef[]): ChatPart[] {
+  const parts: ChatPart[] = [];
+  if (text) parts.push({ type: "text", text });
+  for (const img of images ?? []) {
+    parts.push({
+      type: "image",
+      id: img.id,
+      mediaType: img.mediaType,
+      name: img.name,
+      url: `/api/upload/${img.id}`,
+    });
+  }
+  // A prompt with neither text nor images shouldn't happen, but keep a text
+  // part so the bubble is never empty.
+  if (parts.length === 0) parts.push({ type: "text", text });
+  return parts;
+}
 
 /** Bounds to keep memory in check on long-running sessions. */
 const MAX_MESSAGES = 200;

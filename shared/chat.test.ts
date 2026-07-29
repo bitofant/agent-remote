@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyChatEvent, emptyChatState } from "./chat.js";
+import { applyChatEvent, emptyChatState, promptParts } from "./chat.js";
 import type { ChatEvent, ChatState } from "./protocol.js";
 
 // Fold a list of events over an initial state — how the reducer is used for real
@@ -341,5 +341,64 @@ describe("applyChatEvent", () => {
       { type: "tool-call", toolId: "t1", name: "X" },
     ]);
     expect(after).toEqual(before);
+  });
+});
+
+describe("promptParts", () => {
+  it("returns a single text part when there are no images", () => {
+    expect(promptParts("hi")).toEqual([{ type: "text", text: "hi" }]);
+  });
+
+  it("appends an image part per attached image with the serve url", () => {
+    const parts = promptParts("look", [
+      { id: "a", mediaType: "image/png", name: "shot.png" },
+    ]);
+    expect(parts).toEqual([
+      { type: "text", text: "look" },
+      {
+        type: "image",
+        id: "a",
+        mediaType: "image/png",
+        name: "shot.png",
+        url: "/api/upload/a",
+      },
+    ]);
+  });
+
+  it("omits the text part for an image-only prompt", () => {
+    const parts = promptParts("", [{ id: "b", mediaType: "image/jpeg" }]);
+    expect(parts).toEqual([
+      {
+        type: "image",
+        id: "b",
+        mediaType: "image/jpeg",
+        name: undefined,
+        url: "/api/upload/b",
+      },
+    ]);
+  });
+});
+
+describe("applyChatEvent user image message", () => {
+  it("stores image parts on a user message verbatim", () => {
+    const state = reduce([
+      {
+        type: "user-message",
+        message: {
+          id: "u1",
+          role: "user",
+          parts: promptParts("hi", [{ id: "a", mediaType: "image/png" }]),
+          createdAt: 0,
+        },
+      },
+    ]);
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].parts).toContainEqual({
+      type: "image",
+      id: "a",
+      mediaType: "image/png",
+      name: undefined,
+      url: "/api/upload/a",
+    });
   });
 });
