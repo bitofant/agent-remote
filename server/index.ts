@@ -21,11 +21,18 @@ import {
 import { recordChatRenders, forgetChatRenders } from "./chatLog.js";
 import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
 import { listDir, readTextFile, writeTextFile } from "./files.js";
+import {
+  saveUpload,
+  loadUpload,
+  isAllowedImageType,
+  MAX_IMAGE_BYTES,
+} from "./uploads.js";
 import { authedUser, handleAuthRoute } from "./auth.js";
 import { startLlmPolling, llmStatus } from "./llm.js";
 import { attachAssistant } from "./assistant.js";
 import { attachSuggestions } from "./suggestions.js";
 import type {
+  ChatImageRef,
   ClientMessage,
   HarnessInfo,
   ServerMessage,
@@ -266,6 +273,45 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
       return;
     }
   }
+  // Image uploads: store a user's attached image (POST) and serve it back
+  // (GET). Both auth-gated; the serve route additionally enforces per-user
+  // ownership so a guessed id can't leak another user's image.
+  if (pathname === "/api/upload" && req.method === "POST") {
+    const user = authedUser(req, config);
+    if (!user) return sendUnauthorized(res);
+    const mediaType = (req.headers["content-type"] ?? "").split(";")[0].trim();
+    if (!isAllowedImageType(mediaType))
+      return sendJsonError(res, 400, "Unsupported image type.");
+    const name = new URL(url, "http://x").searchParams.get("name") ?? undefined;
+    void readBinaryBody(req, MAX_IMAGE_BYTES)
+      .then((buf) => saveUpload(user, mediaType, name, buf))
+      .then(
+        (id) => sendJson(res, { id, mediaType, name }),
+        (err: unknown) => sendJsonError(res, 400, (err as Error).message),
+      );
+    return;
+  }
+  if (pathname.startsWith("/api/upload/") && req.method === "GET") {
+    const user = authedUser(req, config);
+    if (!user) return sendUnauthorized(res);
+    const id = decodeURIComponent(pathname.slice("/api/upload/".length));
+    void loadUpload(user, id).then(
+      (img) => {
+        if (!img) {
+          res.statusCode = 404;
+          return res.end("Not found");
+        }
+        res.setHeader("content-type", img.mediaType);
+        res.setHeader("cache-control", "private, max-age=31536000, immutable");
+        res.end(img.buf);
+      },
+      () => {
+        res.statusCode = 404;
+        res.end("Not found");
+      },
+    );
+    return;
+  }
   if (viteMiddlewares) {
     viteMiddlewares(req, res, () => {
       res.statusCode = 404;
@@ -307,6 +353,49 @@ function readTextBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+// Read a raw binary request body (POST /api/upload), capped so one upload can't
+// exhaust memory. Unlike readTextBody it never coerces to a string (which would
+// corrupt image bytes).
+function readBinaryBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error("Image is too large."));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+// Resolve a prompt's image refs to base64, loading only images owned by `user`
+// (ownership enforced in loadUpload). Unknown/foreign ids are silently dropped
+// so a prompt can never smuggle another user's image to the agent. The returned
+// refs keep id/mediaType/name (for the transcript bubble) and gain `data`.
+async function resolvePromptImages(
+  user: string,
+  refs: ChatImageRef[],
+): Promise<ChatImageRef[]> {
+  const out: ChatImageRef[] = [];
+  for (const ref of refs) {
+    const img = await loadUpload(user, ref.id);
+    if (!img) continue;
+    out.push({
+      id: ref.id,
+      mediaType: img.mediaType,
+      name: img.name ?? ref.name,
+      data: img.buf.toString("base64"),
+    });
+  }
+  return out;
+}
+
 // --- WebSocket (/ws) -------------------------------------------------------
 // noServer + manual upgrade routing so /ws coexists with Vite's HMR socket.
 const wss = new WebSocketServer({ noServer: true });
@@ -314,12 +403,13 @@ server.on("upgrade", (req, socket, head) => {
   if (req.url === "/ws") {
     // Security boundary: no PTY reachable without a valid session (cookies ride
     // the same-origin upgrade request).
-    if (!authedUser(req, config)) {
+    const user = authedUser(req, config);
+    if (!user) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, user));
   }
   // Other upgrades (Vite HMR) handled by Vite's own upgrade listener.
 });
@@ -351,7 +441,7 @@ function markFolderActive(folder: string): void {
 const stripReports = (s: string): string =>
   s.replace(/\x1b\[[?>=]?[0-9;]*[cn]/g, "");
 
-wss.on("connection", (ws: WebSocket) => {
+wss.on("connection", (ws: WebSocket, user: string) => {
   const send = (msg: ServerMessage) => ws.send(JSON.stringify(msg));
   connections.add(ws);
 
@@ -410,9 +500,19 @@ wss.on("connection", (ws: WebSocket) => {
           manager.resize(msg.sessionId, msg.cols, msg.rows);
           break;
         case "chatAction": {
-          manager.chatAction(msg.sessionId, msg.action);
+          const { sessionId, action } = msg;
+          // Resolve any attached image refs to base64 here (harness-agnostic),
+          // loading only images owned by this connection's user. Foreign/unknown
+          // ids are dropped. Then dispatch to the manager/adapter.
+          if (action.type === "prompt" && action.images?.length) {
+            void resolvePromptImages(user, action.images).then((images) => {
+              manager.chatAction(sessionId, { ...action, images });
+            });
+          } else {
+            manager.chatAction(sessionId, action);
+          }
           // Prompting bumps its folder like terminal input.
-          const folder = manager.sessionFolder(msg.sessionId);
+          const folder = manager.sessionFolder(sessionId);
           if (folder) markFolderActive(folder);
           break;
         }

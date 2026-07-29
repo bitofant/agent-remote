@@ -458,6 +458,8 @@ function lastPromptLine(chat: ChatState): string {
       .trim()
       .split("\n", 1)[0];
     if (text) return text.length > 60 ? `${text.slice(0, 60)}…` : text;
+    // An image-only prompt (no text) still deserves a legible subtitle.
+    if (msg.parts.some((p) => p.type === "image")) return "🖼 image";
   }
   return "working";
 }

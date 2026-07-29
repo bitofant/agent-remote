@@ -6,8 +6,10 @@ import type { HarnessConfig } from "../config.js";
 import type {
   ChatAction,
   ChatEvent,
+  ChatImageRef,
   ChatUiRequest,
 } from "../../shared/protocol.js";
+import { promptParts } from "../../shared/chat.js";
 import type {
   ChatTranslator,
   HarnessAdapter,
@@ -134,10 +136,14 @@ class PiRpcTranslator implements ChatTranslator {
   encode(action: ChatAction): { data: string; events: ChatEvent[] } {
     switch (action.type) {
       case "prompt": {
-        const cmd = this.busy
+        // pi's RPC `prompt`/`steer` accept an optional `images` array of
+        // ImageContent blocks (base64). Include only images the server resolved.
+        const images = piImages(action.images);
+        const base = this.busy
           ? // Queue behind the current run; delivered between turns.
             { type: "prompt", message: action.text, streamingBehavior: "steer" }
           : { type: "prompt", message: action.text };
+        const cmd = images.length ? { ...base, images } : base;
         return {
           data: `${JSON.stringify(cmd)}\n`,
           // Echo the prompt as a user bubble immediately: pi does not stream
@@ -148,7 +154,7 @@ class PiRpcTranslator implements ChatTranslator {
               message: {
                 id: randomUUID(),
                 role: "user",
-                parts: [{ type: "text", text: action.text }],
+                parts: promptParts(action.text, action.images),
                 createdAt: Date.now(),
               },
             },
@@ -447,6 +453,17 @@ function findSessionFile(cwd: string, sessionId: string): string | undefined {
 }
 
 /** Parse a pi session file into normalized chat events, folding whole stored
+/** Map resolved image refs to pi's ImageContent wire format for a prompt/steer
+ * command. Images without server-resolved `data` are skipped. */
+export function piImages(
+  images?: ChatImageRef[],
+): { type: "image"; data: string; mimeType: string }[] {
+  return (images ?? [])
+    .filter((i) => i.data)
+    .map((i) => ({ type: "image", data: i.data as string, mimeType: i.mediaType }));
+}
+
+/** Replay a pi session's on-disk history as ChatEvents. Re-runs stored
  * messages through the same event vocabulary the live stream produces so
  * replayed bubbles match freshly-streamed ones. */
 function readPiSessionHistory(cwd: string, sessionId: string): ChatEvent[] {

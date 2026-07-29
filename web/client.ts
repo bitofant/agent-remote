@@ -1,5 +1,6 @@
 import type {
   ChatAction,
+  ChatImageRef,
   ChatState,
   ClientMessage,
   FolderInfo,
@@ -199,6 +200,26 @@ export class Client {
   }
   chatAction(sessionId: string, action: ChatAction): void {
     this.send({ type: "chatAction", sessionId, action });
+  }
+  /** Upload an image over REST (cookie-authed). Returns the reference to attach
+   * to a prompt; the raw bytes stay server-side and are streamed to the agent
+   * at send time. */
+  async uploadImage(file: File): Promise<ChatImageRef> {
+    const qs = file.name ? `?name=${encodeURIComponent(file.name)}` : "";
+    const res = await fetch(`/api/upload${qs}`, {
+      method: "POST",
+      headers: { "content-type": file.type },
+      body: file,
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      const msg = await res
+        .json()
+        .then((b) => (b as { message?: string }).message)
+        .catch(() => undefined);
+      throw new Error(msg ?? `Upload failed (${res.status})`);
+    }
+    return (await res.json()) as ChatImageRef;
   }
   remove(sessionId: string): void {
     this.send({ type: "remove", sessionId });
