@@ -793,6 +793,11 @@ export function ChatView({
     if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [state, active]);
 
+  // Type immediately on open/switch.
+  useEffect(() => {
+    if (active && !exited) textareaRef.current?.focus();
+  }, [active, exited]);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -808,6 +813,12 @@ export function ChatView({
 
   const send = useCallback(() => {
     const text = draft.trim();
+    // `/resume` is client-only (no harness command): open the picker instead.
+    if (text === "/resume" && canResume) {
+      setDraft("");
+      onResume();
+      return;
+    }
     const images = attachments
       .filter((a): a is Attachment & { ref: ChatImageRef } => a.status === "ready")
       .map((a) => a.ref);
@@ -825,11 +836,12 @@ export function ChatView({
     nearBottomRef.current = true;
     const ta = textareaRef.current;
     if (ta) ta.style.height = "auto";
-  }, [client, sessionId, draft, attachments]);
+  }, [client, sessionId, draft, attachments, canResume, onResume]);
 
   // Auto-grow the composer with its content (up to the CSS max-height).
   const onDraftChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setDraft(e.target.value);
+    setMenuDismissed(false);
     const ta = e.target;
     ta.style.height = "auto";
     ta.style.height = `${ta.scrollHeight}px`;
@@ -856,6 +868,8 @@ export function ChatView({
 
   const recentNotices = state.notices.slice(-3);
   const [showCommands, setShowCommands] = useState(false);
+  // Escape hides the auto-opened menu until the draft changes again.
+  const [menuDismissed, setMenuDismissed] = useState(false);
 
   // AI-mode trace bubbles render inline right after the assistant turn they
   // explain (anchorMessageId), so the deliberation sits beside its tool call.
@@ -871,10 +885,56 @@ export function ChatView({
     (t) => !t.anchorMessageId || !renderedIds.has(t.anchorMessageId),
   );
 
+  // Typing `/foo` (the whole composer, no space yet) is a live command query:
+  // it opens the menu and prefix-filters it. `/resume` is the client-only entry.
+  const slashQuery = /^\/(\S*)$/.exec(draft)?.[1] ?? null;
+  const allCommands: { name: string; description?: string; resume?: boolean }[] = [
+    ...(canResume
+      ? [{ name: "resume", description: "Resume a previous session", resume: true }]
+      : []),
+    ...state.commands,
+  ];
+  const menuCommands =
+    slashQuery === null
+      ? allCommands
+      : allCommands.filter((c) =>
+          c.name.toLowerCase().startsWith(slashQuery.toLowerCase()),
+        );
+  // Auto-open while querying; the `/` button still toggles it manually.
+  const commandsOpen =
+    !exited &&
+    menuCommands.length > 0 &&
+    (showCommands || (slashQuery !== null && !menuDismissed));
+  const [selected, setSelected] = useState(0);
+  useEffect(() => setSelected(0), [slashQuery, showCommands]);
+  const highlighted = menuCommands[Math.min(selected, menuCommands.length - 1)];
+
+  // Replace the query with the command (Tab-completion / click while querying),
+  // else append it at the end of the draft.
   const insertCommand = (name: string) => {
-    setDraft((d) => (d ? `${d} /${name} ` : `/${name} `));
+    setDraft((d) => (slashQuery !== null || !d ? `/${name} ` : `${d} /${name} `));
     setShowCommands(false);
-    textareaRef.current?.focus();
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
+  const toggleCommands = () => {
+    if (commandsOpen) {
+      setShowCommands(false);
+      setMenuDismissed(true);
+    } else setShowCommands(true);
+  };
+
+  const runCommand = (c: { name: string; resume?: boolean }) => {
+    if (c.resume) {
+      setDraft("");
+      setShowCommands(false);
+      onResume();
+    } else insertCommand(c.name);
   };
 
   // Prefill the composer with a predicted next prompt (the TUI's follow-up
@@ -1046,29 +1106,16 @@ export function ChatView({
           </div>
         ))}
       </div>
-      {!exited && showCommands && (state.commands.length > 0 || canResume) && (
+      {commandsOpen && (
         <div className="chat-commands">
-          {canResume && (
+          {menuCommands.map((c, i) => (
             <button
-              key="__resume"
-              className="chat-command"
-              onClick={() => {
-                onResume();
-                setShowCommands(false);
-              }}
-              title="Resume a previous session"
-            >
-              <span className="chat-command-name">/resume</span>
-              <span className="chat-command-desc">
-                Resume a previous session
-              </span>
-            </button>
-          )}
-          {state.commands.map((c) => (
-            <button
-              key={c.name}
-              className="chat-command"
-              onClick={() => insertCommand(c.name)}
+              key={c.resume ? "__resume" : c.name}
+              className={`chat-command${c === highlighted ? " highlighted" : ""}`}
+              // Keep composer focus (and the mobile keyboard) on click.
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setSelected(i)}
+              onClick={() => runCommand(c)}
               title={c.description}
             >
               <span className="chat-command-name">/{c.name}</span>
@@ -1083,12 +1130,12 @@ export function ChatView({
         <div className="chat-key-bar">
           {(state.commands.length > 0 || canResume) && (
             <button
-              className={`key-button${showCommands ? " active" : ""}`}
+              className={`key-button${commandsOpen ? " active" : ""}`}
               aria-label="Slash commands"
               title="Slash commands"
               // Keep focus so the mobile keyboard stays up.
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setShowCommands((s) => !s)}
+              onClick={toggleCommands}
             >
               /
             </button>
@@ -1205,9 +1252,9 @@ export function ChatView({
               duplicated here while the keyboard is up. */}
           {!keyboardOpen && (state.commands.length > 0 || canResume) && (
             <button
-              className={`chat-slash${showCommands ? " active" : ""}`}
+              className={`chat-slash${commandsOpen ? " active" : ""}`}
               title="Slash commands"
-              onClick={() => setShowCommands((s) => !s)}
+              onClick={toggleCommands}
             >
               /
             </button>
@@ -1234,6 +1281,30 @@ export function ChatView({
               }
             }}
             onKeyDown={(e) => {
+              // Command menu: ↑/↓ move, Tab completes, Esc dismisses.
+              if (commandsOpen && highlighted) {
+                if (e.key === "Tab") {
+                  e.preventDefault();
+                  insertCommand(highlighted.name);
+                  return;
+                }
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  const d = e.key === "ArrowDown" ? 1 : menuCommands.length - 1;
+                  setSelected(
+                    (s) =>
+                      (Math.min(s, menuCommands.length - 1) + d) %
+                      menuCommands.length,
+                  );
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setShowCommands(false);
+                  setMenuDismissed(true);
+                  return;
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 send();

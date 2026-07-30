@@ -542,6 +542,28 @@ function Workspace({
     setBuilderOpen(false);
   }, [activeSessionId]);
 
+  // Exited session: Enter/Escape = the "Close session" button (desktop).
+  useEffect(() => {
+    if (!activeExited || activeSessionId === null) return;
+    if (builderOpen || resumeDialogOpen || assistantDialogOpen || selectorOpen)
+      return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" && e.key !== "Escape") return;
+      e.preventDefault();
+      client.remove(activeSessionId);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    client,
+    activeExited,
+    activeSessionId,
+    builderOpen,
+    resumeDialogOpen,
+    assistantDialogOpen,
+    selectorOpen,
+  ]);
+
   return (
     <div
       className="app"
