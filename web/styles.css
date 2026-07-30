@@ -2315,8 +2315,13 @@ body {
   text-align: left;
   cursor: pointer;
 }
-.chat-command:hover {
+.chat-command:hover,
+.chat-command.highlighted {
   background: var(--bg);
+}
+/* Tab-completion target. */
+.chat-command.highlighted {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .chat-command-name {
   font-family: ui-monospace, monospace;

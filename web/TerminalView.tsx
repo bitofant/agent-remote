@@ -428,6 +428,11 @@ export function TerminalView({
     };
   }, [client, sessionId]);
 
+  // Type immediately on open/switch. After the creation effect so termRef is set.
+  useEffect(() => {
+    if (active && !selectMode) termRef.current?.focus();
+  }, [active, selectMode]);
+
   const copySelection = async () => {
     const text = termRef.current?.getSelection();
     if (!text) {
