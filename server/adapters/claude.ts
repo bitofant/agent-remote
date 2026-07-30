@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { accessSync, constants, existsSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import {
   getSessionMessages,
   query,
@@ -159,12 +161,54 @@ function normalizeUsage(data: unknown): ChatUsage {
 // whose `cfg.env` points the CLI at a local endpoint (vLLM) for token-free
 // end-to-end testing; the production instance leaves env unset so the
 // subscription/OAuth path is untouched.
+/**
+ * Resolve a locally-installed Claude Code CLI so the SDK drives it instead of
+ * its own bundled binary. The SDK ships a version-pinned native `claude` (an
+ * optional dep) and uses it unless `pathToClaudeCodeExecutable` is set; that
+ * bundled copy can lag the CLI the user actually installed, so its model catalog
+ * (e.g. whether "Opus 5" exists) trails behind. Preferring the on-$PATH binary
+ * keeps the model list — and everything else — in step with the user's `claude`.
+ *
+ * Returns an absolute path when `command` resolves to an executable (an explicit
+ * path that exists, or a bare name found on $PATH), else undefined → SDK falls
+ * back to its bundled binary. `.js`/`.mjs`/etc. are rejected: the SDK treats
+ * those as node scripts to run, but here we only want to hand it a native binary.
+ */
+export function resolveLocalCli(command: string): string | undefined {
+  const usable = (p: string): boolean => {
+    if (/\.(js|mjs|cjs|ts|tsx|jsx)$/i.test(p) || !existsSync(p)) return false;
+    try {
+      accessSync(p, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (command.includes("/")) {
+    const abs = isAbsolute(command) ? command : join(process.cwd(), command);
+    return usable(abs) ? abs : undefined;
+  }
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir && usable(join(dir, command))) return join(dir, command);
+  }
+  return undefined;
+}
+
 export function createClaudeAdapter(
   cfg: HarnessConfig,
   overrides?: { id?: string; name?: string },
 ): HarnessAdapter {
+  const id = overrides?.id ?? "claude";
+  // Point the SDK at the user's installed CLI when present (see resolveLocalCli);
+  // fall back to the SDK's bundled binary otherwise. Resolved once at startup.
+  const localCli = resolveLocalCli(cfg.command);
+  console.log(
+    localCli
+      ? `[${id}] using local Claude CLI at ${localCli}`
+      : `[${id}] local Claude CLI "${cfg.command}" not found on PATH; using SDK bundled binary`,
+  );
   return {
-    id: overrides?.id ?? "claude",
+    id,
     name: overrides?.name ?? "Claude Code",
     // The CLI emits its own `prompt_suggestion` (see promptSuggestions:true in
     // ClaudeChatSession) → the generic suggestion generator skips this harness.
@@ -174,7 +218,7 @@ export function createClaudeAdapter(
       return { command: cfg.command, args: [] };
     },
     createChatSession(opts: SessionOptions): ChatSession {
-      return new ClaudeChatSession(opts, cfg.env);
+      return new ClaudeChatSession(opts, cfg.env, localCli);
     },
   };
 }
@@ -211,6 +255,9 @@ class ClaudeChatSession implements ChatSession {
     private opts: SessionOptions,
     /** Extra env for the CLI subprocess (claude-local points at vLLM). */
     private env?: Record<string, string>,
+    /** Locally-installed Claude CLI to drive instead of the SDK's bundled
+     * binary (see resolveLocalCli); undefined → SDK uses its own copy. */
+    private cliPath?: string,
   ) {}
 
   start(handlers: ChatSessionHandlers): void {
@@ -230,6 +277,9 @@ class ClaudeChatSession implements ChatSession {
         // resume restores the model's context but does NOT stream history back —
         // we rebuild the visible transcript ourselves in replayHistory.
         ...(this.opts.resume ? { resume: this.opts.resume } : {}),
+        // Drive the user's installed CLI when found (keeps the model catalog in
+        // step with their `claude`); else the SDK uses its bundled binary.
+        ...(this.cliPath ? { pathToClaudeCodeExecutable: this.cliPath } : {}),
         // Configured env (claude-local → vLLM). The SDK REPLACES the subprocess
         // env rather than merging, so spread process.env to keep PATH/HOME/etc.
         ...(this.env ? { env: { ...process.env, ...this.env } } : {}),
