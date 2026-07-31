@@ -134,6 +134,7 @@ export function TerminalView({
   client,
   sessionId,
   active,
+  exited,
   selectMode,
   onEnterSelect,
   onExitSelect,
@@ -141,6 +142,8 @@ export function TerminalView({
   client: Client;
   sessionId: string;
   active: boolean;
+  // Process gone: stdin is closed, so keep the terminal unfocusable/untypeable.
+  exited: boolean;
   // Touch text-selection. Off: drags scroll. On: drags select. A long-press
   // selects the word under the finger and flips the workspace into select mode.
   selectMode: boolean;
@@ -430,8 +433,20 @@ export function TerminalView({
 
   // Type immediately on open/switch. After the creation effect so termRef is set.
   useEffect(() => {
-    if (active && !selectMode) termRef.current?.focus();
-  }, [active, selectMode]);
+    if (active && !selectMode && !exited) termRef.current?.focus();
+  }, [active, selectMode, exited]);
+
+  // On exit, take focus away and keep it away: disabling xterm's hidden textarea
+  // makes clicks/taps unable to refocus it (and can't raise the mobile keyboard).
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.disableStdin = exited;
+    const textarea = term.textarea;
+    if (!textarea) return;
+    textarea.disabled = exited;
+    if (exited) textarea.blur();
+  }, [exited]);
 
   const copySelection = async () => {
     const text = termRef.current?.getSelection();

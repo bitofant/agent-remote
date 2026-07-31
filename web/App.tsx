@@ -886,6 +886,7 @@ function Workspace({
                     client={client}
                     sessionId={s.id}
                     active={s.id === activeSessionId}
+                    exited={s.status === "exited"}
                     selectMode={s.id === activeSessionId && selectMode}
                     onEnterSelect={() => setSelectMode(true)}
                     onExitSelect={() => setSelectMode(false)}
