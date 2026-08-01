@@ -7,6 +7,8 @@ import {
   type ModelInfo,
   type PermissionMode,
   type PermissionResult,
+  type PermissionUpdate,
+  type PermissionUpdateDestination,
   type Query,
   type SDKMessage,
   type SDKUserMessage,
@@ -20,10 +22,12 @@ import type {
   ChatEvent,
   ChatImageRef,
   ChatQuestion,
+  ChatUiOption,
   ChatUsage,
   ChatUsageWindow,
 } from "../../shared/protocol.js";
 import { promptParts } from "../../shared/chat.js";
+import { truncate } from "../../shared/render.js";
 import type {
   ChatSession,
   ChatSessionHandlers,
@@ -50,8 +54,10 @@ const DEFAULT_MODE: PermissionMode = "default";
 // version bump here). Seeds query({ model }) and the UI's initial selection.
 const DEFAULT_MODEL = "opus";
 
-// Permission-card button labels, shared by the emitted card and the ui-response
-// handler that maps a label back to a decision, so the two never drift.
+// Permission-card option ids, shared by the emitted card and the ui-response
+// handler that maps one back to a decision, so the two never drift. These are
+// `ChatUiOption.value` — stable decode keys, never displayed (labels/details
+// are built per-call by permissionOptions).
 const ALLOW = "Allow";
 const DENY = "Deny";
 const ALWAYS_ALLOW = "Always allow";
@@ -71,6 +77,78 @@ const EXIT_PLAN_TOOL = "ExitPlanMode";
 
 // Tools whose "always" means switch to acceptEdits mode, not a per-call rule.
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+// How long an "always" lasts. The SDK picks the destination; we only report it,
+// so the button can't promise a scope we don't control.
+const SCOPE_TEXT: Record<PermissionUpdateDestination, string> = {
+  session: "this session",
+  cliArg: "this session",
+  localSettings: "saved to local settings",
+  projectSettings: "saved to project settings",
+  userSettings: "saved to user settings",
+};
+
+/** The rules one suggested update would install, e.g. `Bash(git add:*)`.
+ * Undefined when there's nothing legible (removals, empty rule lists). */
+function describeUpdate(u: PermissionUpdate): string | undefined {
+  if (u.type !== "addRules" && u.type !== "replaceRules") return undefined;
+  const rules = u.rules
+    .filter((r) => r.toolName)
+    .map((r) => (r.ruleContent ? `${r.toolName}(${r.ruleContent})` : r.toolName));
+  return rules.length ? rules.join(", ") : undefined;
+}
+
+/** What "Always allow" actually sends back as `updatedPermissions`.
+ *
+ * The SDK's `suggestions` are ALTERNATIVES (the TUI's separate buttons), not a
+ * bundle: a Bash call yields an addRules, an addDirectories AND a setMode. Only
+ * the rule updates mean "always allow this call" — returning the lot would also
+ * flip the session into acceptEdits and grant a directory behind one click. */
+export function alwaysAllowUpdates(
+  suggestions: PermissionUpdate[] | undefined,
+): PermissionUpdate[] {
+  return (suggestions ?? []).filter((u) => describeUpdate(u));
+}
+
+/** One line describing what an "Always allow" would do — the rule(s) plus where
+ * they're written — for the button's detail row. The TUI names the rule;
+ * without this the button is an unexplained blank cheque. */
+export function describeSuggestions(
+  suggestions: PermissionUpdate[] | undefined,
+): string | undefined {
+  const updates = alwaysAllowUpdates(suggestions);
+  if (!updates.length) return undefined;
+  const subject = updates.map((u) => describeUpdate(u)).join(", ");
+  return `${truncate(subject, 80)} · ${SCOPE_TEXT[updates[0].destination]}`;
+}
+
+/** Build a permission card's choices. `value`s are the fixed decode keys; the
+ * always-choice is offered for edit tools (mode flip) or when the SDK computed
+ * a scoped rule, matching the TUI. */
+export function permissionOptions(
+  toolName: string,
+  suggestions: PermissionUpdate[] | undefined,
+): ChatUiOption[] {
+  const options: ChatUiOption[] = [
+    { value: ALLOW, label: ALLOW, intent: "accept" },
+  ];
+  if (EDIT_TOOLS.has(toolName))
+    options.push({
+      value: ALLOW_ALL_EDITS,
+      label: ALLOW_ALL_EDITS,
+      detail: `Auto-accept file edits · ${SCOPE_TEXT.session}`,
+      intent: "always",
+    });
+  else if (alwaysAllowUpdates(suggestions).length)
+    options.push({
+      value: ALWAYS_ALLOW,
+      label: ALWAYS_ALLOW,
+      detail: describeSuggestions(suggestions),
+      intent: "always",
+    });
+  options.push({ value: DENY, label: DENY, intent: "reject" });
+  return options;
+}
 
 // CLI dialog kind for AskUserQuestion. Declaring it in supportedDialogKinds
 // (+ onUserDialog) routes the tool through the structured question dialog
@@ -357,18 +435,20 @@ class ClaudeChatSession implements ChatSession {
                   kind: "plan",
                   title: "Claude proposed a plan",
                   message: plan,
-                  options: [ACCEPT_PLAN, KEEP_PLANNING],
+                  options: [
+                    { value: ACCEPT_PLAN, label: ACCEPT_PLAN, intent: "accept" },
+                    {
+                      value: KEEP_PLANNING,
+                      label: KEEP_PLANNING,
+                      intent: "reject",
+                    },
+                  ],
                 },
               });
               return;
             }
             const id = randomUUID();
             const isEdit = EDIT_TOOLS.has(toolName);
-            // Offer "always" for edit tools (flips to acceptEdits) or when the
-            // SDK computed scoped rules (e.g. `Bash(npm test:*)`); hidden
-            // otherwise, matching the TUI.
-            const canAlways =
-              isEdit || (Array.isArray(suggestions) && suggestions.length > 0);
             this.permResolvers.set(id, (decision, note) => {
               if (decision === "deny") {
                 // A note becomes the deny message the CLI feeds back to the model.
@@ -382,12 +462,14 @@ class ClaudeChatSession implements ChatSession {
                 resolve({ behavior: "allow", updatedInput: toolInput });
                 this.applyMode("acceptEdits");
               } else if (decision === "always") {
-                // Returning suggestions verbatim keeps their session-scoped
-                // destination: auto-allow this session, forgotten on restart.
+                // Rule updates only (see alwaysAllowUpdates). The CLI persists
+                // them at the destination it suggested — in practice
+                // `.claude/settings.local.json` — which is what the button's
+                // detail row promises.
                 resolve({
                   behavior: "allow",
                   updatedInput: toolInput,
-                  updatedPermissions: suggestions,
+                  updatedPermissions: alwaysAllowUpdates(suggestions),
                 });
               } else {
                 resolve({ behavior: "allow", updatedInput: toolInput });
@@ -402,9 +484,7 @@ class ClaudeChatSession implements ChatSession {
                 // Rich, harness-agnostic view (diff/code/path) instead of raw
                 // arg JSON — the client renders it via the shared toolView.
                 tool: { name: toolName, args: toolInput },
-                options: canAlways
-                  ? [ALLOW, isEdit ? ALLOW_ALL_EDITS : ALWAYS_ALLOW, DENY]
-                  : [ALLOW, DENY],
+                options: permissionOptions(toolName, suggestions),
               },
             });
           }),

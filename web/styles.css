@@ -1590,6 +1590,24 @@ body {
   font-weight: 600;
   cursor: pointer;
 }
+/* Two-line option: label plus what it actually does (e.g. the rule an
+   "Always allow" installs). Detail wraps rather than stretching the row. */
+.chat-request-actions button.chat-option-detailed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  max-width: 100%;
+  text-align: left;
+}
+.chat-option-detail {
+  max-width: 40ch;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.75;
+}
 .chat-request-actions button.chat-request-cancel {
   background: transparent;
   border: 1px solid var(--border);

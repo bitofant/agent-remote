@@ -76,8 +76,16 @@ export class ChatDriver {
   resumeKey?: string;
   private turnWaiters: Array<() => void> = [];
   private condWaiters: Array<{ ok: () => boolean; resolve: () => void }> = [];
+  /** Option value used to auto-approve permission cards. */
+  private answer = "Allow";
 
   constructor(private readonly session: ChatSession) {}
+
+  /** Auto-approve later cards with a different option (e.g. "Always allow"). */
+  answerWith(value: string): this {
+    this.answer = value;
+    return this;
+  }
 
   start(): this {
     this.session.start({
@@ -88,7 +96,7 @@ export class ChatDriver {
           this.session.action({
             type: "ui-response",
             requestId: e.request.id,
-            value: "Allow",
+            value: this.answer,
           });
         }
         // busy:false marks a whole turn done (SDK `result`).

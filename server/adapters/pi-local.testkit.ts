@@ -108,7 +108,7 @@ export class PiDriver {
           this.manager.chatAction(this.sessionId, {
             type: "ui-response",
             requestId: event.request.id,
-            value: event.request.options?.[0] ?? "Allow",
+            value: event.request.options?.[0]?.value ?? "Allow",
           });
         }
         if (event.type === "busy" && event.busy === false)

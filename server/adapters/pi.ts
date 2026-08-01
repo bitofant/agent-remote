@@ -7,6 +7,7 @@ import type {
   ChatAction,
   ChatEvent,
   ChatImageRef,
+  ChatUiOption,
   ChatUiRequest,
 } from "../../shared/protocol.js";
 import { promptParts } from "../../shared/chat.js";
@@ -365,7 +366,7 @@ class PiRpcTranslator implements ChatTranslator {
           kind: line.method === "editor" ? "input" : line.method,
           title: line.title ?? "Agent request",
           message: typeof line.message === "string" ? line.message : undefined,
-          options: line.options,
+          options: piOptions(line.options),
           placeholder: line.placeholder ?? line.prefill,
         };
         return [{ type: "ui-request", request }];
@@ -384,6 +385,27 @@ class PiRpcTranslator implements ChatTranslator {
         return [];
     }
   }
+}
+
+// pi sends bare option strings and expects the chosen one echoed back verbatim,
+// so the label doubles as the value. Refusal-ish labels get `reject` intent so
+// the UI asks for a reason, as it does for claude's Deny.
+const PI_REJECT = new Set(["deny", "no", "reject", "decline"]);
+const PI_CANCEL = new Set(["cancel", "abort", "dismiss"]);
+
+function piOptions(options: string[] | undefined): ChatUiOption[] | undefined {
+  return options?.map((o) => {
+    const key = o.trim().toLowerCase();
+    return {
+      value: o,
+      label: o,
+      intent: PI_REJECT.has(key)
+        ? ("reject" as const)
+        : PI_CANCEL.has(key)
+          ? ("cancel" as const)
+          : ("accept" as const),
+    };
+  });
 }
 
 function messageRole(message: PiLine["message"]): string | undefined {
