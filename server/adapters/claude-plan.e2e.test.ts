@@ -57,8 +57,9 @@ describe.skipIf(!local || !up)("claude-local: accept a plan", () => {
     // card renders it). We assert it's present as a string — its verbosity is
     // the model's business, not our contract, and a small model can be terse.
     expect(typeof first.message).toBe("string");
-    expect(first.options).toContain(ACCEPT_PLAN);
-    expect(first.options).toContain(KEEP_PLANNING);
+    const planValues = (first.options ?? []).map((o) => o.value);
+    expect(planValues).toContain(ACCEPT_PLAN);
+    expect(planValues).toContain(KEEP_PLANNING);
 
     // (b) Refine with instructions → still in plan mode, and a revised plan comes.
     expect(modeSwitches()).not.toContain("acceptEdits");

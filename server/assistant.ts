@@ -238,12 +238,11 @@ function toDecision(
   if (verdict.action === "allow") {
     if (req.kind === "confirm")
       return { requestId: req.id, action: "confirm", delayMs };
-    // First option that isn't a rejection is the "accept" choice.
-    const accept = (req.options ?? []).find(
-      (o) => o !== "Deny" && o !== "Cancel",
-    );
+    // Plain approval only — never the "always" choice, which would install a
+    // standing rule off one LLM verdict.
+    const accept = (req.options ?? []).find((o) => o.intent === "accept");
     if (!accept) return null;
-    return { requestId: req.id, action: "accept", value: accept, delayMs };
+    return { requestId: req.id, action: "accept", value: accept.value, delayMs };
   }
   if (verdict.action === "deny")
     return { requestId: req.id, action: "deny", reason: verdict.reason ?? "", delayMs };

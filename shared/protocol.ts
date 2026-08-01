@@ -111,7 +111,7 @@ export interface LlmEvaluateRequest {
   /** The tool a permission prompt is about, if any. */
   tool?: { name: string; args?: unknown };
   /** Choices for a `select` permission prompt. */
-  options?: string[];
+  options?: ChatUiOption[];
   /** Structured questions for a `questions` prompt. */
   questions?: ChatQuestion[];
   /** Free-text user instructions (may be empty → default safety rubric). */
@@ -227,6 +227,23 @@ export interface ChatQuestion {
   options: { label: string; description?: string }[];
 }
 
+/** One choice on a `select`/`plan` card. `value` is the stable id round-tripped
+ * in `ui-response.value`; `label` is display-only (so a harness can enrich the
+ * button text without breaking the decode); `intent` carries the semantics so
+ * clients/AI-mode never pattern-match on label text. */
+export interface ChatUiOption {
+  /** Stable id sent back as `ui-response.value`. Never displayed. */
+  value: string;
+  /** Button text. */
+  label: string;
+  /** Second line under the label — e.g. the rule an "always" installs. */
+  detail?: string;
+  /** `accept` = plain approval (AI-mode picks this); `always` = approval +
+   * rule/mode change; `reject` = refusal, UI requires a typed reason;
+   * `cancel` = back out, no reason. */
+  intent?: "accept" | "always" | "reject" | "cancel";
+}
+
 /** A blocking question from the agent side (permission prompt etc.). The
  * agent may stall until it is answered. */
 export interface ChatUiRequest {
@@ -235,8 +252,8 @@ export interface ChatUiRequest {
   title: string;
   /** For `plan`: the proposed plan (markdown). Also the generic prompt body. */
   message?: string;
-  /** Choices, for `select`; also the accept/keep-planning labels for `plan`. */
-  options?: string[];
+  /** Choices, for `select`; also the accept/keep-planning options for `plan`. */
+  options?: ChatUiOption[];
   /** Placeholder/prefill hint, for `input` only. */
   placeholder?: string;
   /** Structured questions, for `questions` only. */

@@ -504,27 +504,37 @@ function UiRequestCard({
             const isAutoAccept =
               autoActive &&
               decision?.action === "accept" &&
-              opt === decision.value;
+              opt.value === decision.value;
+            const rejects = opt.intent === "reject";
             return (
               <button
-                key={opt}
-                className={
+                key={opt.value}
+                className={[
                   isAutoAccept
                     ? "auto-press"
-                    : denySuggested && (opt === "Deny" || opt === "Cancel")
+                    : denySuggested && (rejects || opt.intent === "cancel")
                       ? "deny-suggested"
-                      : ""
-                }
+                      : "",
+                  opt.detail ? "chat-option-detailed" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 style={isAutoAccept ? autoDelayStyle : undefined}
-                // "Deny" requires a typed reason (sent as the deny message).
-                disabled={opt === "Deny" && !note.trim()}
+                // Rejecting requires a typed reason (sent as the deny message).
+                disabled={rejects && !note.trim()}
                 onClick={() =>
                   onRespond(
-                    opt === "Deny" ? { value: opt, note } : { value: opt },
+                    rejects
+                      ? { value: opt.value, note }
+                      : { value: opt.value },
                   )
                 }
               >
-                {opt}
+                <span className="chat-option-label">{opt.label}</span>
+                {/* e.g. the exact rule an "Always allow" installs, + its scope. */}
+                {opt.detail && (
+                  <span className="chat-option-detail">{opt.detail}</span>
+                )}
               </button>
             );
           })}
@@ -547,7 +557,9 @@ function UiRequestCard({
             <button
               className="chat-plan-accept"
               onClick={() =>
-                onRespond({ value: request.options?.[0] ?? "Accept plan" })
+                onRespond({
+                  value: request.options?.[0]?.value ?? "Accept plan",
+                })
               }
             >
               Accept plan &amp; auto-accept edits
@@ -556,7 +568,7 @@ function UiRequestCard({
             <button
               onClick={() =>
                 onRespond({
-                  value: request.options?.[1] ?? "Keep planning",
+                  value: request.options?.[1]?.value ?? "Keep planning",
                   note,
                 })
               }
