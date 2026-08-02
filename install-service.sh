@@ -49,14 +49,21 @@ cat > "$UNIT_FILE" <<EOF
 Description=agent-remote — web remote for AI coding agents
 After=network-online.target
 Wants=network-online.target
+# Never stop retrying. The default (5 starts / 10s) let a transient crash-loop
+# — e.g. requests arriving mid-rebuild — exhaust the budget and leave the
+# service dead for good, which is the worst outcome for a remote you reach
+# only through itself.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 WorkingDirectory=$APP_DIR
 Environment=PATH=$SERVICE_PATH
 ExecStart=$NPM_BIN start
-Restart=on-failure
+Restart=always
 RestartSec=3
+# A wedged agent CLI in the cgroup mustn't stall the stop half of a restart.
+TimeoutStopSec=20
 
 [Install]
 WantedBy=default.target
