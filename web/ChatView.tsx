@@ -879,7 +879,6 @@ export function ChatView({
   // they always have; the user can still intervene (which cancels the verdict).
 
   const recentNotices = state.notices.slice(-3);
-  const [showCommands, setShowCommands] = useState(false);
   // Escape hides the auto-opened menu until the draft changes again.
   const [menuDismissed, setMenuDismissed] = useState(false);
 
@@ -912,20 +911,18 @@ export function ChatView({
       : allCommands.filter((c) =>
           c.name.toLowerCase().startsWith(slashQuery.toLowerCase()),
         );
-  // Auto-open while querying; the `/` button still toggles it manually.
+  // The menu is purely draft-driven: it's open iff the draft is a live `/query`
+  // (however the `/` got there — keyboard or the `/` button, which just types one).
   const commandsOpen =
-    !exited &&
-    menuCommands.length > 0 &&
-    (showCommands || (slashQuery !== null && !menuDismissed));
+    !exited && menuCommands.length > 0 && slashQuery !== null && !menuDismissed;
   const [selected, setSelected] = useState(0);
-  useEffect(() => setSelected(0), [slashQuery, showCommands]);
+  useEffect(() => setSelected(0), [slashQuery]);
   const highlighted = menuCommands[Math.min(selected, menuCommands.length - 1)];
 
   // Replace the query with the command (Tab-completion / click while querying),
   // else append it at the end of the draft.
   const insertCommand = (name: string) => {
     setDraft((d) => (slashQuery !== null || !d ? `/${name} ` : `${d} /${name} `));
-    setShowCommands(false);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
@@ -934,17 +931,9 @@ export function ChatView({
     });
   };
 
-  const toggleCommands = () => {
-    if (commandsOpen) {
-      setShowCommands(false);
-      setMenuDismissed(true);
-    } else setShowCommands(true);
-  };
-
   const runCommand = (c: { name: string; resume?: boolean }) => {
     if (c.resume) {
       setDraft("");
-      setShowCommands(false);
       onResume();
     } else insertCommand(c.name);
   };
@@ -982,6 +971,13 @@ export function ChatView({
       el.style.height = "auto";
       el.style.height = `${el.scrollHeight}px`;
     });
+  };
+
+  // The `/` button is just a key: it types a slash (same as the soft keyboard).
+  // The menu then opens off the draft, so mobile gets the typeahead filtering too.
+  const typeSlash = () => {
+    setMenuDismissed(false);
+    insertAtCursor("/");
   };
 
   return (
@@ -1140,14 +1136,23 @@ export function ChatView({
       )}
       {!exited && keyboardOpen && (
         <div className="chat-key-bar">
+          <button
+            className="key-button"
+            aria-label="Attach image"
+            title="Attach image"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            🖼
+          </button>
           {(state.commands.length > 0 || canResume) && (
             <button
               className={`key-button${commandsOpen ? " active" : ""}`}
-              aria-label="Slash commands"
+              aria-label="Slash"
               title="Slash commands"
               // Keep focus so the mobile keyboard stays up.
               onMouseDown={(e) => e.preventDefault()}
-              onClick={toggleCommands}
+              onClick={typeSlash}
             >
               /
             </button>
@@ -1168,15 +1173,6 @@ export function ChatView({
             onClick={() => insertAtCursor("\n")}
           >
             ⏎
-          </button>
-          <button
-            className="key-button"
-            aria-label="Attach image"
-            title="Attach image"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            🖼
           </button>
         </div>
       )}
@@ -1260,25 +1256,28 @@ export function ChatView({
               e.target.value = "";
             }}
           />
-          {/* On mobile the `/` toggle lives in the key-bar (above) so it's not
-              duplicated here while the keyboard is up. */}
+          {/* On mobile the `/` and attach toggles live in the key-bar (above)
+              so they're not duplicated here while the keyboard is up. */}
+          {!keyboardOpen && (
+            <button
+              className="chat-attach"
+              title="Attach image"
+              aria-label="Attach image"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              🖼
+            </button>
+          )}
           {!keyboardOpen && (state.commands.length > 0 || canResume) && (
             <button
               className={`chat-slash${commandsOpen ? " active" : ""}`}
               title="Slash commands"
-              onClick={toggleCommands}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={typeSlash}
             >
               /
             </button>
           )}
-          <button
-            className="chat-attach"
-            title="Attach image"
-            aria-label="Attach image"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            🖼
-          </button>
           <textarea
             ref={textareaRef}
             rows={1}
@@ -1312,7 +1311,6 @@ export function ChatView({
                 }
                 if (e.key === "Escape") {
                   e.preventDefault();
-                  setShowCommands(false);
                   setMenuDismissed(true);
                   return;
                 }

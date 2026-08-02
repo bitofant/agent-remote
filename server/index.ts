@@ -573,11 +573,23 @@ function serveStatic(url: string, res: ServerResponse): void {
     statSync(candidate).isFile()
       ? candidate
       : join(WEB_DIST, "index.html");
+  // A rebuild empties dist/web under a live server, so the file can vanish
+  // between the check and the read. Never let that throw: an ENOENT escaping
+  // this async handler used to kill the process (and every live session).
+  let body: Buffer;
+  try {
+    body = readFileSync(file);
+  } catch {
+    res.statusCode = 503;
+    res.setHeader("retry-after", "5");
+    res.end("Frontend is rebuilding — retry in a moment.");
+    return;
+  }
   res.setHeader(
     "content-type",
     CONTENT_TYPES[extname(file)] ?? "application/octet-stream",
   );
-  res.end(readFileSync(file));
+  res.end(body);
 }
 
 // --- Dev: embed Vite in middleware mode (same port, with HMR) --------------
@@ -603,6 +615,17 @@ server.on("error", (err: NodeJS.ErrnoException) => {
     console.error("Server error:", err);
   }
   process.exit(1);
+});
+
+// Stay alive on a stray throw: this process hosts every live agent session, so
+// dying beats losing them only if state is truly corrupt — which a request-
+// handler bug isn't. Log loudly instead (systemd would restart us into the
+// same crash-loop anyway).
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception (server kept alive):", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection (server kept alive):", err);
 });
 
 // Checkpoint the WAL and close the DB cleanly on shutdown (tsx watch → SIGTERM
