@@ -14,6 +14,7 @@ import type {
   ResumableSession,
   SessionInfo,
 } from "../shared/protocol";
+import { ALLOW_EVERYTHING, isAllowEverything } from "../shared/chat";
 import { Client, type CtrlMode } from "./client";
 import { TerminalView } from "./TerminalView";
 // Lazy-loaded: pulls in CodeMirror + language packs only once a file-edit tab
@@ -28,10 +29,7 @@ const ChatView = lazy(() =>
 import { CommandBuilder } from "./CommandBuilder";
 import { Login } from "./Login";
 import { fetchMe, logout } from "./auth";
-
-function folderName(path: string): string {
-  return path.split("/").filter(Boolean).pop() ?? path;
-}
+import { displayPath, folderName } from "./paths";
 
 // Client-only "file edit" tab: lives alongside PTY sessions but is backed by
 // /api/files, not a harness — tracked here in the UI, never by the manager.
@@ -244,6 +242,8 @@ function Workspace({
   // Client-only file-editor tabs (see EditorTab).
   const [editors, setEditors] = useState<EditorTab[]>([]);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
+  // Server-side $HOME, so stored absolute paths can be shown as `~/…`.
+  const [home, setHome] = useState("");
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   // Which session is shown for each folder.
   const [activeSession, setActiveSession] = useState<Record<string, string>>({});
@@ -278,6 +278,8 @@ function Workspace({
   // Command-builder dialog (opened from the ./ key-bar button).
   const [builderOpen, setBuilderOpen] = useState(false);
   const knownIds = useRef<Set<string>>(new Set());
+  // Set on add: the stored path is the server's to normalize, not ours to guess.
+  const pendingFolderSelect = useRef(false);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -287,7 +289,10 @@ function Workspace({
       .then(setHarnesses)
       .catch(() => setHarnesses([]));
     const offSessions = client.onSessions(setSessions);
-    const offFolders = client.onFolders(setFolders);
+    const offFolders = client.onFolders((next, serverHome) => {
+      setFolders(next);
+      setHome(serverHome);
+    });
     const offCtrl = client.onCtrl(setCtrlMode);
     return () => {
       offSessions();
@@ -349,6 +354,13 @@ function Workspace({
       return changed ? next : prev;
     });
   }, [sessions, editors]);
+
+  // Adopt the server's stored path for a folder we just added (see submitNewFolder).
+  useEffect(() => {
+    if (!pendingFolderSelect.current || folders.length === 0) return;
+    pendingFolderSelect.current = false;
+    setActiveFolder(folders[0].path);
+  }, [folders]);
 
   // Default to the most-recent folder once folders arrive.
   useEffect(() => {
@@ -420,7 +432,9 @@ function Workspace({
     const path = newFolder.trim();
     if (!path) return;
     client.addFolder(path);
-    setActiveFolder(path);
+    // The server normalizes the path (`~` expansion, trailing slash), so never
+    // guess it here — select what it actually stored, which an add sorts first.
+    pendingFolderSelect.current = true;
     setNewFolder("");
     setSidebarOpen(false);
   };
@@ -480,6 +494,10 @@ function Workspace({
   }, [client, activeSessionId, activeIsChat]);
 
   const assistantEnabled = !!activeAssistant?.enabled;
+  // Blanket-accept: permission cards are auto-accepted without the LLM, so the
+  // endpoint's health is irrelevant to this session.
+  const allowEverything = isAllowEverything(assistantDraft.instructions);
+  const assistantNeedsLlm = !isAllowEverything(activeAssistant?.instructions);
 
   // Clicking the assistant button toggles it off when enabled, else opens the
   // config dialog seeded from the current (backend) settings. Both write back
@@ -600,7 +618,7 @@ function Workspace({
           <label className="field-label">Add folder</label>
           <input
             className="cwd-input"
-            placeholder="/path/to/folder"
+            placeholder="/path/to/folder or ~/path"
             value={newFolder}
             onChange={(e) => setNewFolder(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitNewFolder()}
@@ -622,14 +640,14 @@ function Workspace({
                 onClick={() => openFolder(f.path)}
                 title={f.path}
               >
-                <span className="folder-name">{folderName(f.path)}</span>
-                <span className="folder-path">{f.path}</span>
+                <span className="folder-name">{folderName(f.path, home)}</span>
+                <span className="folder-path">{displayPath(f.path, home)}</span>
               </button>
               <button
                 className="folder-remove"
                 onClick={() => removeFolderAt(f.path)}
                 title="Remove folder from sidebar"
-                aria-label={`Remove ${folderName(f.path)}`}
+                aria-label={`Remove ${folderName(f.path, home)}`}
               >
                 ×
               </button>
@@ -647,7 +665,7 @@ function Workspace({
           <>
             <div className="folder-header">
               <span className="folder-header-path" title={activeFolder}>
-                {activeFolder}
+                {displayPath(activeFolder, home)}
               </span>
               <div className="header-actions">
                 {/* Resume lives in ChatView's `/` slash-command menu as
@@ -669,7 +687,7 @@ function Workspace({
                   <button
                     className={`header-icon-button assistant-button ${
                       assistantEnabled
-                        ? llmAvailable
+                        ? llmAvailable || !assistantNeedsLlm
                           ? "active"
                           : "unavailable"
                         : ""
@@ -678,9 +696,11 @@ function Workspace({
                     aria-pressed={assistantEnabled}
                     title={
                       assistantEnabled
-                        ? llmAvailable
-                          ? "AI assistant on — click to disable"
-                          : "AI assistant on, but the LLM is unavailable"
+                        ? !assistantNeedsLlm
+                          ? "AI assistant on — allowing everything; click to disable"
+                          : llmAvailable
+                            ? "AI assistant on — click to disable"
+                            : "AI assistant on, but the LLM is unavailable"
                         : "AI assistant"
                     }
                   >
@@ -1090,18 +1110,47 @@ function Workspace({
                     </button>
                   </div>
                   <div className="resume-dialog-body assistant-dialog-body">
-                    {!llmAvailable && (
+                    {!llmAvailable && !allowEverything && (
                       <div className="assistant-warning">
                         The LLM endpoint is currently unavailable. You can still
                         enable this — it will start acting once the endpoint is
                         reachable.
                       </div>
                     )}
-                    <label className="assistant-field">
-                      <span className="assistant-field-label">
-                        Instructions (optional)
-                      </span>
+                    <div className="assistant-field">
+                      <div className="assistant-field-head">
+                        <label
+                          className="assistant-field-label"
+                          htmlFor="assistant-instructions"
+                        >
+                          Instructions (optional)
+                        </label>
+                        {/* Shortcut for the blanket-accept instruction; ticking
+                            it just writes the phrase, so typing it works too. */}
+                        <label
+                          className="assistant-check assistant-allow-all"
+                          title="Accept every permission request without consulting the LLM"
+                        >
+                          allow everything
+                          <input
+                            type="checkbox"
+                            checked={allowEverything}
+                            onChange={(e) =>
+                              setAssistantDraft((d) => ({
+                                ...d,
+                                instructions: e.target.checked
+                                  ? ALLOW_EVERYTHING
+                                  : "",
+                                canAcceptPermissions: e.target.checked
+                                  ? true
+                                  : d.canAcceptPermissions,
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
                       <textarea
+                        id="assistant-instructions"
                         className="assistant-instructions"
                         rows={3}
                         placeholder="e.g. only allow bash calls for git tooling"
@@ -1113,7 +1162,7 @@ function Workspace({
                           }))
                         }
                       />
-                    </label>
+                    </div>
                     <label className="assistant-check">
                       <input
                         type="checkbox"

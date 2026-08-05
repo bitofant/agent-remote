@@ -10,7 +10,7 @@ import type {
 import { applyChatEvent, emptyChatState } from "../shared/chat";
 
 type SessionsListener = (sessions: SessionInfo[]) => void;
-type FoldersListener = (folders: FolderInfo[]) => void;
+type FoldersListener = (folders: FolderInfo[], home: string) => void;
 type ChatListener = (state: ChatState) => void;
 type OutputListener = (data: string) => void;
 type ResetListener = () => void;
@@ -47,6 +47,8 @@ export class Client {
   private shouldReconnect = false;
   private sessions: SessionInfo[] = [];
   private folders: FolderInfo[] = [];
+  /** Server-side $HOME, for displaying paths as `~/…` (display only). */
+  private home = "";
   private buffers = new Map<string, string>();
   private chatStates = new Map<string, ChatState>();
   private sessionsListeners = new Set<SessionsListener>();
@@ -154,6 +156,7 @@ export class Client {
       }
       case "folders":
         this.folders = msg.folders;
+        this.home = msg.home;
         this.emitFolders();
         break;
       case "error":
@@ -241,7 +244,7 @@ export class Client {
 
   onFolders(cb: FoldersListener): () => void {
     this.foldersListeners.add(cb);
-    cb(this.folders);
+    cb(this.folders, this.home);
     return () => this.foldersListeners.delete(cb);
   }
 
@@ -305,6 +308,6 @@ export class Client {
   }
 
   private emitFolders(): void {
-    for (const cb of this.foldersListeners) cb(this.folders);
+    for (const cb of this.foldersListeners) cb(this.folders, this.home);
   }
 }
