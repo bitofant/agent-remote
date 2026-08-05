@@ -527,5 +527,7 @@ export type ServerMessage =
   | { type: "chatState"; sessionId: string; state: ChatState }
   /** A live incremental chat event; apply with `applyChatEvent`. */
   | { type: "chatEvent"; sessionId: string; event: ChatEvent }
-  | { type: "folders"; folders: FolderInfo[] }
+  /** `home` rides along so the client can display paths home-relative (`~/x`);
+   * stored paths stay absolute — this is display only. */
+  | { type: "folders"; folders: FolderInfo[]; home: string }
   | { type: "error"; message: string; sessionId?: string };

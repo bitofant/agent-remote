@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
 import type { FolderInfo, ResumableSession } from "../shared/protocol.js";
+import { expandHome, normalizeFolder } from "./paths.js";
 
 // The project's only persistence layer: folders, user accounts, login sessions,
 // command log, and resumable chat sessions all survive restarts here (live PTYs
@@ -107,17 +108,58 @@ const upsertStmt = db.prepare(
 );
 const removeStmt = db.prepare("DELETE FROM folders WHERE path = ?");
 
+// Tables whose rows are keyed by a path a folder row once handed them; a `~`
+// row leaves them stranded from the expanded folder's queries.
+const PATH_COLUMNS = [
+  ["chat_sessions", "folder"],
+  ["commands", "cwd"],
+  ["chat_render_log", "cwd"],
+] as const;
+
+/** One-time migration of folder rows written before paths were normalized. A
+ * legacy `~/x` row otherwise duplicates itself (opening it starts a session with
+ * the expanded cwd, which upserts a *second* row); a slash-less `/x/y` row does
+ * the same against `/x/y/`. Idempotent, so it's cheap to run at every boot. */
+function migrateFolderPaths(): void {
+  const folderRows = db
+    .prepare("SELECT path, last_used_at AS ts FROM folders")
+    .all() as { path: string; ts: number }[];
+  const priorStmt = db.prepare(
+    "SELECT last_used_at AS ts FROM folders WHERE path = ?",
+  );
+  db.transaction(() => {
+    for (const { path, ts } of folderRows) {
+      const next = normalizeFolder(path);
+      if (next === path) continue; // already canonical (or `~user/…`: unexpandable)
+      // Merge, don't rename: the canonical row may already exist.
+      const prior = priorStmt.get(next) as { ts: number } | undefined;
+      upsertStmt.run(next, Math.max(ts, prior?.ts ?? 0));
+      removeStmt.run(path);
+      // Only `~` needs re-pointing: these columns hold live cwds (subdirectories
+      // included), whose trailing slash is theirs, not the folder key's.
+      const expanded = expandHome(path);
+      if (expanded === path) continue;
+      for (const [t, c] of PATH_COLUMNS) {
+        db.prepare(`UPDATE ${t} SET ${c} = ? WHERE ${c} = ?`).run(expanded, path);
+      }
+    }
+  })();
+}
+migrateFolderPaths();
+
 export function listFolders(): FolderInfo[] {
   return listStmt.all() as FolderInfo[];
 }
 
-/** Insert the folder, or bump its recency if already known. */
+/** Insert the folder, or bump its recency if already known.
+ * Normalizes here, not at the call site: the path is the row's identity, so one
+ * un-normalized caller anywhere would fork a folder into two list entries. */
 export function upsertFolder(path: string, ts = Date.now()): void {
-  upsertStmt.run(path, ts);
+  upsertStmt.run(normalizeFolder(path), ts);
 }
 
 export function removeFolder(path: string): void {
-  removeStmt.run(path);
+  removeStmt.run(normalizeFolder(path));
 }
 
 // --- command log -----------------------------------------------------------

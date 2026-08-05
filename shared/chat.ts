@@ -32,6 +32,20 @@ export function promptParts(text: string, images?: ChatImageRef[]): ChatPart[] {
   return parts;
 }
 
+/** Assistant-mode instruction that means "skip the LLM, accept every permission
+ * card". Deliberately a plain phrase: the dialog's checkbox just writes it into
+ * the instructions, so typing it by hand works identically. */
+export const ALLOW_EVERYTHING = "allow everything";
+
+/** Is assistant mode in blanket-accept mode? (Trailing punctuation tolerated so
+ * "Allow everything." counts.) */
+export function isAllowEverything(instructions: string | undefined): boolean {
+  return (
+    (instructions ?? "").trim().toLowerCase().replace(/[.!]+$/, "").trim() ===
+    ALLOW_EVERYTHING
+  );
+}
+
 /** Bounds to keep memory in check on long-running sessions. */
 const MAX_MESSAGES = 200;
 const MAX_TOOL_OUTPUT = 20_000;

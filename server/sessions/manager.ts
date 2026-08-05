@@ -22,6 +22,7 @@ import type {
   SessionUi,
 } from "../../shared/protocol.js";
 import { applyChatEvent, emptyChatState } from "../../shared/chat.js";
+import { normalizeFolder } from "../paths.js";
 
 // Per-session scrollback retained for replay on (re)connect; bounded for memory.
 const MAX_BUFFER = 200_000;
@@ -234,7 +235,9 @@ export class SessionManager {
       }
       for (const event of events) {
         // Reflect live state: cwd + the running command (set on exec, cleared at prompt).
-        if (event.type === "cwd") info.cwd = event.cwd;
+        // Normalized: the UI groups sessions by `cwd === folder path`, and a
+        // shell reports `/x/y` where the folder key is `/x/y/`.
+        if (event.type === "cwd") info.cwd = normalizeFolder(event.cwd);
         else if (event.type === "command-start")
           info.currentCommand = event.command.trim() || null;
         else if (event.type === "command-end") info.currentCommand = null;

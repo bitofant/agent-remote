@@ -20,11 +20,19 @@ import type {
   ChatUiRequest,
 } from "../shared/protocol.js";
 import { evaluate, llmStatus } from "./llm.js";
+import { isAllowEverything } from "../shared/chat.js";
 
 // Same grace-delay curve the UI used: 2s (trivial card) … 10s (a screenful),
 // scaled by how much there is to review — the window in which a connected human
 // can still take over before the assistant applies its verdict.
 const AUTO_ACTION_REF_CHARS = 681;
+
+// Trace text for blanket-accept (no LLM was queried, but the transcript still
+// shows an auditable bubble per auto-acceptance).
+const ALLOW_EVERYTHING_REASON = '"allow everything" mode';
+const ALLOW_EVERYTHING_PROMPT =
+  'No LLM was consulted: assistant instructions are "allow everything", so every permission request is accepted automatically.';
+const ALLOW_EVERYTHING_RESPONSE = '{"allow": true}';
 
 function autoActionDelayMs(chars: number): number {
   const ratio = Math.min(1, chars / AUTO_ACTION_REF_CHARS);
@@ -110,10 +118,15 @@ export function attachAssistant(manager: SessionManager): () => void {
       if (handled.has(req.id)) return;
 
       const settings = manager.chatState(sessionId)?.assistant;
-      if (!settings?.enabled || !llmStatus().available) return;
+      if (!settings?.enabled) return;
 
       const isPermission = req.kind === "select" || req.kind === "confirm";
       const isQuestions = req.kind === "questions";
+      // Blanket-accept mode: permission cards skip the LLM entirely (so it also
+      // works with no endpoint); questions still need one.
+      const allowAll = isAllowEverything(settings.instructions) && isPermission;
+      if (!allowAll && !llmStatus().available) return;
+
       // Plan acceptance stays human-driven (see CLAUDE.md); `input` too.
       const want =
         (isPermission && settings.canAcceptPermissions) ||
@@ -122,6 +135,51 @@ export function attachAssistant(manager: SessionManager): () => void {
 
       handled.add(req.id);
       const delayMs = autoActionDelayMs(requestContentChars(req));
+
+      // Broadcast a verdict and schedule its application after the grace window
+      // (shared by the LLM path and blanket-accept).
+      const commit = (decision: AssistantDecision) => {
+        manager.postAssistantDecision(sessionId, decision);
+        // `deny` never auto-acts — a human confirms it (matches prior UX).
+        if (decision.action === "deny") {
+          handled.delete(req.id);
+          return;
+        }
+        const t = setTimeout(() => {
+          timers.delete(req.id);
+          handled.delete(req.id);
+          // A connected human may have taken over during the grace window.
+          if (stillPending(manager, sessionId, req.id))
+            apply(manager, sessionId, req, decision);
+        }, delayMs);
+        t.unref?.();
+        timers.set(req.id, t);
+      };
+
+      if (allowAll) {
+        const decision = toDecision(
+          req,
+          { action: "allow", reason: ALLOW_EVERYTHING_REASON },
+          delayMs,
+        );
+        if (!decision) {
+          handled.delete(req.id);
+          return;
+        }
+        // Still trace it, so the transcript records every auto-acceptance.
+        manager.postAssistantTrace(sessionId, {
+          requestId: req.id,
+          kind: req.kind as "confirm" | "select",
+          prompt: ALLOW_EVERYTHING_PROMPT,
+          response: ALLOW_EVERYTHING_RESPONSE,
+          outcome: "allow",
+          reason: ALLOW_EVERYTHING_REASON,
+          summary: `Allowed — ${ALLOW_EVERYTHING_REASON}`,
+          at: Date.now(),
+        });
+        commit(decision);
+        return;
+      }
 
       void evaluate({
         kind: req.kind as "confirm" | "select" | "questions",
@@ -167,22 +225,7 @@ export function attachAssistant(manager: SessionManager): () => void {
             return;
           }
           // Broadcast so every client shows the countdown (or the deny hint).
-          manager.postAssistantDecision(sessionId, decision);
-
-          // `deny` never auto-acts — a human confirms it (matches prior UX).
-          if (decision.action === "deny") {
-            handled.delete(req.id);
-            return;
-          }
-          const t = setTimeout(() => {
-            timers.delete(req.id);
-            handled.delete(req.id);
-            // A connected human may have taken over during the grace window.
-            if (stillPending(manager, sessionId, req.id))
-              apply(manager, sessionId, req, decision);
-          }, delayMs);
-          t.unref?.();
-          timers.set(req.id, t);
+          commit(decision);
         })
         .catch(() => {
           handled.delete(req.id);

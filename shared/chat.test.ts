@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyChatEvent, emptyChatState, promptParts } from "./chat.js";
+import { applyChatEvent, emptyChatState, isAllowEverything, promptParts } from "./chat.js";
 import type { ChatEvent, ChatState } from "./protocol.js";
 
 // Fold a list of events over an initial state — how the reducer is used for real
@@ -400,5 +400,17 @@ describe("applyChatEvent user image message", () => {
       name: undefined,
       url: "/api/upload/a",
     });
+  });
+});
+
+describe("isAllowEverything", () => {
+  it("matches the sentinel regardless of case, spacing or trailing punctuation", () => {
+    for (const s of ["allow everything", "  Allow Everything ", "ALLOW EVERYTHING."])
+      expect(isAllowEverything(s)).toBe(true);
+  });
+
+  it("does not match empty, absent or merely-similar instructions", () => {
+    for (const s of [undefined, "", "allow everything in /tmp", "allow all"])
+      expect(isAllowEverything(s)).toBe(false);
   });
 });

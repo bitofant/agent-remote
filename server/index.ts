@@ -2,6 +2,7 @@ import { createServer as createHttpServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
+import { homedir } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 import { loadConfig } from "./config.js";
 import { buildAdapters } from "./adapters/registry.js";
@@ -28,6 +29,7 @@ import {
   MAX_IMAGE_BYTES,
 } from "./uploads.js";
 import { authedUser, handleAuthRoute } from "./auth.js";
+import { normalizeFolder } from "./paths.js";
 import { startLlmPolling, llmStatus } from "./llm.js";
 import { attachAssistant } from "./assistant.js";
 import { attachSuggestions } from "./suggestions.js";
@@ -417,8 +419,11 @@ server.on("upgrade", (req, socket, head) => {
 // All live connections, so server-owned folder history can be broadcast to
 // every browser.
 const connections = new Set<WebSocket>();
+function foldersMessage(): ServerMessage {
+  return { type: "folders", folders: listFolders(), home: homedir() };
+}
 function broadcastFolders(): void {
-  const msg: ServerMessage = { type: "folders", folders: listFolders() };
+  const msg = foldersMessage();
   const raw = JSON.stringify(msg);
   for (const ws of connections) ws.send(raw);
 }
@@ -447,7 +452,7 @@ wss.on("connection", (ws: WebSocket, user: string) => {
 
   // Bring the new client up to date: folders, sessions, then history
   // (scrollback for terminals, a chat-state snapshot for chat sessions).
-  send({ type: "folders", folders: listFolders() });
+  send(foldersMessage());
   send({ type: "sessions", sessions: manager.list() });
   for (const session of manager.list()) {
     if (session.ui === "chat") {
@@ -481,7 +486,7 @@ wss.on("connection", (ws: WebSocket, user: string) => {
     try {
       switch (msg.type) {
         case "start": {
-          const cwd = msg.cwd || process.cwd();
+          const cwd = normalizeFolder(msg.cwd || process.cwd());
           manager.start(msg.harnessId, { cwd, resume: msg.resume });
           // Launching registers/bumps its folder for everyone.
           lastActiveFolder = cwd;
@@ -522,16 +527,20 @@ wss.on("connection", (ws: WebSocket, user: string) => {
         case "remove":
           manager.remove(msg.sessionId);
           break;
-        case "addFolder":
-          lastActiveFolder = msg.path;
-          upsertFolder(msg.path);
+        case "addFolder": {
+          const path = normalizeFolder(msg.path);
+          lastActiveFolder = path;
+          upsertFolder(path);
           broadcastFolders();
           break;
-        case "removeFolder":
-          if (msg.path === lastActiveFolder) lastActiveFolder = undefined;
-          removeFolder(msg.path);
+        }
+        case "removeFolder": {
+          const path = normalizeFolder(msg.path);
+          if (path === lastActiveFolder) lastActiveFolder = undefined;
+          removeFolder(path);
           broadcastFolders();
           break;
+        }
       }
     } catch (err) {
       send({ type: "error", message: (err as Error).message });
