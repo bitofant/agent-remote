@@ -403,6 +403,121 @@ describe("applyChatEvent user image message", () => {
   });
 });
 
+describe("applyChatEvent rewind", () => {
+  const user = (id: string, text: string): ChatEvent => ({
+    type: "user-message",
+    message: { id, role: "user", parts: [{ type: "text", text }], createdAt: 0 },
+  });
+  const turn = (id: string, text: string): ChatEvent[] => [
+    { type: "assistant-start", messageId: id },
+    { type: "part-start", kind: "text" },
+    { type: "part-delta", delta: text },
+    { type: "assistant-end" },
+  ];
+  // Two full exchanges: u1/a1 then u2/a2.
+  const conversation = (): ChatState =>
+    reduce([user("u1", "first"), ...turn("a1", "ok"), user("u2", "second"), ...turn("a2", "done")]);
+
+  it("drops the target user message and everything after it", () => {
+    const state = reduce([{ type: "rewind", messageId: "u2" }], conversation());
+    expect(state.messages.map((m) => m.id)).toEqual(["u1", "a1"]);
+  });
+
+  it("clears in-flight state so the session is idle afterwards", () => {
+    const before = reduce(
+      [
+        user("u1", "first"),
+        user("u2", "second"),
+        { type: "busy", busy: true },
+        { type: "assistant-start", messageId: "a2" },
+        { type: "part-start", kind: "text" },
+        { type: "part-delta", delta: "half…" },
+        { type: "queue", queued: ["later"] },
+        {
+          type: "ui-request",
+          request: { id: "r1", kind: "confirm", title: "Run it?" },
+        },
+        { type: "prompt-suggestion", suggestions: ["next?"] },
+        {
+          type: "assistant-decision",
+          decision: { requestId: "r1", action: "confirm", delayMs: 2000 },
+        },
+      ],
+    );
+    expect(before.streaming).not.toBeNull();
+
+    const state = applyChatEvent(before, { type: "rewind", messageId: "u2" });
+    expect(state.messages.map((m) => m.id)).toEqual(["u1"]);
+    expect(state.streaming).toBeNull();
+    expect(state.busy).toBe(false);
+    expect(state.queued).toEqual([]);
+    expect(state.pendingRequests).toEqual([]);
+    expect(state.promptSuggestions).toEqual([]);
+    expect(state.autoDecisions).toEqual({});
+    expect(state.rewindPreview).toBeNull();
+  });
+
+  it("prunes traces anchored to dropped turns but keeps the rest", () => {
+    const trace = {
+      requestId: "",
+      kind: "confirm" as const,
+      prompt: "p",
+      response: "r",
+      outcome: "allow" as const,
+      summary: "",
+      at: 0,
+    };
+    const before = reduce(
+      [
+        {
+          type: "assistant-trace",
+          trace: { ...trace, requestId: "r1", summary: "kept", anchorMessageId: "a1" },
+        },
+        {
+          type: "assistant-trace",
+          trace: { ...trace, requestId: "r2", summary: "dropped", anchorMessageId: "a2" },
+        },
+      ],
+      conversation(),
+    );
+    const state = applyChatEvent(before, { type: "rewind", messageId: "u2" });
+    expect(state.assistantTraces.map((t) => t.summary)).toEqual(["kept"]);
+  });
+
+  it("keeps session-level state (models, modes, commands, capabilities)", () => {
+    const before = reduce(
+      [
+        { type: "models", models: [{ id: "opus", name: "Opus" }], current: "opus" },
+        { type: "commands", commands: [{ name: "compact" }] },
+        { type: "capabilities", capabilities: { rewind: true, rewindFiles: true } },
+      ],
+      conversation(),
+    );
+    const state = applyChatEvent(before, { type: "rewind", messageId: "u2" });
+    expect(state.currentModel).toBe("opus");
+    expect(state.commands).toHaveLength(1);
+    expect(state.capabilities).toEqual({ rewind: true, rewindFiles: true });
+  });
+
+  it("ignores a rewind to an unknown message", () => {
+    const before = conversation();
+    expect(applyChatEvent(before, { type: "rewind", messageId: "nope" })).toBe(before);
+  });
+
+  it("folds capabilities and rewind previews", () => {
+    const state = reduce([
+      { type: "capabilities", capabilities: { rewind: true } },
+      {
+        type: "rewind-preview",
+        preview: { messageId: "u2", canRewind: true, filesChanged: ["a.ts"], insertions: 3, deletions: 1 },
+      },
+    ]);
+    expect(state.capabilities).toEqual({ rewind: true });
+    expect(state.rewindPreview).toMatchObject({ messageId: "u2", canRewind: true });
+    expect(applyChatEvent(state, { type: "rewind-preview", preview: null }).rewindPreview).toBeNull();
+  });
+});
+
 describe("isAllowEverything", () => {
   it("matches the sentinel regardless of case, spacing or trailing punctuation", () => {
     for (const s of ["allow everything", "  Allow Everything ", "ALLOW EVERYTHING."])

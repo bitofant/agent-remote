@@ -75,6 +75,8 @@ export function emptyChatState(): ChatState {
     },
     autoDecisions: {},
     assistantTraces: [],
+    capabilities: {},
+    rewindPreview: null,
   };
 }
 
@@ -275,6 +277,37 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
           ...state.assistantTraces,
           { ...event.trace, anchorMessageId },
         ].slice(-MAX_TRACES),
+      };
+    }
+
+    case "capabilities":
+      return { ...state, capabilities: event.capabilities };
+
+    case "rewind-preview":
+      return { ...state, rewindPreview: event.preview };
+
+    case "rewind": {
+      // The harness has truncated its own context back to just before this
+      // prompt; mirror that here. Everything in flight belonged to the dropped
+      // turns, so it all goes — session-level state (models/modes/commands/
+      // capabilities/notices/assistant config) is unaffected by a rewind.
+      const idx = state.messages.findIndex((m) => m.id === event.messageId);
+      if (idx === -1) return state;
+      const messages = state.messages.slice(0, idx);
+      const kept = new Set(messages.map((m) => m.id));
+      return {
+        ...state,
+        messages,
+        streaming: null,
+        busy: false,
+        queued: [],
+        pendingRequests: [],
+        promptSuggestions: [],
+        autoDecisions: {},
+        rewindPreview: null,
+        assistantTraces: state.assistantTraces.filter(
+          (t) => t.anchorMessageId !== undefined && kept.has(t.anchorMessageId),
+        ),
       };
     }
 

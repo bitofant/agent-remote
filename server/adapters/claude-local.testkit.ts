@@ -101,15 +101,13 @@ export class ChatDriver {
         }
         // busy:false marks a whole turn done (SDK `result`).
         if (e.type === "busy" && e.busy === false) this.turnWaiters.shift()?.();
-        // Fire any condition waiters whose predicate now holds.
-        this.condWaiters = this.condWaiters.filter((w) => {
-          if (!w.ok()) return true;
-          w.resolve();
-          return false;
-        });
+        this.flush();
       },
       onResumable: (key) => {
         this.resumeKey = key;
+        // Also a state change worth waking waiters for — a rewind re-keys the
+        // session without emitting any further events.
+        this.flush();
       },
       onExit: () => this.turnWaiters.shift()?.(),
     });
@@ -133,6 +131,15 @@ export class ChatDriver {
   /** Forward any action to the session (set-mode, ui-response, …). */
   act(action: ChatAction): void {
     this.session.action(action);
+  }
+
+  /** Fire any condition waiters whose predicate now holds. */
+  private flush(): void {
+    this.condWaiters = this.condWaiters.filter((w) => {
+      if (!w.ok()) return true;
+      w.resolve();
+      return false;
+    });
   }
 
   /** Resolve once `predicate` holds — checked immediately and after each event. */

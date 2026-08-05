@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import {
+  forkSession,
   getSessionMessages,
   query,
+  type SessionMessage,
   type ModelInfo,
   type PermissionMode,
   type PermissionResult,
@@ -25,6 +27,7 @@ import type {
   ChatUiOption,
   ChatUsage,
   ChatUsageWindow,
+  RewindPreview,
 } from "../../shared/protocol.js";
 import { promptParts } from "../../shared/chat.js";
 import { truncate } from "../../shared/render.js";
@@ -304,11 +307,29 @@ export function createClaudeAdapter(
 class ClaudeChatSession implements ChatSession {
   private handlers?: ChatSessionHandlers;
   private q?: Query;
-  private readonly abort = new AbortController();
+  /** Recreated per launch — a rewind tears the query down and starts another. */
+  private abort = new AbortController();
   private pushInput?: (msg: SDKUserMessage) => void;
   private closeInput?: () => void;
   private closed = false;
   private errored = false;
+  /** Bumped when a rewind swaps the query out. The old consume loop unwinds
+   * asynchronously after its abort; comparing generations lets it exit quietly
+   * instead of reporting an error and ending the session. */
+  private generation = 0;
+  /** Live SDK session id (our resume key), from `system`/`init`. */
+  private sessionId?: string;
+  /** Current model/mode, so a relaunch resumes with the user's picks. */
+  private model?: string;
+  private mode: PermissionMode = DEFAULT_MODE;
+  /** Ids of every `user-message` we've emitted, in order (live + replayed).
+   * A rewind target is one of these; its position is the fallback way to find
+   * the matching transcript entry when the exact uuid isn't known. */
+  private promptIds: string[] = [];
+  /** messageId → SDK transcript uuid, when we learned it exactly. Cleared on a
+   * rewind relaunch: forkSession remaps every uuid, so the cache goes stale and
+   * later rewinds fall back to positional lookup. */
+  private promptUuids = new Map<string, string>();
   /** Turn in progress (drives the busy indicator). */
   private busy = false;
   /** Set on stream `message_start`, cleared on `result`. Lets us ignore the
@@ -340,9 +361,29 @@ class ClaudeChatSession implements ChatSession {
 
   start(handlers: ChatSessionHandlers): void {
     this.handlers = handlers;
+    // Fixed synchronous lists — emit now so the toggles are present from first
+    // render (and survive the relaunch a rewind does).
+    this.emit({
+      type: "capabilities",
+      capabilities: { rewind: true, rewindFiles: true },
+    });
+    this.emit({ type: "modes", modes: PERMISSION_MODES, current: DEFAULT_MODE });
+    this.launch({ resume: this.opts.resume });
+  }
+
+  /** Build the SDK query and start consuming it. Called once on start and again
+   * after a rewind (with the forked session as `resume`); `restart` skips the
+   * transcript replay and the model/command fetch, which a rewind must not redo
+   * (clients keep their truncated transcript and their model selection). */
+  private launch(opts: { resume?: string; restart?: boolean }): void {
     const input = createPushStream<SDKUserMessage>();
     this.pushInput = input.push;
     this.closeInput = input.close;
+    this.abort = new AbortController();
+    // Adopt the resumed/forked id up front: the CLI only emits `system`/`init`
+    // once a prompt is pushed, so waiting for it would leave a resumed session
+    // unable to rewind until the user sent something first.
+    if (opts.resume) this.sessionId = opts.resume;
 
     const q = query({
       prompt: input.stream,
@@ -350,11 +391,14 @@ class ClaudeChatSession implements ChatSession {
         cwd: this.opts.cwd,
         // default = auto-allow read-only, consult canUseTool for the rest.
         // Switchable at runtime via set-mode → setPermissionMode.
-        permissionMode: DEFAULT_MODE,
-        model: DEFAULT_MODEL,
+        permissionMode: this.mode,
+        model: this.model ?? DEFAULT_MODEL,
+        // Snapshot files before edits so a rewind can offer to restore them
+        // (Query.rewindFiles is gated on this).
+        enableFileCheckpointing: true,
         // resume restores the model's context but does NOT stream history back —
         // we rebuild the visible transcript ourselves in replayHistory.
-        ...(this.opts.resume ? { resume: this.opts.resume } : {}),
+        ...(opts.resume ? { resume: opts.resume } : {}),
         // Drive the user's installed CLI when found (keeps the model catalog in
         // step with their `claude`); else the SDK uses its bundled binary.
         ...(this.cliPath ? { pathToClaudeCodeExecutable: this.cliPath } : {}),
@@ -495,15 +539,10 @@ class ClaudeChatSession implements ChatSession {
       },
     });
     this.q = q;
-    // Fixed synchronous list — emit now so the toggle is present from first render.
-    this.emit({
-      type: "modes",
-      modes: PERMISSION_MODES,
-      current: DEFAULT_MODE,
-    });
+    if (opts.restart) return void this.consume(q, this.generation);
     // The live stream doesn't replay history on resume, so rebuild it from disk.
-    if (this.opts.resume) void this.replayHistory(this.opts.resume);
-    void this.consume(q);
+    if (opts.resume) void this.replayHistory(opts.resume);
+    void this.consume(q, this.generation);
     // Eager fetch: models/commands resolve on connect (no prompt needed), so the
     // switcher and palette are ready before the first message.
     void this.loadControlInfo(q);
@@ -514,7 +553,10 @@ class ClaudeChatSession implements ChatSession {
   private applyMode(mode: PermissionMode): void {
     this.q
       ?.setPermissionMode(mode)
-      .then(() => this.emit({ type: "mode-changed", current: mode }))
+      .then(() => {
+        this.mode = mode;
+        this.emit({ type: "mode-changed", current: mode });
+      })
       .catch((e: Error) =>
         this.emit({
           type: "notice",
@@ -605,22 +647,25 @@ class ClaudeChatSession implements ChatSession {
 
   action(action: ChatAction): void {
     switch (action.type) {
-      case "prompt":
+      case "prompt": {
         this.pushInput?.({
           type: "user",
           message: { role: "user", content: buildUserContent(action.text, action.images) },
           parent_tool_use_id: null,
         });
+        const id = randomUUID();
+        this.promptIds.push(id);
         this.emit({
           type: "user-message",
           message: {
-            id: randomUUID(),
+            id,
             role: "user",
             parts: promptParts(action.text, action.images),
             createdAt: Date.now(),
           },
         });
         break;
+      }
       case "abort":
         this.q?.interrupt().catch(() => {});
         break;
@@ -651,7 +696,14 @@ class ClaudeChatSession implements ChatSession {
         resolve(decision, action.note);
         break;
       }
+      case "rewind":
+        void this.rewind(action.messageId, action.restoreFiles === true);
+        break;
+      case "rewind-preview":
+        void this.previewRewind(action.messageId);
+        break;
       case "set-model":
+        this.model = action.model === "default" ? undefined : action.model;
         this.q
           ?.setModel(action.model === "default" ? undefined : action.model)
           .then(() =>
@@ -694,6 +746,12 @@ class ClaudeChatSession implements ChatSession {
 
   close(): void {
     this.closed = true;
+    this.teardown();
+  }
+
+  /** Stop the current query and release everything waiting on it. Shared by
+   * close() and the rewind relaunch — only `closed` distinguishes them. */
+  private teardown(): void {
     this.closeInput?.();
     this.abort.abort();
     // Release dangling prompts so the SDK loop can unwind.
@@ -707,11 +765,149 @@ class ClaudeChatSession implements ChatSession {
     this.handlers?.onEvent(event);
   }
 
-  private async consume(q: Query): Promise<void> {
+  /** Read the session's on-disk transcript (user + assistant entries, in order). */
+  private async transcript(): Promise<SessionMessage[]> {
+    if (!this.sessionId) return [];
+    return getSessionMessages(this.sessionId, { dir: this.opts.cwd });
+  }
+
+  /** Find the transcript uuid of one of our user-message ids. Prefer the uuid
+   * captured from the CLI's echo; otherwise fall back to position among the
+   * transcript's prose user entries (which is how rewinds after a fork resolve,
+   * since forkSession remaps every uuid). */
+  private async promptUuid(messageId: string): Promise<string | undefined> {
+    const exact = this.promptUuids.get(messageId);
+    if (exact) return exact;
+    const idx = this.promptIds.indexOf(messageId);
+    if (idx === -1) return undefined;
+    const prompts = (await this.transcript()).filter(
+      (m) =>
+        m.type === "user" &&
+        userText((m.message as { content?: unknown } | undefined)?.content),
+    );
+    return prompts[idx]?.uuid;
+  }
+
+  /** Dry-run the file half of a rewind so the confirm dialog can say what it
+   * would touch. Never mutates anything. */
+  private async previewRewind(messageId: string): Promise<void> {
+    const preview = await this.rewindFiles(messageId, true);
+    this.emit({ type: "rewind-preview", preview });
+  }
+
+  /** Run (or dry-run) the file restore for a rewind target. */
+  private async rewindFiles(
+    messageId: string,
+    dryRun: boolean,
+  ): Promise<RewindPreview> {
+    try {
+      const uuid = await this.promptUuid(messageId);
+      if (!uuid || !this.q)
+        return { messageId, canRewind: false, error: "Prompt not found in this session's history" };
+      const result = await this.q.rewindFiles(uuid, { dryRun });
+      return {
+        messageId,
+        canRewind: result.canRewind,
+        error: result.error,
+        filesChanged: result.filesChanged,
+        insertions: result.insertions,
+        deletions: result.deletions,
+      };
+    } catch (e) {
+      return { messageId, canRewind: false, error: (e as Error).message };
+    }
+  }
+
+  /** Rewind the conversation to just before `messageId`: interrupt whatever is
+   * running, optionally restore files, fork the transcript at the preceding
+   * entry and relaunch on the fork. The pre-rewind session file is untouched,
+   * so it stays resumable as a safety net. */
+  private async rewind(messageId: string, restoreFiles: boolean): Promise<void> {
+    if (this.closed) return;
+    const fail = (text: string) =>
+      this.emit({ type: "notice", level: "error", text: `Rewind failed: ${text}` });
+    const sessionId = this.sessionId;
+    if (!sessionId) return fail("session not ready");
+
+    let uuid: string | undefined;
+    try {
+      uuid = await this.promptUuid(messageId);
+    } catch (e) {
+      return fail((e as Error).message);
+    }
+    if (!uuid) return fail("that prompt isn't in this session's history");
+
+    // Stop the current turn first: the rest of this operates on a settled
+    // transcript, and the user asked to abandon whatever is running.
+    await this.q?.interrupt().catch(() => {});
+    if (this.closed) return;
+
+    let restored: RewindPreview | undefined;
+    if (restoreFiles) {
+      restored = await this.rewindFiles(messageId, false);
+      // A failed file restore isn't fatal — say so and rewind the conversation.
+      if (!restored.canRewind)
+        this.emit({
+          type: "notice",
+          level: "warning",
+          text: `Files not restored${restored.error ? `: ${restored.error}` : ""}`,
+        });
+    }
+
+    // Fork up to the entry *before* the prompt — inclusive slice, so this is the
+    // state the user saw when they typed it. Nothing before it → an empty fork,
+    // i.e. relaunch fresh.
+    let forked: string | undefined;
+    try {
+      const entries = await this.transcript();
+      const prev = entries[entries.findIndex((m) => m.uuid === uuid) - 1];
+      if (prev)
+        forked = (
+          await forkSession(sessionId, {
+            dir: this.opts.cwd,
+            upToMessageId: prev.uuid,
+          })
+        ).sessionId;
+    } catch (e) {
+      return fail((e as Error).message);
+    }
+    if (this.closed) return;
+
+    // Swap the query out under the same session id: the browser tab, its
+    // ChatState and the manager's session all survive.
+    this.generation++;
+    this.teardown();
+    this.busy = false;
+    this.streamedThisTurn = false;
+    this.toolBlocks.clear();
+    const idx = this.promptIds.indexOf(messageId);
+    if (idx !== -1) this.promptIds = this.promptIds.slice(0, idx);
+    this.promptUuids.clear(); // forkSession remapped every uuid
+    this.launch({ resume: forked, restart: true });
+    // The CLI only emits `system`/`init` once a prompt is pushed, so adopt the
+    // fork's id now: until then the old key would still be the session's, and
+    // closing the tab would resurface the un-rewound conversation in /resume.
+    this.sessionId = forked;
+    if (forked) this.handlers?.onResumable?.(forked);
+
+    this.emit({ type: "rewind", messageId });
+    const files =
+      restored?.canRewind && restored.filesChanged?.length
+        ? `, restored ${restored.filesChanged.length} file${restored.filesChanged.length === 1 ? "" : "s"}`
+        : "";
+    this.emit({
+      type: "notice",
+      level: "info",
+      text: `Rewound to an earlier prompt${files}. The previous conversation is still resumable.`,
+    });
+  }
+
+  private async consume(q: Query, generation: number): Promise<void> {
     try {
       for await (const msg of q) this.handleMessage(msg);
     } catch (err) {
-      if (!this.closed) {
+      // A superseded query (rewind) always ends by abort — not a session error.
+      if (!this.closed && generation === this.generation) {
         this.errored = true;
         this.emit({
           type: "notice",
@@ -720,7 +916,7 @@ class ClaudeChatSession implements ChatSession {
         });
       }
     } finally {
-      this.handlers?.onExit(this.errored ? 1 : 0);
+      if (generation === this.generation) this.handlers?.onExit(this.errored ? 1 : 0);
     }
   }
 
@@ -732,9 +928,12 @@ class ClaudeChatSession implements ChatSession {
       case "system":
         // init carries the session id (our resume key) + resumed permission mode.
         if (msg.subtype === "init") {
+          this.sessionId = msg.session_id;
           this.handlers?.onResumable?.(msg.session_id);
-          if (msg.permissionMode)
+          if (msg.permissionMode) {
+            this.mode = msg.permissionMode;
             this.emit({ type: "mode-changed", current: msg.permissionMode });
+          }
         } else if (msg.subtype === "compact_boundary") {
           // Context was compacted: history is replaced by a summary (manual
           // /compact or auto when the window fills). Surface it as a notice so
@@ -767,7 +966,14 @@ class ClaudeChatSession implements ChatSession {
         this.handleToolResults(content);
         // Live user echoes skipped (emitted on the `prompt` action). isReplay is
         // a vestigial safety net — the SDK doesn't emit it on resume.
-        if ("isReplay" in msg && msg.isReplay) this.replayUserMessage(content);
+        if ("isReplay" in msg && msg.isReplay) {
+          this.replayUserMessage(content);
+        } else if (msg.uuid && userText(content)) {
+          // The CLI's echo of a prompt we sent — the only place its transcript
+          // uuid surfaces, and what a rewind needs to slice the session at.
+          // Prose distinguishes it from tool_result-only user messages.
+          this.pairPromptUuid(msg.uuid);
+        }
         break;
       }
       case "assistant":
@@ -823,24 +1029,39 @@ class ClaudeChatSession implements ChatSession {
       } else if (m.type === "user") {
         // May carry tool_result blocks and/or genuine prose — emit both.
         this.handleToolResults(content);
-        this.replayUserMessage(content);
+        this.replayUserMessage(content, m.uuid);
       }
     }
   }
 
-  /** Rebuild a replayed user prompt into a bubble (only genuine user text). */
-  private replayUserMessage(content: unknown): void {
+  /** Rebuild a replayed user prompt into a bubble (only genuine user text).
+   * Replays carry their transcript uuid, so rewind targets resolve exactly. */
+  private replayUserMessage(content: unknown, uuid?: string): void {
     const text = userText(content);
     if (!text) return;
+    const id = uuid ?? randomUUID();
+    this.promptIds.push(id);
+    if (uuid) this.promptUuids.set(id, uuid);
     this.emit({
       type: "user-message",
       message: {
-        id: randomUUID(),
+        id,
         role: "user",
         parts: [{ type: "text", text }],
         createdAt: Date.now(),
       },
     });
+  }
+
+  /** Attach a transcript uuid to the oldest prompt still missing one (prompts
+   * and their echoes arrive in the same order). */
+  private pairPromptUuid(uuid: string): void {
+    for (const id of this.promptIds) {
+      if (!this.promptUuids.has(id)) {
+        this.promptUuids.set(id, uuid);
+        return;
+      }
+    }
   }
 
   /** Rebuild a whole assistant message into a bubble via the live delta events. */
