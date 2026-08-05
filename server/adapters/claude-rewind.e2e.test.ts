@@ -100,6 +100,43 @@ describe.skipIf(!local || !up)("claude-local: rewind a chat session", () => {
     s.close();
   }, 300_000);
 
+  // Regression: the adapter used to learn its session id only from `system`/
+  // `init`, which the CLI doesn't emit until a prompt is pushed — so rewinding a
+  // freshly-resumed session (the common case: reopen a tab, undo the last turn)
+  // failed with "session not ready" instead of rewinding.
+  it("rewinds a resumed session before any new prompt is sent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-remote-rewind-resumed-"));
+    const first = new ChatDriver(local!.create(dir)).start();
+    await first.prompt("Reply with just: one");
+    await first.prompt("Reply with just: two");
+    const key = first.resumeKey;
+    expect(key, "no resume key").toBeTruthy();
+    first.close();
+    await settle(1000); // let the CLI flush its transcript
+
+    const s = new ChatDriver(local!.create(dir, key)).start();
+    await s.waitFor(
+      () => promptIds(fold(s.events)).length >= 2,
+      60_000,
+      "resume did not replay the prior prompts",
+    );
+    const ids = promptIds(fold(s.events));
+
+    // Straight to a rewind — no prompt in between.
+    s.act({ type: "rewind", messageId: ids[1] });
+    await s.waitFor(
+      () => s.events.some((e) => e.type === "rewind"),
+      60_000,
+      "resumed session could not rewind before its first prompt",
+    );
+    expect(promptIds(fold(s.events))).toEqual([ids[0]]);
+    expect(
+      s.events.filter((e) => e.type === "notice" && e.level === "error"),
+      "rewind reported an error",
+    ).toEqual([]);
+    s.close();
+  }, 180_000);
+
   it("previews a rewind without touching the working tree, then restores files", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-remote-rewind-files-"));
     const file = join(dir, "notes.txt");

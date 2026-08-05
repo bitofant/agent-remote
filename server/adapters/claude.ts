@@ -380,6 +380,10 @@ class ClaudeChatSession implements ChatSession {
     this.pushInput = input.push;
     this.closeInput = input.close;
     this.abort = new AbortController();
+    // Adopt the resumed/forked id up front: the CLI only emits `system`/`init`
+    // once a prompt is pushed, so waiting for it would leave a resumed session
+    // unable to rewind until the user sent something first.
+    if (opts.resume) this.sessionId = opts.resume;
 
     const q = query({
       prompt: input.stream,
