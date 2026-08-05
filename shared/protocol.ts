@@ -86,6 +86,18 @@ export interface FileContent {
   content: string;
 }
 
+/** Subdirectories of one directory, returned by `GET /api/browse?path=` for the
+ * add-folder picker. Paths are absolute and canonical (trailing slash), so the
+ * client can key its tree by them and send one straight back as a folder. */
+export interface BrowseListing {
+  path: string;
+  /** Parent directory, or null at the filesystem root. */
+  parent: string | null;
+  entries: { name: string; path: string }[];
+  /** Set when the directory had more subfolders than the server returns. */
+  truncated?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Optional LLM assist (best-effort). An OpenAI-compatible endpoint (default
 // local vLLM) can judge permission prompts / answer questions on the user's

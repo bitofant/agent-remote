@@ -272,6 +272,29 @@ body {
   background: var(--border);
 }
 
+.folder-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.add-folder-button {
+  flex: none;
+  padding: 3px 8px;
+  margin-bottom: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.add-folder-button:hover {
+  border-color: var(--accent);
+}
+
 .folder-name {
   font-size: 13px;
 }
@@ -660,6 +683,107 @@ body {
   flex-shrink: 0;
   font-size: 11px;
   color: var(--muted);
+}
+
+/* --- Add-folder picker (reuses the resume-dialog shell) ------------------- */
+
+.folder-picker {
+  max-height: 80vh;
+}
+
+.picker-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.picker-input-row .cwd-input {
+  margin-bottom: 0;
+}
+
+.picker-add {
+  flex: none;
+  padding: 7px 12px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.picker-add:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.picker-tree {
+  gap: 0;
+  padding: 8px 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.picker-row:hover {
+  background: var(--bg);
+}
+
+/* The best prefix match — what Tab completes to. */
+.picker-row.selected {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+/* The folder the text field currently points at. */
+.picker-row.current .picker-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.picker-caret {
+  flex: none;
+  padding: 2px 4px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.picker-name {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 6px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.picker-note {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.picker-status {
+  padding: 4px 14px 10px;
+  color: var(--danger);
+  font-size: 12px;
 }
 
 /* --- File editor (picker + CodeMirror) ----------------------------------- */
