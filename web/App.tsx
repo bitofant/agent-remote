@@ -30,6 +30,7 @@ import { CommandBuilder } from "./CommandBuilder";
 import { Login } from "./Login";
 import { fetchMe, logout } from "./auth";
 import { displayPath, folderName } from "./paths";
+import { relativeTime } from "./time";
 
 // Client-only "file edit" tab: lives alongside PTY sessions but is backed by
 // /api/files, not a harness — tracked here in the UI, never by the manager.
@@ -150,17 +151,6 @@ function Icon({ path }: { path: string }) {
 
 function Arrow({ dir }: { dir: keyof typeof ARROW_PATHS }) {
   return <Icon path={ARROW_PATHS[dir]} />;
-}
-
-// Compact "time since" label for the resume list (e.g. "3m", "2h", "5d").
-function relativeTime(ts: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
 }
 
 // A harness's icon, or a first-letter badge when it has no registered glyph.

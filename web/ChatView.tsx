@@ -15,10 +15,12 @@ import type {
   ChatState,
   ChatUiRequest,
   ChatUsage,
+  RewindPreview,
 } from "../shared/protocol";
 import { renderMarkdown, toolGlyph, toolView } from "../shared/render";
 import type { ToolBody } from "../shared/render";
 import type { Client } from "./client";
+import { relativeTime } from "./time";
 
 // Chat-bubble view for chat sessions (ui: "chat"). Harness-agnostic: renders the
 // client's normalized ChatState, sends ChatActions back. Lazy-loaded so marked
@@ -91,37 +93,58 @@ function ToolPart({
   );
 }
 
-function Bubble({ message, streaming }: { message: ChatMessage; streaming?: boolean }) {
+function Bubble({
+  message,
+  streaming,
+  onRewind,
+}: {
+  message: ChatMessage;
+  streaming?: boolean;
+  /** Present on user bubbles the session can rewind to (see ChatState.capabilities). */
+  onRewind?: () => void;
+}) {
   if (message.role === "user") {
     const text = message.parts
       .map((p) => (p.type === "text" ? p.text : ""))
       .join("");
     const images = message.parts.filter((p) => p.type === "image");
     return (
-      <div className="chat-bubble user">
-        {text}
-        {images.length > 0 && (
-          <div className="chat-bubble-images">
-            {images.map((p, i) =>
-              p.type === "image" ? (
-                <a
-                  key={i}
-                  href={p.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="chat-image-link"
-                >
-                  <img
-                    className="chat-image"
-                    src={p.url}
-                    alt={p.name ?? "image"}
-                    loading="lazy"
-                  />
-                </a>
-              ) : null,
-            )}
-          </div>
+      <div className="chat-turn user">
+        {onRewind && (
+          <button
+            className="chat-rewind"
+            aria-label="Rewind to this prompt"
+            title="Rewind to this prompt"
+            onClick={onRewind}
+          >
+            ↺
+          </button>
         )}
+        <div className="chat-bubble user">
+          {text}
+          {images.length > 0 && (
+            <div className="chat-bubble-images">
+              {images.map((p, i) =>
+                p.type === "image" ? (
+                  <a
+                    key={i}
+                    href={p.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="chat-image-link"
+                  >
+                    <img
+                      className="chat-image"
+                      src={p.url}
+                      alt={p.name ?? "image"}
+                      loading="lazy"
+                    />
+                  </a>
+                ) : null,
+              )}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -700,6 +723,100 @@ function UsagePanel({
   );
 }
 
+/** Plain text of a message, for the rewind picker/confirm and the composer prefill. */
+function promptText(message: ChatMessage): string {
+  return message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+/** Modal shell shared by the rewind picker and its confirmation — same markup
+ * as App.tsx's resume dialog so the two look and behave identically. */
+function RewindDialog({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="resume-overlay" onClick={onClose}>
+      <div
+        className="resume-dialog rewind-dialog"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="resume-dialog-head">
+          <span>{title}</span>
+          <button className="resume-dialog-close" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <div className="resume-dialog-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Confirm rewinding to `message`, optionally restoring files. The file summary
+ * comes from a backend dry run (`preview`) so the checkbox says what it'd do. */
+function RewindConfirm({
+  message,
+  preview,
+  canRestoreFiles,
+  onCancel,
+  onConfirm,
+}: {
+  message: ChatMessage;
+  preview: RewindPreview | null;
+  canRestoreFiles: boolean;
+  onCancel: () => void;
+  onConfirm: (restoreFiles: boolean) => void;
+}) {
+  const [restoreFiles, setRestoreFiles] = useState(false);
+  // Only trust a preview that's about this message (a stale one may still be in
+  // state while the new dry run is in flight).
+  const mine = preview?.messageId === message.id ? preview : null;
+  const changed = mine?.filesChanged?.length ?? 0;
+  const summary = !mine
+    ? "Checking…"
+    : !mine.canRewind
+      ? (mine.error ?? "Not available for this prompt")
+      : changed === 0
+        ? "No file changes to undo"
+        : `${changed} file${changed === 1 ? "" : "s"} · +${mine.insertions ?? 0} −${mine.deletions ?? 0}`;
+
+  return (
+    <RewindDialog title="Rewind conversation" onClose={onCancel}>
+      <div className="rewind-prompt">{promptText(message) || "(image-only prompt)"}</div>
+      <div className="rewind-explain">
+        This prompt and everything after it are removed from the conversation and
+        from Claude's context, and the agent is interrupted. The prompt goes back
+        into the composer, and the conversation so far stays resumable.
+      </div>
+      {canRestoreFiles && (
+        <label className="assistant-check rewind-check">
+          <input
+            type="checkbox"
+            checked={restoreFiles}
+            disabled={!mine?.canRewind}
+            onChange={(e) => setRestoreFiles(e.target.checked)}
+          />
+          <span>
+            Also restore files changed since then
+            <span className="rewind-preview-summary">{summary}</span>
+          </span>
+        </label>
+      )}
+      <div className="assistant-dialog-actions">
+        <button onClick={onCancel}>Cancel</button>
+        <button className="assistant-enable" onClick={() => onConfirm(restoreFiles)}>
+          Rewind
+        </button>
+      </div>
+    </RewindDialog>
+  );
+}
+
 export function ChatView({
   client,
   sessionId,
@@ -735,6 +852,10 @@ export function ChatView({
   const [dragOver, setDragOver] = useState(false);
   // Usage indicator: which sessions expose `/usage`, and whether the panel is open.
   const [usageOpen, setUsageOpen] = useState(false);
+  // Rewind: the picker (`/rewind`) and the confirmation for one prompt. Both are
+  // per-session, so unlike `/resume` nothing is lifted into App.
+  const [rewindPickerOpen, setRewindPickerOpen] = useState(false);
+  const [rewindTarget, setRewindTarget] = useState<ChatMessage | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -823,12 +944,25 @@ export function ChatView({
     .map((a) => a.ref);
   const canSend = (draft.trim() !== "" || readyImages.length > 0) && !uploading;
 
+  // Rewinding is a harness capability (claude has it, pi doesn't) — everything
+  // rewind-related in the UI hangs off this.
+  const canRewind =
+    !exited &&
+    state.capabilities.rewind === true &&
+    state.messages.some((m) => m.role === "user");
+
   const send = useCallback(() => {
     const text = draft.trim();
-    // `/resume` is client-only (no harness command): open the picker instead.
+    // `/resume` and `/rewind` are client-only (no harness command): Tab-completing
+    // one then pressing Enter opens its picker instead of prompting the harness.
     if (text === "/resume" && canResume) {
       setDraft("");
       onResume();
+      return;
+    }
+    if (text === "/rewind" && canRewind) {
+      setDraft("");
+      setRewindPickerOpen(true);
       return;
     }
     const images = attachments
@@ -848,7 +982,7 @@ export function ChatView({
     nearBottomRef.current = true;
     const ta = textareaRef.current;
     if (ta) ta.style.height = "auto";
-  }, [client, sessionId, draft, attachments, canResume, onResume]);
+  }, [client, sessionId, draft, attachments, canResume, onResume, canRewind]);
 
   // Auto-grow the composer with its content (up to the CSS max-height).
   const onDraftChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -896,12 +1030,32 @@ export function ChatView({
     (t) => !t.anchorMessageId || !renderedIds.has(t.anchorMessageId),
   );
 
-  // Typing `/foo` (the whole composer, no space yet) is a live command query:
-  // it opens the menu and prefix-filters it. `/resume` is the client-only entry.
+  // Typing `/foo` (the whole composer, no space yet) is a live command query: it
+  // opens the menu and prefix-filters it. `/resume` and `/rewind` are the
+  // client-only entries — they carry a `run` instead of being inserted as text.
   const slashQuery = /^\/(\S*)$/.exec(draft)?.[1] ?? null;
-  const allCommands: { name: string; description?: string; resume?: boolean }[] = [
+  const allCommands: {
+    name: string;
+    description?: string;
+    run?: () => void;
+  }[] = [
     ...(canResume
-      ? [{ name: "resume", description: "Resume a previous session", resume: true }]
+      ? [
+          {
+            name: "resume",
+            description: "Resume a previous session",
+            run: () => onResume(),
+          },
+        ]
+      : []),
+    ...(canRewind
+      ? [
+          {
+            name: "rewind",
+            description: "Rewind to an earlier prompt",
+            run: () => setRewindPickerOpen(true),
+          },
+        ]
       : []),
     ...state.commands,
   ];
@@ -931,16 +1085,17 @@ export function ChatView({
     });
   };
 
-  const runCommand = (c: { name: string; resume?: boolean }) => {
-    if (c.resume) {
+  const runCommand = (c: { name: string; run?: () => void }) => {
+    if (c.run) {
       setDraft("");
-      onResume();
+      c.run();
     } else insertCommand(c.name);
   };
 
-  // Prefill the composer with a predicted next prompt (the TUI's follow-up
-  // suggestion) for the user to review/edit — never auto-sent. Focuses and grows.
-  const useSuggestion = (text: string) => {
+  // Drop text into the composer for the user to review/edit — never auto-sent.
+  // Focuses and grows. Used by the suggestion chips and by rewind (which puts
+  // the rewound-to prompt back so it can be re-sent).
+  const prefillComposer = (text: string) => {
     setDraft(text);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -950,6 +1105,51 @@ export function ChatView({
       el.setSelectionRange(caret, caret);
       el.style.height = "auto";
       el.style.height = `${el.scrollHeight}px`;
+    });
+  };
+
+  // --- Rewind: jump back to one of our own earlier prompts (claude only —
+  // gated on the harness's reported capabilities). ---
+  const rewindPoints = canRewind
+    ? state.messages.filter((m) => m.role === "user")
+    : [];
+
+  // Opening the confirmation asks the backend what the rewind would touch on
+  // disk, so the "restore files" checkbox can say what it would undo.
+  const openRewind = (message: ChatMessage) => {
+    setRewindPickerOpen(false);
+    setRewindTarget(message);
+    client.chatAction(sessionId, {
+      type: "rewind-preview",
+      messageId: message.id,
+    });
+  };
+
+  const confirmRewind = (message: ChatMessage, restoreFiles: boolean) => {
+    setRewindTarget(null);
+    // Put the prompt back in the composer (text + images) so it can be tweaked
+    // and re-sent — before the truncation event drops the message from state.
+    for (const a of attachments) URL.revokeObjectURL(a.previewUrl);
+    setAttachments(
+      message.parts.flatMap((p) =>
+        p.type === "image"
+          ? [
+              {
+                localId: p.id,
+                name: p.name ?? "image",
+                previewUrl: p.url,
+                status: "ready" as const,
+                ref: { id: p.id, mediaType: p.mediaType, name: p.name },
+              },
+            ]
+          : [],
+      ),
+    );
+    prefillComposer(promptText(message));
+    client.chatAction(sessionId, {
+      type: "rewind",
+      messageId: message.id,
+      restoreFiles,
     });
   };
 
@@ -1074,7 +1274,12 @@ export function ChatView({
         )}
         {state.messages.map((m) => (
           <Fragment key={m.id}>
-            <Bubble message={m} />
+            <Bubble
+              message={m}
+              onRewind={
+                canRewind && m.role === "user" ? () => openRewind(m) : undefined
+              }
+            />
             {tracesFor(m.id)}
           </Fragment>
         ))}
@@ -1118,7 +1323,7 @@ export function ChatView({
         <div className="chat-commands">
           {menuCommands.map((c, i) => (
             <button
-              key={c.resume ? "__resume" : c.name}
+              key={c.run ? `__${c.name}` : c.name}
               className={`chat-command${c === highlighted ? " highlighted" : ""}`}
               // Keep composer focus (and the mobile keyboard) on click.
               onMouseDown={(e) => e.preventDefault()}
@@ -1145,7 +1350,7 @@ export function ChatView({
           >
             🖼
           </button>
-          {(state.commands.length > 0 || canResume) && (
+          {(state.commands.length > 0 || canResume || canRewind) && (
             <button
               className={`key-button${commandsOpen ? " active" : ""}`}
               aria-label="Slash"
@@ -1191,7 +1396,7 @@ export function ChatView({
                 key={i}
                 className="chat-suggestion"
                 title={suggestion}
-                onClick={() => useSuggestion(suggestion)}
+                onClick={() => prefillComposer(suggestion)}
               >
                 <span className="chat-suggestion-glyph">✎</span>
                 <span className="chat-suggestion-text">{suggestion}</span>
@@ -1268,7 +1473,7 @@ export function ChatView({
               🖼
             </button>
           )}
-          {!keyboardOpen && (state.commands.length > 0 || canResume) && (
+          {!keyboardOpen && (state.commands.length > 0 || canResume || canRewind) && (
             <button
               className={`chat-slash${commandsOpen ? " active" : ""}`}
               title="Slash commands"
@@ -1340,6 +1545,40 @@ export function ChatView({
             {state.busy ? "Steer" : "Send"}
           </button>
         </div>
+      )}
+      {/* `/rewind`: pick one of our own prompts to jump back to (newest first,
+          mirroring the CLI). Picking one opens the same confirmation the bubble
+          button does. */}
+      {rewindPickerOpen && (
+        <RewindDialog
+          title="Rewind to a prompt"
+          onClose={() => setRewindPickerOpen(false)}
+        >
+          {rewindPoints.length === 0 ? (
+            <div className="resume-empty">No prompts to rewind to yet.</div>
+          ) : (
+            [...rewindPoints].reverse().map((m) => (
+              <div key={m.id} className="resume-item">
+                <button className="resume-item-open" onClick={() => openRewind(m)}>
+                  <span className="resume-item-title">
+                    {promptText(m).split("\n")[0] || "(image-only prompt)"}
+                  </span>
+                  <span className="resume-item-time">{relativeTime(m.createdAt)}</span>
+                </button>
+              </div>
+            ))
+          )}
+        </RewindDialog>
+      )}
+      {rewindTarget && (
+        <RewindConfirm
+          key={rewindTarget.id}
+          message={rewindTarget}
+          preview={state.rewindPreview}
+          canRestoreFiles={state.capabilities.rewindFiles === true}
+          onCancel={() => setRewindTarget(null)}
+          onConfirm={(restoreFiles) => confirmRewind(rewindTarget, restoreFiles)}
+        />
       )}
     </div>
   );

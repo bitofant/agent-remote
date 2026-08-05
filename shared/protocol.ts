@@ -383,6 +383,29 @@ export interface AssistantTrace {
   anchorMessageId?: string;
 }
 
+/** Optional features a chat harness supports, reported once at session start.
+ * Absent flags mean "unsupported" — the UI gates its affordances on these so a
+ * harness without them (pi) never shows a control it can't honour. */
+export interface ChatCapabilities {
+  /** Can rewind the conversation to an earlier user prompt (`rewind` action). */
+  rewind?: boolean;
+  /** Rewinding can additionally restore files changed since that prompt. */
+  rewindFiles?: boolean;
+}
+
+/** Dry-run answer to "what would rewinding to this prompt do to my files?" —
+ * requested via the `rewind-preview` action, shown in the confirm dialog. */
+export interface RewindPreview {
+  /** The user message the preview is about. */
+  messageId: string;
+  canRewind: boolean;
+  /** Why not, when `canRewind` is false. */
+  error?: string;
+  filesChanged?: string[];
+  insertions?: number;
+  deletions?: number;
+}
+
 /** Full renderable state of a chat session. The server snapshots this on
  * (re)connect; both sides keep it current via `applyChatEvent`. */
 export interface ChatState {
@@ -427,6 +450,10 @@ export interface ChatState {
    * first, capped. Rendered as collapsible AI-mode bubbles for visibility into
    * what the assistant did. */
   assistantTraces: AssistantTrace[];
+  /** Optional features this harness supports (empty = none reported). */
+  capabilities: ChatCapabilities;
+  /** Latest rewind dry-run result, or null when no dialog is pending. */
+  rewindPreview: RewindPreview | null;
 }
 
 /** Normalized streaming events a chat adapter emits. */
@@ -472,7 +499,15 @@ export type ChatEvent =
   | { type: "assistant-decision-cleared"; requestId: string }
   /** The backend AI-assistant deliberated over a card (whenever the LLM was
    * queried). Folded into ChatState as a collapsible AI-mode bubble. */
-  | { type: "assistant-trace"; trace: AssistantTrace };
+  | { type: "assistant-trace"; trace: AssistantTrace }
+  /** Optional features this harness supports (sent on session init). */
+  | { type: "capabilities"; capabilities: ChatCapabilities }
+  /** The conversation was rewound to just before this user message: drop it and
+   * everything after it, and reset in-flight state. Emitted only once the
+   * harness has actually truncated its own context. */
+  | { type: "rewind"; messageId: string }
+  /** Result of a rewind dry-run (or null to clear it). */
+  | { type: "rewind-preview"; preview: RewindPreview | null };
 
 /** Actions the browser can take on a chat session. */
 export type ChatAction =
@@ -501,7 +536,15 @@ export type ChatAction =
   | { type: "set-assistant"; settings: AssistantSettings }
   /** User intervened on a card the AI-assistant was about to auto-answer: cancel
    * its pending verdict so only a manual response resolves it. Harness-agnostic. */
-  | { type: "cancel-assistant"; requestId: string };
+  | { type: "cancel-assistant"; requestId: string }
+  /** Rewind the conversation to just before this user prompt: interrupt the
+   * agent, truncate its context and the transcript, optionally restoring files
+   * changed since. The adapter replies with a `rewind` event on success.
+   * No-op for harnesses without `capabilities.rewind`. */
+  | { type: "rewind"; messageId: string; restoreFiles?: boolean }
+  /** Ask what a rewind to this prompt would change on disk (dry run); the
+   * adapter replies with a `rewind-preview` event. */
+  | { type: "rewind-preview"; messageId: string };
 
 /** Messages the browser sends to the backend. */
 export type ClientMessage =

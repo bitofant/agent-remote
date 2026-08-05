@@ -1329,6 +1329,84 @@ body {
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+/* Row wrapping a user bubble so the rewind button can sit to its left; takes
+   over the bubble's own flex-child sizing. */
+.chat-turn.user {
+  align-self: flex-end;
+  max-width: 85%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.chat-turn.user .chat-bubble.user {
+  align-self: auto;
+  max-width: 100%;
+}
+
+/* Faded — not hidden — so it's reachable on touch, unlike .folder-remove. */
+.chat-rewind {
+  flex: none;
+  padding: 2px 5px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.3;
+  cursor: pointer;
+}
+.chat-turn.user:hover .chat-rewind {
+  opacity: 0.7;
+}
+.chat-rewind:hover {
+  opacity: 1;
+  color: var(--text);
+  background: var(--border);
+}
+
+/* Rewind picker / confirmation (reuses the resume-dialog shell). */
+.rewind-dialog .resume-dialog-body {
+  gap: 10px;
+}
+.rewind-prompt {
+  max-height: 30vh;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.rewind-explain {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.rewind-check {
+  align-items: flex-start;
+}
+.rewind-preview-summary {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.rewind-dialog .assistant-dialog-actions {
+  gap: 8px;
+}
+/* Secondary (Cancel) next to the primary .assistant-enable. */
+.rewind-dialog .assistant-dialog-actions button:not(.assistant-enable) {
+  padding: 8px 16px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
 /* A prompt queued behind the current run, not yet delivered to the model. */
 .chat-bubble.user.queued {
   opacity: 0.5;
