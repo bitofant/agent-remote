@@ -27,6 +27,7 @@ const ChatView = lazy(() =>
   import("./ChatView").then((m) => ({ default: m.ChatView })),
 );
 import { CommandBuilder } from "./CommandBuilder";
+import { FolderPicker } from "./FolderPicker";
 import { Login } from "./Login";
 import { fetchMe, logout } from "./auth";
 import { displayPath, folderName } from "./paths";
@@ -251,7 +252,7 @@ function Workspace({
   const [assistantDialogOpen, setAssistantDialogOpen] = useState(false);
   const [assistantDraft, setAssistantDraft] =
     useState<AssistantSettings>(DEFAULT_ASSISTANT);
-  const [newFolder, setNewFolder] = useState("");
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   // Narrow viewport: collapse the inline new-session buttons into the [+] menu.
@@ -418,14 +419,13 @@ function Workspace({
     setSidebarOpen(false);
   };
 
-  const submitNewFolder = () => {
-    const path = newFolder.trim();
+  const submitNewFolder = (path: string) => {
     if (!path) return;
     client.addFolder(path);
     // The server normalizes the path (`~` expansion, trailing slash), so never
     // guess it here — select what it actually stored, which an add sorts first.
     pendingFolderSelect.current = true;
-    setNewFolder("");
+    setFolderPickerOpen(false);
     setSidebarOpen(false);
   };
 
@@ -553,7 +553,13 @@ function Workspace({
   // Exited session: Enter/Escape = the "Close session" button (desktop).
   useEffect(() => {
     if (!activeExited || activeSessionId === null) return;
-    if (builderOpen || resumeDialogOpen || assistantDialogOpen || selectorOpen)
+    if (
+      builderOpen ||
+      resumeDialogOpen ||
+      assistantDialogOpen ||
+      selectorOpen ||
+      folderPickerOpen
+    )
       return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" && e.key !== "Escape") return;
@@ -570,6 +576,7 @@ function Workspace({
     resumeDialogOpen,
     assistantDialogOpen,
     selectorOpen,
+    folderPickerOpen,
   ]);
 
   return (
@@ -604,21 +611,18 @@ function Workspace({
           </button>
         </div>
 
-        <section>
-          <label className="field-label">Add folder</label>
-          <input
-            className="cwd-input"
-            placeholder="/path/to/folder or ~/path"
-            value={newFolder}
-            onChange={(e) => setNewFolder(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitNewFolder()}
-          />
-        </section>
-
         <section className="folder-list">
-          <label className="field-label">Folders</label>
+          <div className="folder-list-head">
+            <label className="field-label">Folders</label>
+            <button
+              className="add-folder-button"
+              onClick={() => setFolderPickerOpen(true)}
+            >
+              + Add
+            </button>
+          </div>
           {folders.length === 0 && (
-            <p className="muted">No folders yet. Add one above.</p>
+            <p className="muted">No folders yet. Add one with “+ Add”.</p>
           )}
           {folders.map((f) => (
             <div
@@ -1194,6 +1198,14 @@ function Workspace({
           </>
         )}
       </main>
+      {/* App-level, not inside <main>: adding a folder must work with none open. */}
+      {folderPickerOpen && (
+        <FolderPicker
+          home={home}
+          onAdd={submitNewFolder}
+          onClose={() => setFolderPickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

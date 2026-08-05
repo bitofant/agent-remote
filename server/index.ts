@@ -22,6 +22,7 @@ import {
 import { recordChatRenders, forgetChatRenders } from "./chatLog.js";
 import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
 import { listDir, readTextFile, writeTextFile } from "./files.js";
+import { browseDirs } from "./browse.js";
 import {
   saveUpload,
   loadUpload,
@@ -246,6 +247,17 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
     if (!listFolders().some((f) => f.path === cwd))
       return sendJsonError(res, 400, "Unknown folder.");
     void listDir(cwd, path).then(
+      (listing) => sendJson(res, listing),
+      (err: unknown) => sendJsonError(res, 400, (err as Error).message),
+    );
+    return;
+  }
+  // Add-folder picker: subdirectories of any readable path (see browse.ts for
+  // why this one isn't folder-allowlisted).
+  if (pathname === "/api/browse" && req.method === "GET") {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const path = new URL(url, "http://x").searchParams.get("path") ?? "";
+    void browseDirs(path).then(
       (listing) => sendJson(res, listing),
       (err: unknown) => sendJsonError(res, 400, (err as Error).message),
     );
