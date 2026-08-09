@@ -13,6 +13,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import type { Client } from "./client";
+import { onThemeChange, xtermTheme } from "./theme";
 
 const clamp = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, n));
@@ -232,9 +233,15 @@ export function TerminalView({
       fontSize: fontSize(),
       cursorBlink: true,
       allowProposedApi: true, // required by the unicode11 addon
-      theme: { background: "#0b0e14", foreground: "#bfbdb6" },
+      theme: xtermTheme(),
     });
     termRef.current = term;
+
+    // xterm takes colors as a JS object, so it can't follow the CSS vars the
+    // rest of the app themes with — push new ones in on change.
+    const offTheme = onThemeChange((t) => {
+      term.options.theme = xtermTheme(t);
+    });
 
     // unicode11 fixes wide-char widths (box-drawing/emoji) the default tables
     // size wrong, which otherwise corrupts TUI layout.
@@ -415,6 +422,7 @@ export function TerminalView({
       container.removeEventListener("touchmove", onTouchMove, { capture: true });
       container.removeEventListener("touchend", onTouchEnd);
       unsubscribe();
+      offTheme();
       // Disposing the GPU renderer/terminal can throw on some drivers; swallow
       // it so cleanup can't tear down the whole React tree. Renderer before term.
       try {

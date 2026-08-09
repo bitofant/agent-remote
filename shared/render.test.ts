@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  groupParts,
   lineDiff,
   renderMessage,
   renderPart,
@@ -209,7 +210,7 @@ describe("renderMessage", () => {
     expect(rendered.html).toContain('src="/api/upload/img1"');
   });
 
-  it("concatenates each assistant part's html", () => {
+  it("splits an assistant turn into a prose bubble plus a standalone tool", () => {
     const msg: ChatMessage = {
       id: "m1",
       role: "assistant",
@@ -221,6 +222,45 @@ describe("renderMessage", () => {
     };
     const rendered = renderMessage(msg);
     expect(rendered.parts).toHaveLength(2);
-    expect(rendered.html).toBe(rendered.parts.map((p) => p.html).join(""));
+    expect(rendered.bubbleClassName).toBe("chat-turn assistant");
+    // Prose is wrapped in a bubble; the tool is a bubble in its own right.
+    expect(rendered.html).toBe(
+      `<div class="chat-bubble assistant">${rendered.parts[0].html}</div>` +
+        rendered.parts[1].html,
+    );
+    expect(rendered.parts[1].className).toBe("chat-tool standalone");
+  });
+
+  it("gives a tool-only turn no wrapping prose bubble", () => {
+    const msg: ChatMessage = {
+      id: "m2",
+      role: "assistant",
+      parts: [toolPart({ command: "ls" })],
+      createdAt: 0,
+    };
+    const rendered = renderMessage(msg);
+    expect(rendered.html).not.toContain("chat-bubble");
+    expect(rendered.html).toContain('class="chat-tool standalone"');
+  });
+});
+
+describe("groupParts", () => {
+  it("keeps consecutive prose parts in one group and splits each tool out", () => {
+    const groups = groupParts([
+      { type: "thinking", text: "hmm" },
+      { type: "text", text: "hi" },
+      toolPart({ command: "ls" }),
+      { type: "text", text: "done" },
+    ]);
+    expect(groups.map((g) => g.kind)).toEqual(["prose", "tool", "prose"]);
+    expect(groups[0].kind === "prose" && groups[0].parts).toHaveLength(2);
+  });
+
+  it("keys tool groups by toolId so open state survives a growing turn", () => {
+    const tool = toolPart({ command: "ls" });
+    const before = groupParts([tool]);
+    const after = groupParts([tool, { type: "text", text: "and then" }]);
+    expect(before[0].key).toBe("tool-t1");
+    expect(after[0].key).toBe(before[0].key);
   });
 });

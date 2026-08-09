@@ -26,6 +26,9 @@ const FileEditor = lazy(() =>
 const ChatView = lazy(() =>
   import("./ChatView").then((m) => ({ default: m.ChatView })),
 );
+// Dev colour-scheme tool; lazy so it costs nothing unless #theme is in the URL.
+const ThemeEditor = lazy(() => import("./ThemeEditor"));
+import { useThemeEditorOpen } from "./theme";
 import { CommandBuilder } from "./CommandBuilder";
 import { FolderPicker } from "./FolderPicker";
 import { Login } from "./Login";
@@ -227,6 +230,7 @@ function Workspace({
   username: string;
   onLogout: () => void;
 }) {
+  const themeEditorOpen = useThemeEditorOpen();
   const client = useMemo(() => new Client(), []);
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -1205,6 +1209,11 @@ function Workspace({
           onAdd={submitNewFolder}
           onClose={() => setFolderPickerOpen(false)}
         />
+      )}
+      {themeEditorOpen && (
+        <Suspense fallback={null}>
+          <ThemeEditor />
+        </Suspense>
       )}
     </div>
   );
