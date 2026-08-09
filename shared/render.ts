@@ -323,8 +323,34 @@ export interface RenderedMessage {
   html: string;
 }
 
-/** Render one part to the HTML the UI shows (see ChatView's Bubble/ToolPart). */
-export function renderPart(part: ChatPart): RenderedPart {
+/** One display group of an assistant message: a run of prose parts sharing a
+ * bubble, or a single tool call standing as its own bubble. */
+export type PartGroup =
+  | { kind: "prose"; key: string; parts: ChatPart[] }
+  | { kind: "tool"; key: string; part: Extract<ChatPart, { type: "tool" }> };
+
+/** Split an assistant message into display groups. A turn is overwhelmingly
+ * either prose or a tool call, so a tool gets its own bubble rather than a card
+ * nested inside a near-empty one; a mixed turn just becomes several bubbles. */
+export function groupParts(parts: ChatPart[]): PartGroup[] {
+  const groups: PartGroup[] = [];
+  parts.forEach((part, i) => {
+    if (part.type === "tool") {
+      // Keyed by toolId so React keeps its <details> open state as the turn grows.
+      groups.push({ kind: "tool", key: `tool-${part.toolId}`, part });
+      return;
+    }
+    const last = groups[groups.length - 1];
+    if (last?.kind === "prose") last.parts.push(part);
+    else groups.push({ kind: "prose", key: `prose-${i}`, parts: [part] });
+  });
+  return groups;
+}
+
+/** Render one part to the HTML the UI shows (see ChatView's Bubble/ToolPart).
+ * `standalone` marks a tool that is its own bubble rather than nested in one
+ * (the permission card embeds a nested one). */
+export function renderPart(part: ChatPart, standalone = false): RenderedPart {
   switch (part.type) {
     case "text":
       return {
@@ -379,11 +405,12 @@ export function renderPart(part: ChatPart): RenderedPart {
       const output = part.output
         ? `<pre class="chat-tool-output">${escapeHtml(part.output)}</pre>`
         : "";
+      const cls = standalone ? "chat-tool standalone" : "chat-tool";
       return {
         type: "tool",
         component: "ToolPart",
-        className: "chat-tool",
-        html: `<details class="chat-tool" data-status="${part.status}">${summary}${body}${output}</details>`,
+        className: cls,
+        html: `<details class="${cls}" data-status="${part.status}">${summary}${body}${output}</details>`,
       };
     }
   }
@@ -413,12 +440,32 @@ export function renderMessage(message: ChatMessage): RenderedMessage {
       html,
     };
   }
-  const parts = message.parts.map(renderPart);
+  // An assistant turn is a row of bubbles, not one: prose runs get a bubble
+  // each, tool calls stand alone. `html` carries those wrappers so the render
+  // log matches what ChatView actually shows.
+  const parts: RenderedPart[] = [];
+  const html = groupParts(message.parts)
+    .map((g) => {
+      if (g.kind === "tool") {
+        const rendered = renderPart(g.part, true);
+        parts.push(rendered);
+        return rendered.html;
+      }
+      const inner = g.parts
+        .map((p) => {
+          const rendered = renderPart(p);
+          parts.push(rendered);
+          return rendered.html;
+        })
+        .join("");
+      return `<div class="chat-bubble assistant">${inner}</div>`;
+    })
+    .join("");
   return {
     id: message.id,
     role: "assistant",
-    bubbleClassName: "chat-bubble assistant",
+    bubbleClassName: "chat-turn assistant",
     parts,
-    html: parts.map((p) => p.html).join(""),
+    html,
   };
 }

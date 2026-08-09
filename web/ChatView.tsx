@@ -17,7 +17,7 @@ import type {
   ChatUsage,
   RewindPreview,
 } from "../shared/protocol";
-import { renderMarkdown, toolGlyph, toolView } from "../shared/render";
+import { groupParts, renderMarkdown, toolGlyph, toolView } from "../shared/render";
 import type { ToolBody } from "../shared/render";
 import type { Client } from "./client";
 import { relativeTime } from "./time";
@@ -73,14 +73,21 @@ function ToolBodyView({ body }: { body: ToolBody }) {
 function ToolPart({
   part,
   open,
+  standalone,
 }: {
   part: Extract<ChatPart, { type: "tool" }>;
   open?: boolean;
+  /** Its own bubble in the transcript, vs. nested inside a permission card. */
+  standalone?: boolean;
 }) {
   const glyph = toolGlyph(part.status);
   const view = toolView(part);
   return (
-    <details className="chat-tool" data-status={part.status} open={open}>
+    <details
+      className={`chat-tool${standalone ? " standalone" : ""}`}
+      data-status={part.status}
+      open={open}
+    >
       <summary>
         <span className="chat-tool-glyph">{glyph}</span>
         <span className="chat-tool-name">{part.name}</span>
@@ -148,35 +155,49 @@ function Bubble({
       </div>
     );
   }
+  // One bubble per run of prose, one standalone bubble per tool call — a turn
+  // is almost always all one or all the other (see groupParts).
   return (
-    <div className={`chat-bubble assistant${streaming ? " streaming" : ""}`}>
-      {message.parts.map((part, i) => {
-        switch (part.type) {
-          case "text":
-            return <Markdown key={i} text={part.text} />;
-          case "thinking":
-            // No reasoning text (claude never streams it) → a plain live
-            // "Thinking…" label; the reducer strips this part once the next
-            // part starts. With text (pi) → the collapsible transcript.
-            return part.text.trim() === "" ? (
-              <div key={i} className="chat-thinking-label">
-                Thinking…
-              </div>
-            ) : (
-              <details key={i} className="chat-thinking">
-                <summary>Thinking…</summary>
-                <div>{part.text}</div>
-              </details>
-            );
-          case "tool":
-            return <ToolPart key={part.toolId} part={part} />;
-        }
-      })}
+    <div className={`chat-turn assistant${streaming ? " streaming" : ""}`}>
+      {groupParts(message.parts).map((group) =>
+        group.kind === "tool" ? (
+          <ToolPart key={group.key} part={group.part} standalone />
+        ) : (
+          <div key={group.key} className="chat-bubble assistant">
+            {group.parts.map((part, i) => (
+              <ProsePart key={i} part={part} />
+            ))}
+          </div>
+        ),
+      )}
       {streaming && message.parts.length === 0 && (
-        <span className="chat-cursor" />
+        <div className="chat-bubble assistant">
+          <span className="chat-cursor" />
+        </div>
       )}
     </div>
   );
+}
+
+function ProsePart({ part }: { part: ChatPart }) {
+  switch (part.type) {
+    case "text":
+      return <Markdown text={part.text} />;
+    case "thinking":
+      // No reasoning text (claude never streams it) → a plain live "Thinking…"
+      // label; the reducer strips this part once the next part starts. With
+      // text (pi) → the collapsible transcript.
+      return part.text.trim() === "" ? (
+        <div className="chat-thinking-label">Thinking…</div>
+      ) : (
+        <details className="chat-thinking">
+          <summary>Thinking…</summary>
+          <div>{part.text}</div>
+        </details>
+      );
+    default:
+      return null;
+  }
 }
 
 // Material `smart_toy` (robot head) — the AI-assistant (LLM UI-mode) glyph;
