@@ -77,6 +77,10 @@ function baseName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
 }
 
+function joinPath(dir: string, name: string): string {
+  return dir ? `${dir}/${name}` : name;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const r = await fetch(url);
   if (!r.ok) {
@@ -114,6 +118,13 @@ export function FileEditor({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [newFileName, setNewFileName] = useState<string | null>(null);
+  // Destination for uploads ("" = folder root), named in the Upload button so
+  // it's never ambiguous where a file will land.
+  const [selectedDir, setSelectedDir] = useState("");
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- editor state ---------------------------------------------------------
   const [doc, setDoc] = useState<OpenDoc | null>(null);
@@ -148,6 +159,7 @@ export function FileEditor({
   }, [doc, onOpenFileChange]);
 
   const toggleDir = (path: string) => {
+    setSelectedDir(path);
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(path)) {
@@ -158,6 +170,55 @@ export function FileEditor({
       }
       return next;
     });
+  };
+
+  const downloadUrl = (path: string) =>
+    `/api/download?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`;
+
+  // Upload into `selectedDir`, one request per file. A 409 means the name is
+  // taken — confirm before retrying with overwrite, since the tree gives no
+  // other warning.
+  const uploadFiles = async (files: File[]) => {
+    if (!files.length || uploading) return;
+    setUploading(true);
+    setPickerError(null);
+    let done = 0;
+    try {
+      for (const file of files) {
+        const rel = joinPath(selectedDir, file.name);
+        setUploadStatus(
+          files.length > 1
+            ? `Uploading ${done + 1}/${files.length}: ${file.name}…`
+            : `Uploading ${file.name}…`,
+        );
+        const post = (overwrite: boolean) =>
+          fetch(
+            `/api/file-upload?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(rel)}` +
+              (overwrite ? "&overwrite=1" : ""),
+            { method: "POST", body: file },
+          );
+        let r = await post(false);
+        if (r.status === 409) {
+          if (!window.confirm(`${rel} already exists. Overwrite it?`)) continue;
+          r = await post(true);
+        }
+        if (!r.ok) {
+          const msg = await r.json().catch(() => ({ message: "Upload failed." }));
+          throw new Error(`${file.name}: ${msg.message ?? "Upload failed."}`);
+        }
+        done++;
+      }
+      setUploadStatus(done ? `Uploaded ${done} file${done === 1 ? "" : "s"}` : null);
+      setTimeout(() => setUploadStatus(null), 2000);
+    } catch (e) {
+      setPickerError((e as Error).message);
+      setUploadStatus(null);
+    } finally {
+      setUploading(false);
+      // Reveal what just landed.
+      setExpanded((prev) => new Set(prev).add(selectedDir));
+      loadDir(selectedDir);
+    }
   };
 
   const openFile = (path: string) => {
@@ -267,22 +328,38 @@ export function FileEditor({
     if (!entries) return null;
     return entries.map((entry) => {
       const isOpen = expanded.has(entry.path);
+      const isDir = entry.type === "dir";
       return (
         <div key={entry.path}>
-          <button
-            className="file-row"
-            style={{ paddingLeft: 8 + depth * 14 }}
-            onClick={() =>
-              entry.type === "dir" ? toggleDir(entry.path) : openFile(entry.path)
-            }
-            title={entry.path}
+          <div
+            className={`file-row-wrap${
+              isDir && entry.path === selectedDir ? " selected" : ""
+            }`}
           >
-            <span className="file-row-icon">
-              {entry.type === "dir" ? (isOpen ? "▾" : "▸") : "·"}
-            </span>
-            <span className="file-row-name">{entry.name}</span>
-          </button>
-          {entry.type === "dir" && isOpen && renderTree(entry.path, depth + 1)}
+            <button
+              className="file-row"
+              style={{ paddingLeft: 8 + depth * 14 }}
+              onClick={() => (isDir ? toggleDir(entry.path) : openFile(entry.path))}
+              title={entry.path}
+            >
+              <span className="file-row-icon">
+                {isDir ? (isOpen ? "▾" : "▸") : "·"}
+              </span>
+              <span className="file-row-name">{entry.name}</span>
+            </button>
+            {!isDir && (
+              <a
+                className="file-row-download"
+                href={downloadUrl(entry.path)}
+                download={entry.name}
+                title={`Download ${entry.name}`}
+                aria-label={`Download ${entry.name}`}
+              >
+                ↓
+              </a>
+            )}
+          </div>
+          {isDir && isOpen && renderTree(entry.path, depth + 1)}
         </div>
       );
     });
@@ -298,12 +375,32 @@ export function FileEditor({
           <div className="editor-picker-head">
             <span className="editor-picker-title">Open a file</span>
             {newFileName === null ? (
-              <button
-                className="editor-new-button"
-                onClick={() => setNewFileName("")}
-              >
-                New file
-              </button>
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    void uploadFiles(Array.from(e.target.files ?? []));
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  className="editor-new-button"
+                  disabled={uploading}
+                  onClick={() => fileInputRef.current?.click()}
+                  title={`Upload into ${selectedDir || baseName(cwd) || "the folder root"}`}
+                >
+                  {uploading ? "Uploading…" : `Upload to ${selectedDir || "/"}`}
+                </button>
+                <button
+                  className="editor-new-button"
+                  onClick={() => setNewFileName("")}
+                >
+                  New file
+                </button>
+              </>
             ) : (
               <div className="editor-new-form">
                 <input
@@ -325,8 +422,23 @@ export function FileEditor({
           </div>
           {pickerError && <div className="editor-error">{pickerError}</div>}
           {loading && <div className="editor-status-line">Opening…</div>}
+          {uploadStatus && <div className="editor-status-line">{uploadStatus}</div>}
           {status && !loading && <div className="editor-error">{status}</div>}
-          <div className="file-tree">{renderTree("", 0)}</div>
+          <div
+            className={`file-tree${dragging ? " dragover" : ""}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              void uploadFiles(Array.from(e.dataTransfer.files));
+            }}
+          >
+            {renderTree("", 0)}
+          </div>
         </>
       ) : (
         <>
@@ -343,6 +455,17 @@ export function FileEditor({
               {dirty ? " •" : ""}
             </span>
             {status && <span className="editor-save-status">{status}</span>}
+            {!doc.isNew && (
+              <a
+                className="file-row-download editor-download"
+                href={downloadUrl(doc.path)}
+                download={baseName(doc.path)}
+                title={`Download ${baseName(doc.path)}`}
+                aria-label={`Download ${baseName(doc.path)}`}
+              >
+                ↓
+              </a>
+            )}
             <button
               className="editor-save-button"
               onClick={save}
