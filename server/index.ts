@@ -21,7 +21,14 @@ import {
 } from "./db.js";
 import { recordChatRenders, forgetChatRenders } from "./chatLog.js";
 import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
-import { listDir, readTextFile, writeTextFile } from "./files.js";
+import {
+  listDir,
+  readTextFile,
+  writeTextFile,
+  openDownload,
+  saveBinaryFile,
+  statEntry,
+} from "./files.js";
 import { browseDirs } from "./browse.js";
 import {
   saveUpload,
@@ -287,6 +294,51 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
       return;
     }
   }
+  // File transfer: download any file out of a folder, upload any file into it.
+  // Same auth + folder allowlist as /api/file; files.ts confines the path. Both
+  // stream, so a large artifact never buffers in memory.
+  if (pathname === "/api/download" && req.method === "GET") {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const params = new URL(url, "http://x").searchParams;
+    const cwd = params.get("cwd") ?? "";
+    const path = params.get("path") ?? "";
+    if (!listFolders().some((f) => f.path === cwd))
+      return sendJsonError(res, 400, "Unknown folder.");
+    void openDownload(cwd, path).then(
+      ({ size, name, stream }) => {
+        res.setHeader("content-type", "application/octet-stream");
+        res.setHeader("content-length", String(size));
+        res.setHeader("content-disposition", contentDisposition(name));
+        stream.pipe(res);
+        stream.on("error", () => res.destroy());
+      },
+      (err: unknown) => sendJsonError(res, 400, (err as Error).message),
+    );
+    return;
+  }
+  if (pathname === "/api/file-upload" && req.method === "POST") {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const params = new URL(url, "http://x").searchParams;
+    const cwd = params.get("cwd") ?? "";
+    const path = params.get("path") ?? "";
+    const overwrite = params.get("overwrite") === "1";
+    if (!listFolders().some((f) => f.path === cwd))
+      return sendJsonError(res, 400, "Unknown folder.");
+    void statEntry(cwd, path)
+      .then(async (existing) => {
+        if (existing?.isDir) throw new Error("Path is a directory.");
+        // 409 lets the client confirm an overwrite and retry; the picker gives
+        // no other warning that a name is already taken.
+        if (existing && !overwrite) {
+          res.statusCode = 409;
+          return sendJson(res, { message: "File already exists.", exists: true });
+        }
+        await saveBinaryFile(cwd, path, req);
+        sendJson(res, { ok: true });
+      })
+      .catch((err: unknown) => sendJsonError(res, 400, (err as Error).message));
+    return;
+  }
   // Image uploads: store a user's attached image (POST) and serve it back
   // (GET). Both auth-gated; the serve route additionally enforces per-user
   // ownership so a guessed id can't leak another user's image.
@@ -351,6 +403,13 @@ function sendJsonError(res: ServerResponse, status: number, message: string): vo
   res.statusCode = status;
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify({ message }));
+}
+
+// Build a Content-Disposition for a download. Non-ASCII names need the RFC 5987
+// `filename*` form; the plain `filename` stays as an ASCII-only fallback.
+function contentDisposition(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
 // Read a raw text request body (PUT /api/file), capped so one write can't

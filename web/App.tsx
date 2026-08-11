@@ -722,8 +722,8 @@ function Workspace({
                     <button
                       className="header-icon-button"
                       onClick={openEditor}
-                      title="File edit"
-                      aria-label="File edit"
+                      title="Files"
+                      aria-label="Files"
                     >
                       <Icon path={EDIT_ICON} />
                     </button>
@@ -742,7 +742,7 @@ function Workspace({
                       ))}
                   </>
                 ) : (
-                  // Narrow: [+] holds the coding agents + File edit; Terminal is
+                  // Narrow: [+] holds the coding agents + Files; Terminal is
                   // pulled out as its own direct button (order: [+] then T).
                   <>
                     <div className="add-session" ref={addMenuRef}>
@@ -779,7 +779,7 @@ function Workspace({
                           {/* Not a harness: a client-only file-editor tab. */}
                           <button className="add-session-option" onClick={openEditor}>
                             <Icon path={EDIT_ICON} />
-                            File edit
+                            Files
                           </button>
                         </div>
                       )}
@@ -866,7 +866,7 @@ function Workspace({
                       }}
                     >
                       <span className="status-dot editor" />
-                      <span className="session-name" title="File edit">
+                      <span className="session-name" title="Files">
                         <Icon path={EDIT_ICON} />
                       </span>
                       <span className="session-meta" title={e.file ?? ""}>

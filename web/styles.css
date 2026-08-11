@@ -858,8 +858,14 @@ body {
   cursor: pointer;
 }
 
-.editor-new-form .editor-new-button {
+.editor-new-form .editor-new-button,
+.editor-picker-head .editor-new-button + .editor-new-button {
   margin-left: 0;
+}
+
+.editor-new-button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .editor-new-button:hover {
@@ -878,7 +884,8 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  flex: 1;
+  min-width: 0; /* lets .file-row-name ellipsize instead of overflowing the wrap */
   padding: 5px 10px;
   background: transparent;
   border: none;
@@ -889,8 +896,50 @@ body {
   cursor: pointer;
 }
 
-.file-row:hover {
+.file-row-wrap {
+  display: flex;
+  align-items: center;
+}
+
+.file-row-wrap:hover {
   background: var(--raised);
+}
+
+.file-row-wrap.selected {
+  background: color-mix(in srgb, var(--accent) 20%, var(--raised));
+}
+
+/* Faded rather than hover-only: touch has no hover, so it must stay reachable. */
+.file-row-download {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  text-decoration: none;
+  opacity: 0.4;
+  cursor: pointer;
+}
+
+.file-row-download:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--raised));
+  color: var(--accent);
+  opacity: 1;
+}
+
+.file-row-download:focus-visible {
+  outline: none;
+  opacity: 1;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.editor-download {
+  flex-shrink: 0;
+}
+
+.file-tree.dragover {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .file-row-icon {
