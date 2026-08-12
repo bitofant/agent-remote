@@ -37,7 +37,7 @@ import type {
   HarnessAdapter,
   SessionOptions,
 } from "./types.js";
-import { menuLabel, menuModels } from "./model-menu.js";
+import { menuLabel, menuModels, pickDefault } from "./model-menu.js";
 
 // Runtime permission-mode toggle (curated subset of PermissionMode, omits
 // bypassPermissions/dontAsk). `id` is passed to query.setPermissionMode.
@@ -53,9 +53,14 @@ const PERMISSION_MODES: {
 ];
 const DEFAULT_MODE: PermissionMode = "default";
 
-// The bare "opus" alias resolves to the latest Opus (tracks newest without a
-// version bump here). Seeds query({ model }) and the UI's initial selection.
-const DEFAULT_MODEL = "opus";
+// Preferred default model, most-wanted first: Opus Plan Mode where the catalog
+// offers it (enterprise), else plain Opus. pickDefault resolves this against the
+// live catalog — never a substring match, since "opusplan" contains "opus".
+const DEFAULT_MODELS = ["opusplan", "opus"];
+// Seeds query({ model }) before the catalog is known, so it must be a row every
+// catalog has: the bare "opus" alias, which tracks the latest Opus. When the
+// catalog turns out to offer a better match, loadControlInfo switches to it.
+const SEED_MODEL = "opus";
 
 // Permission-card option ids, shared by the emitted card and the ui-response
 // handler that maps one back to a decision, so the two never drift. These are
@@ -392,7 +397,7 @@ class ClaudeChatSession implements ChatSession {
         // default = auto-allow read-only, consult canUseTool for the rest.
         // Switchable at runtime via set-mode → setPermissionMode.
         permissionMode: this.mode,
-        model: this.model ?? DEFAULT_MODEL,
+        model: this.model ?? SEED_MODEL,
         // Snapshot files before edits so a rewind can offer to restore them
         // (Query.rewindFiles is gated on this).
         enableFileCheckpointing: true,
@@ -573,12 +578,24 @@ class ClaudeChatSession implements ChatSession {
         q.supportedCommands(),
       ]);
       // Apply the menu policy (latest-per-family, prior major on a bump), then
-      // reflect the seeded DEFAULT_MODEL as current; fall back to the first row.
+      // resolve DEFAULT_MODELS against it; fall back to the first row.
       // Deriving `current` from the pruned menu keeps it in sync with what's shown.
       const menu = menuModels(models);
-      const defaultModel =
-        menu.find((m: ModelInfo) => m.value.toLowerCase().includes(DEFAULT_MODEL)) ??
-        menu[0];
+      let current = pickDefault(menu, DEFAULT_MODELS) ?? menu[0];
+      // The seed was a guess made before the catalog was known. If the catalog
+      // offers something better, actually switch — otherwise the header would
+      // claim Opus Plan Mode while the CLI ran plain Opus (a behaviour gap, not a
+      // cosmetic one). Tracked on the instance so a rewind relaunch keeps it.
+      // Own try/catch: a catalog that refuses the switch must still get its model
+      // list and slash commands, and must keep reporting what's really running.
+      if (!this.model && current && current.value !== SEED_MODEL) {
+        try {
+          await q.setModel(current.value);
+          this.model = current.value;
+        } catch {
+          current = menu.find((m: ModelInfo) => m.value === SEED_MODEL) ?? current;
+        }
+      }
       this.emit({
         type: "models",
         models: menu.map((m: ModelInfo) => ({
@@ -586,7 +603,7 @@ class ClaudeChatSession implements ChatSession {
           label: menuLabel(m),
           description: m.description,
         })),
-        current: defaultModel?.value ?? null,
+        current: current?.value ?? null,
       });
       this.emit({
         type: "commands",
