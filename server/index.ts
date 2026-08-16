@@ -17,6 +17,8 @@ import {
   listResumableSessions,
   deleteChatSession,
   listChatRenderLog,
+  getUserView,
+  setUserView,
   closeDb,
 } from "./db.js";
 import { recordChatRenders, forgetChatRenders } from "./chatLog.js";
@@ -46,6 +48,7 @@ import type {
   ClientMessage,
   HarnessInfo,
   ServerMessage,
+  ViewState,
 } from "../shared/protocol.js";
 
 // Single port for UI, /api, and /ws. Dev (--dev): Vite in middleware mode on
@@ -223,6 +226,27 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
       const key = params.get("key") ?? "";
       if (key) deleteChatSession(key);
       return sendJson(res, { ok: true });
+    }
+  }
+  // Last view (folder + tab) of the requesting user. Read on page load, written
+  // as the view changes; deliberately not pushed over /ws, so an open tab is
+  // never yanked around by another device.
+  if (url === "/api/view") {
+    const user = authedUser(req, config);
+    if (!user) return sendUnauthorized(res);
+    if (req.method === "GET") return sendJson(res, getUserView(user));
+    if (req.method === "PUT") {
+      readTextBody(req)
+        .then((body) => {
+          const raw = JSON.parse(body) as Partial<ViewState>;
+          setUserView(user, {
+            folder: typeof raw.folder === "string" ? raw.folder : null,
+            sessionId: typeof raw.sessionId === "string" ? raw.sessionId : null,
+          });
+          sendJson(res, { ok: true });
+        })
+        .catch(() => sendJsonError(res, 400, "Bad view."));
+      return;
     }
   }
   // Chat render log (read-only diagnostics). ?session= filters, ?limit= caps rows.

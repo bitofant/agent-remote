@@ -13,6 +13,7 @@ import type {
   HarnessInfo,
   ResumableSession,
   SessionInfo,
+  ViewState,
 } from "../shared/protocol";
 import { ALLOW_EVERYTHING, isAllowEverything } from "../shared/chat";
 import { Client, type CtrlMode } from "./client";
@@ -242,6 +243,13 @@ function Workspace({
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   // Which session is shown for each folder.
   const [activeSession, setActiveSession] = useState<Record<string, string>>({});
+  // Server-persisted last view, applied once on load (see the restore effect):
+  // until then nothing else may pick a default folder, and nothing is saved.
+  const storedView = useRef<ViewState | null>(null);
+  const [viewRestored, setViewRestored] = useState(false);
+  const [viewFetched, setViewFetched] = useState(false);
+  // First WS snapshots have landed — the restore needs them to validate its ids.
+  const [snapshotSeen, setSnapshotSeen] = useState(false);
   // Resumable (closed) chat sessions for the active folder, from /api/resumable.
   const [resumable, setResumable] = useState<ResumableSession[]>([]);
   // Resume-session picker dialog (opened from the chat header's Resume button).
@@ -283,12 +291,29 @@ function Workspace({
       .then((r) => r.json())
       .then(setHarnesses)
       .catch(() => setHarnesses([]));
-    const offSessions = client.onSessions(setSessions);
+    // onSessions/onFolders replay their current value *synchronously* on
+    // subscribe (empty at mount) — only a later call is a message off the wire.
+    // The server sends `folders` before `sessions`, so that one means both
+    // snapshots landed; treating the replay as the snapshot restored the view
+    // against an empty folder list, i.e. never.
+    let replaying = true;
+    const offSessions = client.onSessions((next) => {
+      setSessions(next);
+      if (!replaying) setSnapshotSeen(true);
+    });
+    fetch("/api/view")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v: ViewState | null) => {
+        storedView.current = v;
+      })
+      .catch(() => {})
+      .finally(() => setViewFetched(true));
     const offFolders = client.onFolders((next, serverHome) => {
       setFolders(next);
       setHome(serverHome);
     });
     const offCtrl = client.onCtrl(setCtrlMode);
+    replaying = false;
     return () => {
       offSessions();
       offFolders();
@@ -357,12 +382,29 @@ function Workspace({
     setActiveFolder(folders[0].path);
   }, [folders]);
 
-  // Default to the most-recent folder once folders arrive.
+  // Restore the server-persisted view, once, on load. Runs after the snapshots
+  // so ids can be validated, and after the auto-select-new-session effect above
+  // (which treats the whole first batch as new) so it wins over it.
   useEffect(() => {
-    if (activeFolder === null && folders.length > 0) {
+    if (viewRestored || !viewFetched || !snapshotSeen) return;
+    setViewRestored(true);
+    const view = storedView.current;
+    const folder = view?.folder;
+    if (!folder || !folders.some((f) => f.path === folder)) return;
+    setActiveFolder(folder);
+    // A stale id (session closed, or a client-only editor tab) just falls back.
+    if (view.sessionId && sessions.some((s) => s.id === view.sessionId)) {
+      setActiveSession((prev) => ({ ...prev, [folder]: view.sessionId! }));
+    }
+  }, [viewRestored, viewFetched, snapshotSeen, folders, sessions]);
+
+  // Default to the most-recent folder once folders arrive — but never before
+  // the restore ran, or it would race the stored folder.
+  useEffect(() => {
+    if (viewRestored && activeFolder === null && folders.length > 0) {
       setActiveFolder(folders[0].path);
     }
-  }, [folders, activeFolder]);
+  }, [folders, activeFolder, viewRestored]);
 
   // Refetched on folder change and when the live session set changes (closing a
   // session makes it resumable, resuming one hides it).
@@ -462,6 +504,24 @@ function Workspace({
       : null;
   const activeSessionObj = sessionsInFolder.find((s) => s.id === activeSessionId);
   const activeExited = activeSessionObj?.status === "exited";
+
+  // Persist the view for the *next* page load (any device). Debounced, and never
+  // before the restore, or the initial default would overwrite what we stored.
+  useEffect(() => {
+    if (!viewRestored) return;
+    const t = setTimeout(() => {
+      void fetch("/api/view", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          folder: activeFolder,
+          sessionId: activeSessionId,
+        } satisfies ViewState),
+      }).catch(() => {});
+    }, 500);
+    return () => clearTimeout(t);
+  }, [viewRestored, activeFolder, activeSessionId]);
+
   const activeIsEditor = editorsInFolder.some((e) => e.id === activeSessionId);
   // Chat sessions have their own composer; terminal-only UI (key-bar, select
   // mode, command builder) is gated off for them.
