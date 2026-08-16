@@ -35,6 +35,17 @@ export interface FolderInfo {
   lastUsedAt: number;
 }
 
+/** Which folder/tab a user was last looking at, persisted per user so a fresh
+ * page load on another device opens the same view (`GET/PUT /api/view`).
+ * Restored on load only — never live-synced, so two open browsers don't yank
+ * each other's view around. */
+export interface ViewState {
+  folder: string | null;
+  /** Live session id, or null. Editor tabs are client-only, so an id that no
+   * longer exists just falls back to the folder's default tab. */
+  sessionId: string | null;
+}
+
 /** A previously-run chat session that can be resumed. Persisted per folder and
  * surfaced by `GET /api/resumable?cwd=…`; `resumeKey` is the opaque,
  * harness-native handle passed back on a resuming `start`. */

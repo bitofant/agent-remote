@@ -1,7 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
-import type { FolderInfo, ResumableSession } from "../shared/protocol.js";
+import type {
+  FolderInfo,
+  ResumableSession,
+  ViewState,
+} from "../shared/protocol.js";
 import { expandHome, normalizeFolder } from "./paths.js";
 
 // The project's only persistence layer: folders, user accounts, login sessions,
@@ -98,6 +102,16 @@ db.exec(
    )`,
 );
 db.exec("CREATE INDEX IF NOT EXISTS uploads_created ON uploads(created_at)");
+// Last view (folder + tab) per user, so a page load on another device resumes
+// where you left off. One row per user, overwritten in place.
+db.exec(
+  `CREATE TABLE IF NOT EXISTS user_views (
+     owner TEXT PRIMARY KEY,
+     folder TEXT,
+     session_id TEXT,
+     updated_at INTEGER NOT NULL
+   )`,
+);
 
 const listStmt = db.prepare(
   "SELECT path, last_used_at AS lastUsedAt FROM folders ORDER BY last_used_at DESC",
@@ -489,6 +503,35 @@ export function staleUploadIds(retention = UPLOAD_RETENTION): string[] {
   return (staleUploadIdsStmt.all(retention) as { id: string }[]).map(
     (r) => r.id,
   );
+}
+
+// --- last view -------------------------------------------------------------
+
+const getViewStmt = db.prepare(
+  "SELECT folder, session_id AS sessionId FROM user_views WHERE owner = ?",
+);
+const setViewStmt = db.prepare(
+  `INSERT INTO user_views (owner, folder, session_id, updated_at)
+   VALUES (@owner, @folder, @sessionId, @updatedAt)
+   ON CONFLICT(owner) DO UPDATE SET
+     folder = excluded.folder,
+     session_id = excluded.session_id,
+     updated_at = excluded.updated_at`,
+);
+
+export function getUserView(owner: string): ViewState {
+  const row = getViewStmt.get(owner) as ViewState | undefined;
+  return { folder: row?.folder ?? null, sessionId: row?.sessionId ?? null };
+}
+
+export function setUserView(owner: string, view: ViewState): void {
+  setViewStmt.run({
+    owner,
+    // Normalize at the persistence boundary, like every other folder column.
+    folder: view.folder ? normalizeFolder(view.folder) : null,
+    sessionId: view.sessionId ?? null,
+    updatedAt: Date.now(),
+  });
 }
 
 // --- shutdown --------------------------------------------------------------
