@@ -384,12 +384,9 @@ export class SessionManager {
       return;
     }
     if (action.type === "prompt") {
-      // Sending consumes the draft. The stored copy lags by a keystroke or two
-      // (clients debounce), so anything the prompt grew out of counts as
-      // consumed — text typed *after* Send is a new draft and must survive.
-      const stored = (session.chat?.draft ?? "").trim();
-      if (stored && action.text.trim().startsWith(stored))
-        this.applyChat(session, { type: "draft", text: "" });
+      // Sending consumes the draft, whatever it holds. (Guarded only to skip a
+      // no-op broadcast: the sender usually cleared it already.)
+      if (session.chat?.draft) this.applyChat(session, { type: "draft", text: "" });
     }
     if (session.chatSession) {
       session.chatSession.action(action);
