@@ -477,6 +477,10 @@ export interface ChatState {
   capabilities: ChatCapabilities;
   /** Latest rewind dry-run result, or null when no dialog is pending. */
   rewindPreview: RewindPreview | null;
+  /** The composer's unsent text, kept server-side so a reload/navigation doesn't
+   * lose what was being typed (the chat analogue of a terminal's unsubmitted
+   * line living in the PTY). Cleared when the prompt is actually sent. */
+  draft: string;
 }
 
 /** Normalized streaming events a chat adapter emits. */
@@ -530,7 +534,10 @@ export type ChatEvent =
    * harness has actually truncated its own context. */
   | { type: "rewind"; messageId: string }
   /** Result of a rewind dry-run (or null to clear it). */
-  | { type: "rewind-preview"; preview: RewindPreview | null };
+  | { type: "rewind-preview"; preview: RewindPreview | null }
+  /** The session's unsent composer text changed (typed, or cleared on send).
+   * Server-authoritative so every client/reload sees the same draft. */
+  | { type: "draft"; text: string };
 
 /** Actions the browser can take on a chat session. */
 export type ChatAction =
@@ -567,7 +574,10 @@ export type ChatAction =
   | { type: "rewind"; messageId: string; restoreFiles?: boolean }
   /** Ask what a rewind to this prompt would change on disk (dry run); the
    * adapter replies with a `rewind-preview` event. */
-  | { type: "rewind-preview"; messageId: string };
+  | { type: "rewind-preview"; messageId: string }
+  /** Stash the composer's unsent text so it survives a reload. Handled by the
+   * manager itself (not the adapter) — harness-agnostic. */
+  | { type: "set-draft"; text: string };
 
 /** Messages the browser sends to the backend. */
 export type ClientMessage =

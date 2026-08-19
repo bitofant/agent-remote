@@ -867,6 +867,13 @@ export function ChatView({
     return initial;
   });
   const [draft, setDraft] = useState("");
+  // The unsent draft lives server-side (see ChatState.draft) so a reload or a
+  // trip through another folder doesn't lose it. `syncedDraft` is what the
+  // server last heard from us, so its echo never fights the caret.
+  const syncedDraft = useRef("");
+  // Has the server echoed our latest push back? Its state is stale until then.
+  const acked = useRef(true);
+  const resizePending = useRef(false);
   // Pending image attachments for the next prompt. Each uploads independently;
   // only `ready` ones are sent.
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -952,6 +959,55 @@ export function ChatView({
     if (active && !exited) textareaRef.current?.focus();
   }, [active, exited]);
 
+  const pushDraft = useCallback(
+    (text: string) => {
+      if (syncedDraft.current === text) return;
+      syncedDraft.current = text;
+      acked.current = false;
+      client.chatAction(sessionId, { type: "set-draft", text });
+    },
+    [client, sessionId],
+  );
+
+  // Keystrokes are debounced; the unmount flush catches a tab closed mid-word.
+  useEffect(() => {
+    if (draft === syncedDraft.current) return;
+    const t = setTimeout(() => pushDraft(draft), 300);
+    return () => clearTimeout(t);
+  }, [draft, pushDraft]);
+
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  useEffect(() => () => pushDraft(draftRef.current), [pushDraft]);
+
+  // Adopt a draft we didn't write: the snapshot restored after a reload (what
+  // this is all for), or another tab/device typing.
+  useEffect(() => {
+    if (state.draft === syncedDraft.current) {
+      acked.current = true;
+      return;
+    }
+    // Until the server echoes our latest push its value is stale — adopting it
+    // would resurrect a keystroke (or a whole just-sent prompt) from in flight.
+    if (!acked.current) return;
+    // Never shift text under an active caret; an empty composer has nothing to
+    // lose, and that's exactly the reload case (focus lands there on mount).
+    if (draft !== "" && document.activeElement === textareaRef.current) return;
+    syncedDraft.current = state.draft;
+    setDraft(state.draft);
+    resizePending.current = true;
+  }, [state.draft, draft]);
+
+  // Adopted text needs the same auto-grow typing gets, but only once React has
+  // rendered it (scrollHeight is measured on the new value, not the old).
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta || !resizePending.current) return;
+    resizePending.current = false;
+    ta.style.height = "auto";
+    if (draft) ta.style.height = `${ta.scrollHeight}px`;
+  }, [draft]);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -998,12 +1054,24 @@ export function ChatView({
       images: images.length ? images : undefined,
     });
     setDraft("");
+    // Clear the stored draft now rather than waiting for the debounce — the
+    // send may have outrun it, leaving a stale tail on the server.
+    pushDraft("");
     for (const a of attachments) URL.revokeObjectURL(a.previewUrl);
     setAttachments([]);
     nearBottomRef.current = true;
     const ta = textareaRef.current;
     if (ta) ta.style.height = "auto";
-  }, [client, sessionId, draft, attachments, canResume, onResume, canRewind]);
+  }, [
+    client,
+    sessionId,
+    draft,
+    attachments,
+    canResume,
+    onResume,
+    canRewind,
+    pushDraft,
+  ]);
 
   // Auto-grow the composer with its content (up to the CSS max-height).
   const onDraftChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {

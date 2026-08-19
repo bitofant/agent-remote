@@ -378,6 +378,16 @@ export class SessionManager {
       });
       return;
     }
+    // The unsent composer text is ours too (harness-agnostic).
+    if (action.type === "set-draft") {
+      this.applyChat(session, { type: "draft", text: action.text });
+      return;
+    }
+    if (action.type === "prompt") {
+      // Sending consumes the draft, whatever it holds. (Guarded only to skip a
+      // no-op broadcast: the sender usually cleared it already.)
+      if (session.chat?.draft) this.applyChat(session, { type: "draft", text: "" });
+    }
     if (session.chatSession) {
       session.chatSession.action(action);
       return;
