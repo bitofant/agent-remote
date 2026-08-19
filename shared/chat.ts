@@ -77,6 +77,7 @@ export function emptyChatState(): ChatState {
     assistantTraces: [],
     capabilities: {},
     rewindPreview: null,
+    draft: "",
   };
 }
 
@@ -245,6 +246,9 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 
     case "assistant-config":
       return { ...state, assistant: event.settings };
+
+    case "draft":
+      return state.draft === event.text ? state : { ...state, draft: event.text };
 
     case "assistant-decision":
       return {

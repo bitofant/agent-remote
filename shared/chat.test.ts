@@ -323,6 +323,34 @@ describe("applyChatEvent", () => {
     expect(emptyChatState().promptSuggestions).toEqual([]);
   });
 
+  it("folds the unsent composer draft, and keeps it across a rewind", () => {
+    const state = reduce([
+      {
+        type: "user-message",
+        message: {
+          id: "u1",
+          role: "user",
+          parts: [{ type: "text", text: "first" }],
+          createdAt: 0,
+        },
+      },
+      { type: "draft", text: "half-written th" },
+    ]);
+    expect(state.draft).toBe("half-written th");
+    // A rewind prefills the composer, so it must not wipe the stored draft.
+    const rewound = applyChatEvent(state, {
+      type: "rewind",
+      messageId: state.messages[0].id,
+    });
+    expect(rewound.draft).toBe("half-written th");
+    expect(applyChatEvent(rewound, { type: "draft", text: "" }).draft).toBe("");
+  });
+
+  it("returns the same state when the draft is unchanged", () => {
+    const state = reduce([{ type: "draft", text: "x" }]);
+    expect(applyChatEvent(state, { type: "draft", text: "x" })).toBe(state);
+  });
+
   it("leaves state untouched for an unknown/newer event (deploy-skew safety)", () => {
     const before = reduce([{ type: "busy", busy: true }]);
     // Simulate a server ahead of this client emitting an event type it doesn't

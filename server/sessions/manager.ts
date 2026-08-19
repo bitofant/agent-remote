@@ -378,6 +378,19 @@ export class SessionManager {
       });
       return;
     }
+    // The unsent composer text is ours too (harness-agnostic).
+    if (action.type === "set-draft") {
+      this.applyChat(session, { type: "draft", text: action.text });
+      return;
+    }
+    if (action.type === "prompt") {
+      // Sending consumes the draft. The stored copy lags by a keystroke or two
+      // (clients debounce), so anything the prompt grew out of counts as
+      // consumed — text typed *after* Send is a new draft and must survive.
+      const stored = (session.chat?.draft ?? "").trim();
+      if (stored && action.text.trim().startsWith(stored))
+        this.applyChat(session, { type: "draft", text: "" });
+    }
     if (session.chatSession) {
       session.chatSession.action(action);
       return;
