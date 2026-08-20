@@ -806,11 +806,90 @@ body {
 
 /* --- File editor (picker + CodeMirror) ----------------------------------- */
 
+/* A row, not a column: the picker/editor column is .editor-main, so a media
+   preview can take the other half (see .editor-preview). */
 .editor-panel {
   position: absolute;
   inset: 0;
-  flex-direction: column;
+}
+
+.editor-main {
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Desktop: the right half of the panel, raised a step so the split reads
+   without a rule. Mobile: a full-screen scrim (see the 640px block). */
+.editor-preview {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  background: var(--panel);
+}
+
+/* width/height 100% (not max-*) so it scales up as well as down; contain keeps
+   the aspect ratio. */
+.editor-preview-media {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  border-radius: var(--r-md);
+}
+
+/* Deliberately near-invisible so it never competes with the media. White on
+   arbitrary media is one of the non-theme exceptions — no palette var stays
+   legible over a photo. */
+.editor-preview-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  padding: 2px 8px;
+  background: transparent;
+  border-radius: var(--r-sm);
+  color: rgba(255, 255, 255, 0.2);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.editor-preview-close:hover,
+.editor-preview-close:focus-visible {
+  outline: none;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.editor-preview-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  /* No room to split: take the viewport. Above the mobile sidebar (40) because
+     the preview covers the title bar that opens it; below dialogs (50). */
+  .editor-preview {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.9);
+  }
+
+  .editor-preview-media {
+    border-radius: 0;
+  }
 }
 
 .editor-picker-head,

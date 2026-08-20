@@ -30,7 +30,9 @@ import {
   openDownload,
   saveBinaryFile,
   statEntry,
+  parseRange,
 } from "./files.js";
+import { mediaTypeFor } from "../shared/media.js";
 import { browseDirs } from "./browse.js";
 import {
   saveUpload,
@@ -345,6 +347,50 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
     );
     return;
   }
+  // Inline media for the Files-tab preview. Separate from /api/download (always
+  // an attachment) because a preview needs a real content-type, an inline
+  // disposition and Range: Safari won't start a <video> without a 206.
+  if (pathname === "/api/media" && req.method === "GET") {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    const params = new URL(url, "http://x").searchParams;
+    const cwd = params.get("cwd") ?? "";
+    const path = params.get("path") ?? "";
+    if (!listFolders().some((f) => f.path === cwd))
+      return sendJsonError(res, 400, "Unknown folder.");
+    // Closed allowlist: this route can never serve text/html out of a folder.
+    const mediaType = mediaTypeFor(path);
+    if (!mediaType) return sendJsonError(res, 400, "Not a previewable media file.");
+    void statEntry(cwd, path)
+      .then(async (info) => {
+        if (!info || info.isDir) return sendJsonError(res, 404, "File not found.");
+        const range = parseRange(req.headers.range, info.size);
+        if (range === "unsatisfiable") {
+          res.statusCode = 416;
+          res.setHeader("content-range", `bytes */${info.size}`);
+          return res.end();
+        }
+        const { name, stream } = await openDownload(cwd, path, range ?? undefined);
+        res.setHeader("content-type", mediaType);
+        res.setHeader("accept-ranges", "bytes");
+        res.setHeader("content-disposition", contentDisposition(name, "inline"));
+        res.setHeader("cache-control", "private, no-store"); // the agent rewrites these
+        res.setHeader("x-content-type-options", "nosniff");
+        res.setHeader("content-security-policy", "default-src 'none'; sandbox");
+        if (range) {
+          res.statusCode = 206;
+          res.setHeader("content-range", `bytes ${range.start}-${range.end}/${info.size}`);
+          res.setHeader("content-length", String(range.end - range.start + 1));
+        } else {
+          res.setHeader("content-length", String(info.size));
+        }
+        stream.pipe(res);
+        stream.on("error", () => res.destroy());
+        // Dismissing a large video mid-load would otherwise leak an fd.
+        res.on("close", () => stream.destroy());
+      })
+      .catch((err: unknown) => sendJsonError(res, 400, (err as Error).message));
+    return;
+  }
   if (pathname === "/api/file-upload" && req.method === "POST") {
     if (!authedUser(req, config)) return sendUnauthorized(res);
     const params = new URL(url, "http://x").searchParams;
@@ -436,9 +482,12 @@ function sendJsonError(res: ServerResponse, status: number, message: string): vo
 
 // Build a Content-Disposition for a download. Non-ASCII names need the RFC 5987
 // `filename*` form; the plain `filename` stays as an ASCII-only fallback.
-function contentDisposition(name: string): string {
+function contentDisposition(
+  name: string,
+  kind: "attachment" | "inline" = "attachment",
+): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
 // Read a raw text request body (PUT /api/file), capped so one write can't

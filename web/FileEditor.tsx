@@ -19,6 +19,7 @@ import { sql } from "@codemirror/lang-sql";
 import { php } from "@codemirror/lang-php";
 import { java } from "@codemirror/lang-java";
 import type { DirListing, FileContent, FileEntry } from "../shared/protocol";
+import { mediaKindFor, type MediaKind } from "../shared/media";
 
 // Map a filename to a CodeMirror language extension for syntax highlighting.
 // Unknown extensions get no language (plain text) rather than a wrong one.
@@ -135,6 +136,14 @@ export function FileEditor({
   const editorHostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
 
+  // --- media preview --------------------------------------------------------
+  // Invariant: only ever open while doc === null, so the left pane is always the
+  // picker (opening or creating a text file closes it).
+  const [preview, setPreview] = useState<{ path: string; kind: MediaKind } | null>(
+    null,
+  );
+  const [previewError, setPreviewError] = useState(false);
+
   const loadDir = useCallback(
     (path: string) => {
       fetchJson<DirListing>(
@@ -155,8 +164,9 @@ export function FileEditor({
   }, [loadDir]);
 
   useEffect(() => {
-    onOpenFileChange?.(doc ? baseName(doc.path) : null);
-  }, [doc, onOpenFileChange]);
+    const shown = doc?.path ?? preview?.path ?? null;
+    onOpenFileChange?.(shown ? baseName(shown) : null);
+  }, [doc, preview, onOpenFileChange]);
 
   const toggleDir = (path: string) => {
     setSelectedDir(path);
@@ -174,6 +184,9 @@ export function FileEditor({
 
   const downloadUrl = (path: string) =>
     `/api/download?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`;
+
+  const mediaUrl = (path: string) =>
+    `/api/media?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`;
 
   // Upload into `selectedDir`, one request per file. A 409 means the name is
   // taken — confirm before retrying with overwrite, since the tree gives no
@@ -222,6 +235,16 @@ export function FileEditor({
   };
 
   const openFile = (path: string) => {
+    // Media never round-trips through /api/file (which would read the whole file
+    // just to refuse it as binary); clicking another one swaps the preview.
+    const kind = mediaKindFor(path);
+    if (kind) {
+      setPreviewError(false);
+      setPreview({ path, kind });
+      setStatus(null);
+      return;
+    }
+    setPreview(null);
     setLoading(true);
     setStatus(null);
     fetchJson<FileContent>(
@@ -239,6 +262,7 @@ export function FileEditor({
     const name = (newFileName ?? "").trim();
     if (!name) return;
     setNewFileName(null);
+    setPreview(null);
     setDoc({ path: name, content: "", isNew: true });
     setDirty(true);
     setStatus(null);
@@ -309,7 +333,7 @@ export function FileEditor({
     // every keystroke (dirty is tracked via the update listener instead).
   }, [doc?.path, doc?.content, doc?.isNew]);
 
-  // Cmd/Ctrl+S saves from within the editor.
+  // Cmd/Ctrl+S saves from within the editor; Escape dismisses a preview.
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
@@ -317,11 +341,12 @@ export function FileEditor({
         e.preventDefault();
         if (doc && dirty && !saving) save();
       }
+      if (e.key === "Escape" && preview) setPreview(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, doc, dirty, saving]);
+  }, [active, doc, dirty, saving, preview]);
 
   const renderTree = (path: string, depth: number) => {
     const entries = dirs[path];
@@ -370,112 +395,168 @@ export function FileEditor({
       className="editor-panel"
       style={{ display: active ? "flex" : "none" }}
     >
-      {doc === null ? (
-        <>
-          <div className="editor-picker-head">
-            <span className="editor-picker-title">Open a file</span>
-            {newFileName === null ? (
-              <>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    void uploadFiles(Array.from(e.target.files ?? []));
-                    e.target.value = "";
-                  }}
-                />
-                <button
-                  className="editor-new-button"
-                  disabled={uploading}
-                  onClick={() => fileInputRef.current?.click()}
-                  title={`Upload into ${selectedDir || baseName(cwd) || "the folder root"}`}
-                >
-                  {uploading ? "Uploading…" : `Upload to ${selectedDir || "/"}`}
-                </button>
-                <button
-                  className="editor-new-button"
-                  onClick={() => setNewFileName("")}
-                >
-                  New file
-                </button>
-              </>
-            ) : (
-              <div className="editor-new-form">
-                <input
-                  className="editor-new-input"
-                  autoFocus
-                  placeholder="path/to/new-file.ts"
-                  value={newFileName}
-                  onChange={(e) => setNewFileName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") createNewFile();
-                    if (e.key === "Escape") setNewFileName(null);
-                  }}
-                />
-                <button className="editor-new-button" onClick={createNewFile}>
-                  Create
-                </button>
-              </div>
-            )}
-          </div>
-          {pickerError && <div className="editor-error">{pickerError}</div>}
-          {loading && <div className="editor-status-line">Opening…</div>}
-          {uploadStatus && <div className="editor-status-line">{uploadStatus}</div>}
-          {status && !loading && <div className="editor-error">{status}</div>}
-          <div
-            className={`file-tree${dragging ? " dragover" : ""}`}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragging(false);
-              void uploadFiles(Array.from(e.dataTransfer.files));
-            }}
-          >
-            {renderTree("", 0)}
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="editor-head">
-            <button
-              className="editor-back"
-              onClick={closeFile}
-              aria-label="Back to files"
+      <div className="editor-main">
+        {doc === null ? (
+          <>
+            <div className="editor-picker-head">
+              <span className="editor-picker-title">Open a file</span>
+              {newFileName === null ? (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      void uploadFiles(Array.from(e.target.files ?? []));
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    className="editor-new-button"
+                    disabled={uploading}
+                    onClick={() => fileInputRef.current?.click()}
+                    title={`Upload into ${selectedDir || baseName(cwd) || "the folder root"}`}
+                  >
+                    {uploading ? "Uploading…" : `Upload to ${selectedDir || "/"}`}
+                  </button>
+                  <button
+                    className="editor-new-button"
+                    onClick={() => setNewFileName("")}
+                  >
+                    New file
+                  </button>
+                </>
+              ) : (
+                <div className="editor-new-form">
+                  <input
+                    className="editor-new-input"
+                    autoFocus
+                    placeholder="path/to/new-file.ts"
+                    value={newFileName}
+                    onChange={(e) => setNewFileName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") createNewFile();
+                      if (e.key === "Escape") setNewFileName(null);
+                    }}
+                  />
+                  <button className="editor-new-button" onClick={createNewFile}>
+                    Create
+                  </button>
+                </div>
+              )}
+            </div>
+            {pickerError && <div className="editor-error">{pickerError}</div>}
+            {loading && <div className="editor-status-line">Opening…</div>}
+            {uploadStatus && <div className="editor-status-line">{uploadStatus}</div>}
+            {status && !loading && <div className="editor-error">{status}</div>}
+            <div
+              className={`file-tree${dragging ? " dragover" : ""}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                void uploadFiles(Array.from(e.dataTransfer.files));
+              }}
             >
-              ‹
-            </button>
-            <span className="editor-file-path" title={doc.path}>
-              {doc.path}
-              {dirty ? " •" : ""}
-            </span>
-            {status && <span className="editor-save-status">{status}</span>}
-            {!doc.isNew && (
+              {renderTree("", 0)}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="editor-head">
+              <button
+                className="editor-back"
+                onClick={closeFile}
+                aria-label="Back to files"
+              >
+                ‹
+              </button>
+              <span className="editor-file-path" title={doc.path}>
+                {doc.path}
+                {dirty ? " •" : ""}
+              </span>
+              {status && <span className="editor-save-status">{status}</span>}
+              {!doc.isNew && (
+                <a
+                  className="file-row-download editor-download"
+                  href={downloadUrl(doc.path)}
+                  download={baseName(doc.path)}
+                  title={`Download ${baseName(doc.path)}`}
+                  aria-label={`Download ${baseName(doc.path)}`}
+                >
+                  ↓
+                </a>
+              )}
+              <button
+                className="editor-save-button"
+                onClick={save}
+                disabled={!dirty || saving}
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+            <div className="editor-host" ref={editorHostRef} />
+          </>
+        )}
+      </div>
+      {preview && (
+        <div
+          className="editor-preview"
+          role="dialog"
+          aria-modal="true"
+          aria-label={baseName(preview.path)}
+          // Backdrop dismiss: the scrim on mobile, the gutter around the media
+          // on desktop.
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPreview(null);
+          }}
+        >
+          {previewError ? (
+            <div className="editor-preview-error">
+              Could not display {baseName(preview.path)}.
               <a
-                className="file-row-download editor-download"
-                href={downloadUrl(doc.path)}
-                download={baseName(doc.path)}
-                title={`Download ${baseName(doc.path)}`}
-                aria-label={`Download ${baseName(doc.path)}`}
+                className="file-row-download"
+                href={downloadUrl(preview.path)}
+                download={baseName(preview.path)}
+                title={`Download ${baseName(preview.path)}`}
               >
                 ↓
               </a>
-            )}
-            <button
-              className="editor-save-button"
-              onClick={save}
-              disabled={!dirty || saving}
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-          </div>
-          <div className="editor-host" ref={editorHostRef} />
-        </>
+            </div>
+          ) : preview.kind === "image" ? (
+            // Remount on path change: swapping a live <video src> without
+            // .load() can leave the previous media loaded.
+            <img
+              key={preview.path}
+              className="editor-preview-media"
+              src={mediaUrl(preview.path)}
+              alt={baseName(preview.path)}
+              onError={() => setPreviewError(true)}
+            />
+          ) : (
+            <video
+              key={preview.path}
+              className="editor-preview-media"
+              src={mediaUrl(preview.path)}
+              controls
+              playsInline
+              preload="metadata"
+              onError={() => setPreviewError(true)}
+            />
+          )}
+          <button
+            className="editor-preview-close"
+            onClick={() => setPreview(null)}
+            aria-label="Close preview"
+          >
+            ×
+          </button>
+        </div>
       )}
     </div>
   );
