@@ -74,8 +74,20 @@ function languageFor(path: string): Extension | null {
   }
 }
 
+// Swipe-to-navigate zone inside the media preview, as a fraction of its box:
+// top-left only, so the gesture never fights the native video control strip
+// (bottom) or the close button (top-right). Resize here.
+const SWIPE_ZONE = { width: 0.5, height: 0.75 };
+// Under this a drag is a tap — we never claim it, so tap-to-pause still works.
+const SWIPE_MIN_PX = 40;
+
 function baseName(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? path;
+}
+
+function dirOf(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i < 0 ? "" : path.slice(0, i);
 }
 
 function joinPath(dir: string, name: string): string {
@@ -143,6 +155,9 @@ export function FileEditor({
     null,
   );
   const [previewError, setPreviewError] = useState(false);
+  // The swipe gesture is invisible, so the position counter is the only thing
+  // announcing a gallery exists. Shown on open/step, then faded.
+  const [counterShown, setCounterShown] = useState(false);
 
   const loadDir = useCallback(
     (path: string) => {
@@ -187,6 +202,54 @@ export function FileEditor({
 
   const mediaUrl = (path: string) =>
     `/api/media?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`;
+
+  // Gallery neighbours = previewable files in the same directory, in tree order.
+  // The listing is already client-side, so stepping needs no extra request.
+  const siblings = preview
+    ? (dirs[dirOf(preview.path)] ?? [])
+        .filter((e) => e.type === "file" && mediaKindFor(e.path))
+        .map((e) => e.path)
+    : [];
+  const previewIndex = preview ? siblings.indexOf(preview.path) : -1;
+
+  // Clamped, not wrapping: hitting the end should be felt, not loop silently.
+  const stepPreview = (delta: number) => {
+    if (previewIndex < 0) return;
+    const next = siblings[previewIndex + delta];
+    const kind = next ? mediaKindFor(next) : null;
+    if (!next || !kind) return;
+    setPreviewError(false);
+    setPreview({ path: next, kind });
+  };
+
+  // Handlers live on the preview wrapper rather than an overlay element: an
+  // overlay would swallow taps meant for the media's own controls.
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+
+  const onPreviewTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    if (!t || e.touches.length > 1) {
+      swipeStart.current = null;
+      return;
+    }
+    const r = e.currentTarget.getBoundingClientRect();
+    const inZone =
+      t.clientX - r.left < r.width * SWIPE_ZONE.width &&
+      t.clientY - r.top < r.height * SWIPE_ZONE.height;
+    swipeStart.current = inZone ? { x: t.clientX, y: t.clientY } : null;
+  };
+
+  const onPreviewTouchEnd = (e: React.TouchEvent) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    const t = e.changedTouches[0];
+    if (!start || !t) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    // Horizontal intent only, so a vertical drag stays the browser's.
+    if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) <= Math.abs(dy)) return;
+    stepPreview(dx < 0 ? 1 : -1);
+  };
 
   // Upload into `selectedDir`, one request per file. A 409 means the name is
   // taken — confirm before retrying with overwrite, since the tree gives no
@@ -342,11 +405,22 @@ export function FileEditor({
         if (doc && dirty && !saving) save();
       }
       if (e.key === "Escape" && preview) setPreview(null);
+      if (preview && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+        stepPreview(e.key === "ArrowRight" ? 1 : -1);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, doc, dirty, saving, preview]);
+
+  useEffect(() => {
+    if (!preview || siblings.length < 2) return;
+    setCounterShown(true);
+    const t = setTimeout(() => setCounterShown(false), 2000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview?.path, siblings.length]);
 
   const renderTree = (path: string, depth: number) => {
     const entries = dirs[path];
@@ -515,6 +589,8 @@ export function FileEditor({
           onClick={(e) => {
             if (e.target === e.currentTarget) setPreview(null);
           }}
+          onTouchStart={onPreviewTouchStart}
+          onTouchEnd={onPreviewTouchEnd}
         >
           {previewError ? (
             <div className="editor-preview-error">
@@ -544,10 +620,19 @@ export function FileEditor({
               className="editor-preview-media"
               src={mediaUrl(preview.path)}
               controls
+              loop
               playsInline
               preload="metadata"
               onError={() => setPreviewError(true)}
             />
+          )}
+          {previewIndex >= 0 && siblings.length > 1 && (
+            <div
+              className={`editor-preview-counter${counterShown ? " shown" : ""}`}
+              aria-hidden="true"
+            >
+              {previewIndex + 1} / {siblings.length}
+            </div>
           )}
           <button
             className="editor-preview-close"

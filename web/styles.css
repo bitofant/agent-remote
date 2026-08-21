@@ -868,6 +868,29 @@ body {
   color: rgba(255, 255, 255, 0.6);
 }
 
+/* Sits in the swipe zone (top-left) so its placement hints where the gesture
+   lives. White-on-media is one of the non-theme exceptions, as with the close
+   button. */
+.editor-preview-counter {
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  z-index: 1;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+
+.editor-preview-counter.shown {
+  opacity: 1;
+}
+
 .editor-preview-error {
   display: flex;
   align-items: center;
