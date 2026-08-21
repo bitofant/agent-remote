@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from "node:fs/promis
 import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDownload, saveBinaryFile, statEntry } from "./files.js";
+import { openDownload, parseRange, saveBinaryFile, statEntry } from "./files.js";
 
 // The transfer functions are the ones that touch arbitrary bytes, so their
 // confinement to the folder root is the security boundary worth pinning.
@@ -72,6 +72,49 @@ describe("openDownload", () => {
   it("refuses to escape the root", async () => {
     await expect(openDownload(root, "../outside/secret.txt")).rejects.toThrow(/outside/i);
     await expect(openDownload(root, outside + "/secret.txt")).rejects.toThrow(/outside/i);
+  });
+
+  it("slices to a range while still reporting the whole size", async () => {
+    await writeFile(join(root, "range.txt"), "0123456789");
+    const { size, stream } = await openDownload(root, "range.txt", { start: 2, end: 4 });
+    expect(size).toBe(10);
+    expect(await collect(stream)).toBe("234");
+  });
+
+  // /api/media adds no confinement of its own — this is its security boundary.
+  it("refuses to escape the root on a ranged read", async () => {
+    await expect(
+      openDownload(root, "../outside/secret.txt", { start: 0, end: 0 }),
+    ).rejects.toThrow(/outside/i);
+  });
+});
+
+describe("parseRange", () => {
+  it("serves the whole file when there is no usable header", () => {
+    expect(parseRange(undefined, 10)).toBeNull();
+    expect(parseRange("bytes=abc", 10)).toBeNull();
+    // Multi-range: a 200 is a legal answer, so don't try to satisfy it.
+    expect(parseRange("bytes=0-1,3-4", 10)).toBeNull();
+  });
+
+  it("parses the explicit and open-ended forms", () => {
+    expect(parseRange("bytes=0-", 10)).toEqual({ start: 0, end: 9 });
+    expect(parseRange("bytes=0-0", 10)).toEqual({ start: 0, end: 0 });
+    expect(parseRange("bytes=2-5", 10)).toEqual({ start: 2, end: 5 });
+    // An end past EOF is clamped, not rejected.
+    expect(parseRange("bytes=1-99", 10)).toEqual({ start: 1, end: 9 });
+  });
+
+  it("parses the suffix form", () => {
+    expect(parseRange("bytes=-3", 10)).toEqual({ start: 7, end: 9 });
+    expect(parseRange("bytes=-99", 10)).toEqual({ start: 0, end: 9 });
+  });
+
+  it("reports unsatisfiable ranges", () => {
+    expect(parseRange("bytes=-0", 10)).toBe("unsatisfiable");
+    expect(parseRange("bytes=10-", 10)).toBe("unsatisfiable");
+    expect(parseRange("bytes=5-2", 10)).toBe("unsatisfiable");
+    expect(parseRange("bytes=0-", 0)).toBe("unsatisfiable");
   });
 });
 

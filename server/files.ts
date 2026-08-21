@@ -97,11 +97,46 @@ export async function statEntry(
   }
 }
 
+export interface ByteRange {
+  start: number;
+  end: number;
+}
+
+/** Parse a `Range: bytes=…` header against a known size. null = serve the whole
+ * file (absent or multi-range — a 200 is a legal answer to those); the literal
+ * "unsatisfiable" = answer 416. */
+export function parseRange(
+  header: string | undefined,
+  size: number,
+): ByteRange | null | "unsatisfiable" {
+  if (!header) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m) return null;
+  const [, from, to] = m;
+  if (size === 0) return "unsatisfiable";
+  let start: number;
+  let end: number;
+  if (from === "") {
+    // Suffix form: the last N bytes.
+    const n = Number(to);
+    if (!n) return "unsatisfiable";
+    start = Math.max(0, size - n);
+    end = size - 1;
+  } else {
+    start = Number(from);
+    end = to === "" ? size - 1 : Math.min(Number(to), size - 1);
+  }
+  if (start >= size || start > end) return "unsatisfiable";
+  return { start, end };
+}
+
 /** Open a file under `root` for download. Returns its byte size, base name and
- * a read stream. Throws if missing or a directory. */
+ * a read stream. Throws if missing or a directory. With `range`, the stream is
+ * sliced but `size` stays the FULL size (callers need it for content-range). */
 export async function openDownload(
   root: string,
   rel: string,
+  range?: ByteRange,
 ): Promise<{ size: number; name: string; stream: ReturnType<typeof createReadStream> }> {
   const file = resolveWithin(root, rel);
   const info = await stat(file).catch(() => {
@@ -109,7 +144,7 @@ export async function openDownload(
   });
   if (info.isDirectory()) throw new Error("Path is a directory.");
   const name = rel.split("/").filter(Boolean).pop() ?? "download";
-  return { size: info.size, name, stream: createReadStream(file) };
+  return { size: info.size, name, stream: createReadStream(file, range) };
 }
 
 /** Stream `body` into a file under `root`, creating parent directories. The
