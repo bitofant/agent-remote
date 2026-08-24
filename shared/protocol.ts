@@ -147,6 +147,8 @@ export interface LlmEvaluateRequest {
   /** The session's workspace root (its launch folder). Lets the default rubric
    * auto-allow file edits/writes whose target path is inside it or a subfolder. */
   workspace?: string;
+  /** For `questions`: abstain unless the right option is unambiguous. */
+  onlyIfSure?: boolean;
   capabilities: { permissions: boolean; questions: boolean };
 }
 
@@ -350,13 +352,26 @@ export interface ChatUsage {
  * auto-answer permission/question cards via the optional LLM even when no
  * browser is connected. Toggled from the UI via the `set-assistant` action. */
 export interface AssistantSettings {
-  /** Master switch: the server auto-answers this session's cards when true. */
+  /** DERIVED master switch: true iff some capability below is enabled.
+   * Recomputed by the manager on every `set-assistant`, never trusted from a
+   * client, so it can't drift from the checklist. */
   enabled: boolean;
-  /** May auto-answer tool permission prompts (`select`/`confirm`). */
-  canAcceptPermissions: boolean;
-  /** May auto-answer AskUserQuestion dialogs (`questions`). */
-  canAnswerQuestions: boolean;
-  /** Free-text user instructions the LLM follows (empty → default safety rubric). */
+  /** Auto-answer tool permission prompts (`select`/`confirm`). */
+  permissions: AssistantCapability;
+  /** Auto-answer AskUserQuestion dialogs (`questions`). */
+  questions: AssistantCapability & {
+    /** Abstain unless the right option is unambiguous. */
+    onlyIfSure: boolean;
+  };
+  /** Open a PR for the session's work when its turn settles. */
+  autoPr: AssistantCapability & { autoMerge: boolean };
+}
+
+/** One capability of AI-assistant mode: on/off plus its own free-text
+ * instructions, so the capabilities don't fight over one shared box. */
+export interface AssistantCapability {
+  enabled: boolean;
+  /** Free-text user instructions (empty → the capability's default rubric). */
   instructions: string;
 }
 
@@ -384,19 +399,20 @@ export interface AssistantDecision {
  * collapsible AI-mode bubble so the user can see what AI-mode did and why.
  * Transient/diagnostic — capped in ChatState, not persisted across restarts. */
 export interface AssistantTrace {
-  /** Id of the card this deliberation was about. */
+  /** Id of the card this deliberation was about, or a synthetic id
+   * (`auto-pr:<at>`) for AI-mode notes that aren't about a card. */
   requestId: string;
-  /** Which dialog kind was judged. */
-  kind: "confirm" | "select" | "questions";
-  /** The full prompt sent to the LLM (system + user), human-readable. */
-  prompt: string;
+  /** Which dialog kind was judged, or the backend capability that ran. */
+  kind: "confirm" | "select" | "questions" | "auto-pr";
+  /** The full prompt sent to the LLM (system + user), when one was sent. */
+  prompt?: string;
   /** The model's surfaced reasoning, if any (e.g. `reasoning_content`). */
   thoughts?: string;
-  /** The raw model response text. */
-  response: string;
+  /** The raw model response text, when an LLM was called. */
+  response?: string;
   /** Structured outcome for the trace bubble's colored verdict word:
-   * allow (green) / deny (red) / answer / abstain / error. */
-  outcome: "allow" | "deny" | "answer" | "abstain" | "error";
+   * allow (green) / deny (red) / answer / abstain / error / note (neutral). */
+  outcome: "allow" | "deny" | "answer" | "abstain" | "error" | "note";
   /** Terse reason for the outcome, shown inline after the verdict word. */
   reason?: string;
   /** One-line outcome summary (e.g. "Allowed", "Denied — …", "Answered",
@@ -572,6 +588,10 @@ export type ChatAction =
   /** User intervened on a card the AI-assistant was about to auto-answer: cancel
    * its pending verdict so only a manual response resolves it. Harness-agnostic. */
   | { type: "cancel-assistant"; requestId: string }
+  /** Run the auto-PR flow now, regardless of its checkbox ("Run now"). Carries
+   * no state — observed by `server/autopr.ts` via `SessionListener.onChatAction`
+   * and never forwarded to the adapter. Harness-agnostic. */
+  | { type: "run-auto-pr" }
   /** Rewind the conversation to just before this user prompt: interrupt the
    * agent, truncate its context and the transcript, optionally restoring files
    * changed since. The adapter replies with a `rewind` event on success.

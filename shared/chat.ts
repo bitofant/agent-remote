@@ -3,6 +3,7 @@
 // event log); the browser applies the same reducer to live events.
 
 import type {
+  AssistantSettings,
   ChatEvent,
   ChatImageRef,
   ChatMessage,
@@ -46,6 +47,20 @@ export function isAllowEverything(instructions: string | undefined): boolean {
   );
 }
 
+/** The master switch is derived, never stored independently: AI mode is on iff
+ * some capability is. The manager recomputes it on every `set-assistant` so a
+ * client can't desync it from the checklist. */
+export function deriveAssistantEnabled(s: AssistantSettings): boolean {
+  return s.permissions.enabled || s.questions.enabled || s.autoPr.enabled;
+}
+
+/** Does this configuration need the LLM endpoint to do anything? Auto-PR runs
+ * without it, blanket-accept permissions bypass it, questions always need it. */
+export function assistantNeedsLlm(s: AssistantSettings): boolean {
+  if (s.questions.enabled) return true;
+  return s.permissions.enabled && !isAllowEverything(s.permissions.instructions);
+}
+
 /** Bounds to keep memory in check on long-running sessions. */
 const MAX_MESSAGES = 200;
 const MAX_TOOL_OUTPUT = 20_000;
@@ -69,9 +84,9 @@ export function emptyChatState(): ChatState {
     promptSuggestions: [],
     assistant: {
       enabled: false,
-      canAcceptPermissions: true,
-      canAnswerQuestions: false,
-      instructions: "",
+      permissions: { enabled: false, instructions: "" },
+      questions: { enabled: false, instructions: "", onlyIfSure: false },
+      autoPr: { enabled: false, instructions: "", autoMerge: false },
     },
     autoDecisions: {},
     assistantTraces: [],

@@ -138,12 +138,28 @@ const SUGGESTION_SYSTEM = [
   'Reply with ONLY JSON: {"suggestions": ["<next prompt>", ...]}.',
 ].join(" ");
 
-const QUESTIONS_SYSTEM = [
+// Shared base so the two strictness variants can't drift apart.
+const QUESTIONS_BASE = [
   "You answer multiple-choice questions posed by an AI coding agent on the",
   "developer's behalf, following any user instructions. Choose the single best",
-  "provided option label for each question (exact label text). If genuinely",
-  "unsure for a question, omit it.",
-  'Reply with ONLY JSON: {"answers": {"<question text>": "<chosen label>"}}.',
+  "provided option label for each question (exact label text).",
+];
+const QUESTIONS_JSON =
+  'Reply with ONLY JSON: {"answers": {"<question text>": "<chosen label>"}}.';
+
+const QUESTIONS_SYSTEM = [
+  ...QUESTIONS_BASE,
+  "If genuinely unsure for a question, omit it.",
+  QUESTIONS_JSON,
+].join(" ");
+
+// Stricter variant, for the "only answer if sure" setting.
+const QUESTIONS_SURE_SYSTEM = [
+  ...QUESTIONS_BASE,
+  "Answer ONLY when the correct option is unambiguous from the instructions or",
+  "the question itself. On ANY doubt, omit that question and leave it for the",
+  "developer — abstaining is strongly preferred over guessing.",
+  QUESTIONS_JSON,
 ].join(" ");
 
 async function chat(
@@ -233,14 +249,15 @@ export async function evaluate(
         options: q.options.map((o) => o.label),
       })),
     });
+    const system = req.onlyIfSure ? QUESTIONS_SURE_SYSTEM : QUESTIONS_SYSTEM;
     let reply: { content: string; reasoning?: string };
     try {
-      reply = await chat(QUESTIONS_SYSTEM, user);
+      reply = await chat(system, user);
     } catch {
       return { available: false };
     }
     const trace = {
-      prompt: tracePrompt(QUESTIONS_SYSTEM, user),
+      prompt: tracePrompt(system, user),
       thoughts: reply.reasoning,
       response: reply.content,
     };

@@ -86,10 +86,13 @@ describe.skipIf(!config || !enabled || !up || !llmUp)(
         type: "set-assistant",
         settings: {
           enabled: true,
-          canAcceptPermissions: true,
-          canAnswerQuestions: false,
-          instructions:
-            "Approve any tool call that reads or edits files inside the project directory.",
+          permissions: {
+            enabled: true,
+            instructions:
+              "Approve any tool call that reads or edits files inside the project directory.",
+          },
+          questions: { enabled: false, instructions: "", onlyIfSure: false },
+          autoPr: { enabled: false, instructions: "", autoMerge: false },
         },
       });
 

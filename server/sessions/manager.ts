@@ -21,7 +21,11 @@ import type {
   SessionInfo,
   SessionUi,
 } from "../../shared/protocol.js";
-import { applyChatEvent, emptyChatState } from "../../shared/chat.js";
+import {
+  applyChatEvent,
+  deriveAssistantEnabled,
+  emptyChatState,
+} from "../../shared/chat.js";
 import { normalizeFolder } from "../paths.js";
 
 // Per-session scrollback retained for replay on (re)connect; bounded for memory.
@@ -64,6 +68,10 @@ export interface SessionListener {
   onEvent?(sessionId: string, event: SessionEvent): void;
   /** A normalized chat event from a chat session (ui: "chat" only). */
   onChatEvent?(sessionId: string, event: ChatEvent): void;
+  /** A chat action was performed (from a client OR the backend). For
+   * harness-agnostic capabilities a client *asks* for rather than a state change
+   * to fold — an inert ChatEvent would smuggle an RPC onto the state-sync bus. */
+  onChatAction?(sessionId: string, action: ChatAction): void;
   /** The session reported its resume key (persist it so it can be resumed). */
   onResumable?(sessionId: string, key: string): void;
 }
@@ -356,6 +364,10 @@ export class SessionManager {
   chatAction(sessionId: string, action: ChatAction): void {
     const session = this.sessions.get(sessionId);
     if (!session || session.info.status !== "running") return;
+    for (const l of this.listeners) l.onChatAction?.(sessionId, action);
+    // Carries no state and no harness meaning — the listeners above are the
+    // whole handler (server/autopr.ts).
+    if (action.type === "run-auto-pr") return;
     // AI-assistant mode is backend-owned and harness-agnostic — handle its
     // actions here (fold into ChatState + fan out), never in the adapter. The
     // decision-cleared event also reaches the assistant decider (a listener),
@@ -363,7 +375,11 @@ export class SessionManager {
     if (action.type === "set-assistant") {
       this.applyChat(session, {
         type: "assistant-config",
-        settings: action.settings,
+        // Master switch is derived, never trusted from a client.
+        settings: {
+          ...action.settings,
+          enabled: deriveAssistantEnabled(action.settings),
+        },
       });
       return;
     }

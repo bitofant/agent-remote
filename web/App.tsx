@@ -9,13 +9,19 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  AssistantSettings,
   FolderInfo,
   HarnessInfo,
   ResumableSession,
   SessionInfo,
   ViewState,
 } from "../shared/protocol";
-import { ALLOW_EVERYTHING, isAllowEverything } from "../shared/chat";
+import {
+  ALLOW_EVERYTHING,
+  assistantNeedsLlm,
+  deriveAssistantEnabled,
+  isAllowEverything,
+} from "../shared/chat";
 import { Client, type CtrlMode } from "./client";
 import { TerminalView } from "./TerminalView";
 // Lazy-loaded: pulls in CodeMirror + language packs only once a file-edit tab
@@ -47,23 +53,20 @@ interface EditorTab {
   file: string | null;
 }
 
-// Per-chat-session AI-assistant mode. The BACKEND owns this now (it lives in
-// the session's ChatState and the server auto-answers cards even with no
-// browser open); the UI just reads it from ChatState and writes it back via the
-// `set-assistant` chat action. This shape mirrors protocol's AssistantSettings.
-interface AssistantSettings {
-  enabled: boolean;
-  canAcceptPermissions: boolean;
-  canAnswerQuestions: boolean;
-  instructions: string;
-}
-
+// Per-chat-session AI-assistant mode. The BACKEND owns this (it lives in the
+// session's ChatState and the server acts even with no browser open); the UI
+// just reads it from ChatState and writes it back via `set-assistant`.
+// Must match `emptyChatState()`: every capability starts off, so the derived
+// master switch starts off too.
 const DEFAULT_ASSISTANT: AssistantSettings = {
   enabled: false,
-  canAcceptPermissions: true,
-  canAnswerQuestions: false,
-  instructions: "",
+  permissions: { enabled: false, instructions: "" },
+  questions: { enabled: false, instructions: "", onlyIfSure: false },
+  autoPr: { enabled: false, instructions: "", autoMerge: false },
 };
+
+/** The three checklist sections of the assistant dialog. */
+type SectionKey = "permissions" | "questions" | "autoPr";
 
 // Tracks the on-screen keyboard via the visual viewport. `height` is the
 // visible height the app is pinned to while the keyboard is up. `open` stays
@@ -122,6 +125,9 @@ const PI_ICON = "M4 5h16v3H4zM6.5 8h3v11h-3zM14.5 8h3v11h-3z";
 // Material `smart_toy` (robot head) — the optional LLM UI assistant.
 const ROBOT_ICON =
   "M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z";
+
+// Material `chevron_right` — the app's disclosure glyph (rotated 90° when open).
+const CHEVRON_ICON = "M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z";
 
 // Material `desktop_windows` (monitor + stand) — for the local agent harness.
 const COMPUTER_ICON =
@@ -272,6 +278,14 @@ function Workspace({
   const [assistantDialogOpen, setAssistantDialogOpen] = useState(false);
   const [assistantDraft, setAssistantDraft] =
     useState<AssistantSettings>(DEFAULT_ASSISTANT);
+  // Which checklist sections are expanded (UI-only; ticking a box drives it).
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({
+    permissions: false,
+    questions: false,
+    autoPr: false,
+  });
+  // Pending debounced push of the instruction textareas (see pushAssistant).
+  const assistantPush = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -566,35 +580,140 @@ function Workspace({
   }, [client, activeSessionId, activeIsChat]);
 
   const assistantEnabled = !!activeAssistant?.enabled;
-  // Blanket-accept: permission cards are auto-accepted without the LLM, so the
-  // endpoint's health is irrelevant to this session.
-  const allowEverything = isAllowEverything(assistantDraft.instructions);
-  const assistantNeedsLlm = !isAllowEverything(activeAssistant?.instructions);
+  const needsLlm = assistantNeedsLlm(activeAssistant ?? DEFAULT_ASSISTANT);
 
-  // Clicking the assistant button toggles it off when enabled, else opens the
-  // config dialog seeded from the current (backend) settings. Both write back
-  // to the backend via the `set-assistant` action.
+  // The dialog has no Save button — every change applies at once. Checkboxes
+  // push immediately; the instruction textareas debounce so a keystroke isn't a
+  // round trip. While the dialog is open `assistantDraft` stays authoritative,
+  // so an echo can't fight the caret.
+  const pushAssistant = useCallback(
+    (next: AssistantSettings, debounce = false) => {
+      if (activeSessionId === null) return;
+      if (assistantPush.current) clearTimeout(assistantPush.current);
+      assistantPush.current = null;
+      const send = () =>
+        client.chatAction(activeSessionId, {
+          type: "set-assistant",
+          // Recomputed server-side too; sending it keeps the local read honest
+          // until the broadcast lands.
+          settings: { ...next, enabled: deriveAssistantEnabled(next) },
+        });
+      if (!debounce) return send();
+      assistantPush.current = setTimeout(send, 300);
+    },
+    [client, activeSessionId],
+  );
+
+  /** Flush a pending debounced push (dialog close, "Run now"). */
+  const flushAssistant = useCallback(() => {
+    if (!assistantPush.current) return;
+    clearTimeout(assistantPush.current);
+    assistantPush.current = null;
+    pushAssistant(assistantDraft);
+  }, [pushAssistant, assistantDraft]);
+
+  const closeAssistantDialog = useCallback(() => {
+    flushAssistant();
+    setAssistantDialogOpen(false);
+  }, [flushAssistant]);
+
+  // The button always opens the dialog: with several capabilities, editing them
+  // (and "Run now") must stay reachable while the assistant is already on.
+  // Turning everything off is now unticking the boxes.
   const onAssistantButton = () => {
     if (activeSessionId === null) return;
-    if (assistantEnabled) {
-      client.chatAction(activeSessionId, {
-        type: "set-assistant",
-        settings: { ...(activeAssistant ?? DEFAULT_ASSISTANT), enabled: false },
-      });
-      return;
-    }
-    setAssistantDraft(activeAssistant ?? DEFAULT_ASSISTANT);
+    const cur = activeAssistant ?? DEFAULT_ASSISTANT;
+    // Opening must never change a setting — seed the draft verbatim, and show
+    // exactly the enabled sections expanded.
+    setAssistantDraft(cur);
+    setOpenSections({
+      permissions: cur.permissions.enabled,
+      questions: cur.questions.enabled,
+      autoPr: cur.autoPr.enabled,
+    });
     setAssistantDialogOpen(true);
   };
 
-  const enableAssistant = () => {
-    if (activeSessionId === null) return;
-    client.chatAction(activeSessionId, {
-      type: "set-assistant",
-      settings: { ...assistantDraft, enabled: true },
-    });
-    setAssistantDialogOpen(false);
+  /** Patch one capability and apply it: at once for checkboxes, debounced for
+   * the free-text boxes. */
+  function patchSection<K extends SectionKey>(
+    key: K,
+    patch: Partial<AssistantSettings[K]>,
+    debounce = false,
+  ) {
+    const next = {
+      ...assistantDraft,
+      [key]: { ...assistantDraft[key], ...patch },
+    };
+    setAssistantDraft(next);
+    pushAssistant(next, debounce);
+  }
+
+  /** Ticking a box also reveals its settings; unticking tucks them away. */
+  const setSectionEnabled = (key: SectionKey, enabled: boolean) => {
+    patchSection(key, { enabled });
+    setOpenSections((o) => ({ ...o, [key]: enabled }));
   };
+
+  const assistantSection = (key: SectionKey, label: string, body: ReactNode) => {
+    const on = assistantDraft[key].enabled;
+    const open = openSections[key];
+    return (
+      <div className="assistant-section" data-on={on} data-open={open}>
+        <div className="assistant-section-head">
+          {/* Bare box, deliberately NOT wrapped in a <label>: the text beside it
+              expands the section, it must never flip the switch. */}
+          <input
+            type="checkbox"
+            checked={on}
+            aria-label={label}
+            onChange={(e) => setSectionEnabled(key, e.target.checked)}
+          />
+          <button
+            type="button"
+            className="assistant-section-toggle"
+            aria-expanded={open}
+            onClick={() => setOpenSections((o) => ({ ...o, [key]: !o[key] }))}
+          >
+            <span className="assistant-section-chevron">
+              <Icon path={CHEVRON_ICON} />
+            </span>
+            {label}
+          </button>
+        </div>
+        {open && <div className="assistant-section-body">{body}</div>}
+      </div>
+    );
+  };
+
+  /** The instructions box shared by all three sections. */
+  const assistantInstructions = (
+    key: SectionKey,
+    placeholder: string,
+    extra?: ReactNode,
+  ) => (
+    <div className="assistant-field">
+      <div className="assistant-field-head">
+        <label
+          className="assistant-field-label"
+          htmlFor={`assistant-instructions-${key}`}
+        >
+          Instructions (optional)
+        </label>
+        {extra}
+      </div>
+      <textarea
+        id={`assistant-instructions-${key}`}
+        className="assistant-instructions"
+        rows={3}
+        placeholder={placeholder}
+        value={assistantDraft[key].instructions}
+        onChange={(e) =>
+          patchSection(key, { instructions: e.target.value }, true)
+        }
+      />
+    </div>
+  );
 
   // Show the Shift+Tab key when the active session is an agent — either a
   // claude/pi harness, or a Terminal session currently running one of them.
@@ -763,7 +882,7 @@ function Workspace({
                   <button
                     className={`header-icon-button assistant-button ${
                       assistantEnabled
-                        ? llmAvailable || !assistantNeedsLlm
+                        ? llmAvailable || !needsLlm
                           ? "active"
                           : "unavailable"
                         : ""
@@ -772,10 +891,10 @@ function Workspace({
                     aria-pressed={assistantEnabled}
                     title={
                       assistantEnabled
-                        ? !assistantNeedsLlm
-                          ? "AI assistant on — allowing everything; click to disable"
+                        ? !needsLlm
+                          ? "AI assistant on — needs no LLM"
                           : llmAvailable
-                            ? "AI assistant on — click to disable"
+                            ? "AI assistant on"
                             : "AI assistant on, but the LLM is unavailable"
                         : "AI assistant"
                     }
@@ -1168,10 +1287,7 @@ function Workspace({
             )}
 
             {assistantDialogOpen && activeIsChat && (
-              <div
-                className="resume-overlay"
-                onClick={() => setAssistantDialogOpen(false)}
-              >
+              <div className="resume-overlay" onClick={closeAssistantDialog}>
                 <div
                   className="resume-dialog assistant-dialog"
                   onClick={(e) => e.stopPropagation()}
@@ -1181,29 +1297,28 @@ function Workspace({
                     <button
                       className="resume-dialog-close"
                       aria-label="Close"
-                      onClick={() => setAssistantDialogOpen(false)}
+                      onClick={closeAssistantDialog}
                     >
                       ×
                     </button>
                   </div>
+                  {/* No Save button — every change applies immediately. */}
                   <div className="resume-dialog-body assistant-dialog-body">
-                    {!llmAvailable && !allowEverything && (
+                    {!llmAvailable && assistantNeedsLlm(assistantDraft) && (
                       <div className="assistant-warning">
                         The LLM endpoint is currently unavailable. You can still
                         enable this — it will start acting once the endpoint is
                         reachable.
                       </div>
                     )}
-                    <div className="assistant-field">
-                      <div className="assistant-field-head">
-                        <label
-                          className="assistant-field-label"
-                          htmlFor="assistant-instructions"
-                        >
-                          Instructions (optional)
-                        </label>
-                        {/* Shortcut for the blanket-accept instruction; ticking
-                            it just writes the phrase, so typing it works too. */}
+                    {assistantSection(
+                      "permissions",
+                      "Permissions assistant",
+                      assistantInstructions(
+                        "permissions",
+                        "e.g. only allow bash calls for git tooling",
+                        /* Shortcut for the blanket-accept instruction; ticking it
+                           just writes the phrase, so typing it works too. */
                         <label
                           className="assistant-check assistant-allow-all"
                           title="Accept every permission request without consulting the LLM"
@@ -1211,69 +1326,79 @@ function Workspace({
                           allow everything
                           <input
                             type="checkbox"
-                            checked={allowEverything}
+                            checked={isAllowEverything(
+                              assistantDraft.permissions.instructions,
+                            )}
                             onChange={(e) =>
-                              setAssistantDraft((d) => ({
-                                ...d,
+                              patchSection("permissions", {
                                 instructions: e.target.checked
                                   ? ALLOW_EVERYTHING
                                   : "",
-                                canAcceptPermissions: e.target.checked
-                                  ? true
-                                  : d.canAcceptPermissions,
-                              }))
+                              })
                             }
                           />
+                        </label>,
+                      ),
+                    )}
+                    {assistantSection(
+                      "questions",
+                      "Questions assistant",
+                      <>
+                        {assistantInstructions(
+                          "questions",
+                          "e.g. always prefer the option that adds tests",
+                        )}
+                        <label className="assistant-check">
+                          <input
+                            type="checkbox"
+                            checked={assistantDraft.questions.onlyIfSure}
+                            onChange={(e) =>
+                              patchSection("questions", {
+                                onlyIfSure: e.target.checked,
+                              })
+                            }
+                          />
+                          only answer if sure
                         </label>
-                      </div>
-                      <textarea
-                        id="assistant-instructions"
-                        className="assistant-instructions"
-                        rows={3}
-                        placeholder="e.g. only allow bash calls for git tooling"
-                        value={assistantDraft.instructions}
-                        onChange={(e) =>
-                          setAssistantDraft((d) => ({
-                            ...d,
-                            instructions: e.target.value,
-                          }))
-                        }
-                      />
-                    </div>
-                    <label className="assistant-check">
-                      <input
-                        type="checkbox"
-                        checked={assistantDraft.canAcceptPermissions}
-                        onChange={(e) =>
-                          setAssistantDraft((d) => ({
-                            ...d,
-                            canAcceptPermissions: e.target.checked,
-                          }))
-                        }
-                      />
-                      Can accept permissions
-                    </label>
-                    <label className="assistant-check">
-                      <input
-                        type="checkbox"
-                        checked={assistantDraft.canAnswerQuestions}
-                        onChange={(e) =>
-                          setAssistantDraft((d) => ({
-                            ...d,
-                            canAnswerQuestions: e.target.checked,
-                          }))
-                        }
-                      />
-                      Can answer questions
-                    </label>
-                    <div className="assistant-dialog-actions">
-                      <button
-                        className="assistant-enable"
-                        onClick={enableAssistant}
-                      >
-                        Enable
-                      </button>
-                    </div>
+                      </>,
+                    )}
+                    {assistantSection(
+                      "autoPr",
+                      "Auto PR",
+                      <>
+                        {assistantInstructions(
+                          "autoPr",
+                          "e.g. target the develop branch, prefix the title with the ticket id",
+                        )}
+                        <label className="assistant-check">
+                          <input
+                            type="checkbox"
+                            checked={assistantDraft.autoPr.autoMerge}
+                            onChange={(e) =>
+                              patchSection("autoPr", {
+                                autoMerge: e.target.checked,
+                              })
+                            }
+                          />
+                          auto merge
+                        </label>
+                        <button
+                          className="assistant-run"
+                          onClick={() => {
+                            if (activeSessionId === null) return;
+                            // Flush first: the backend runs against the SAVED
+                            // settings, so a just-typed instruction would be lost.
+                            flushAssistant();
+                            client.chatAction(activeSessionId, {
+                              type: "run-auto-pr",
+                            });
+                            setAssistantDialogOpen(false);
+                          }}
+                        >
+                          Run now
+                        </button>
+                      </>,
+                    )}
                   </div>
                 </div>
               </div>

@@ -45,6 +45,7 @@ import { normalizeFolder } from "./paths.js";
 import { startLlmPolling, llmStatus } from "./llm.js";
 import { attachAssistant } from "./assistant.js";
 import { attachSuggestions } from "./suggestions.js";
+import { attachAutoPr } from "./autopr.js";
 import type {
   ChatImageRef,
   ClientMessage,
@@ -76,6 +77,11 @@ attachAssistant(manager);
 // composer-chip suggestion from the transcript after each turn. See
 // server/suggestions.ts. Best-effort; no-op when the LLM endpoint is down.
 attachSuggestions(manager, adapters);
+
+// Auto-PR capability of AI-assistant mode: opens a PR for a session's work when
+// its turn settles, or on demand from the dialog's "Run now". Currently a stub
+// that only posts an AI-mode bubble. See server/autopr.ts.
+attachAutoPr(manager);
 
 const harnesses: HarnessInfo[] = [...adapters.values()].map((a) => ({
   id: a.id,
