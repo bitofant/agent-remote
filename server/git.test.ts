@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   derivePrefix,
   fallbackSlug,
+  parseOpenPr,
   sanitizeBranchName,
   sanitizeCommitMessage,
   truncateDiff,
@@ -58,6 +59,31 @@ describe("sanitizeBranchName", () => {
     expect(sanitizeBranchName("!!! ???")).toBeNull();
     expect(sanitizeBranchName("")).toBeNull();
     expect(sanitizeBranchName(undefined)).toBeNull();
+  });
+});
+
+describe("parseOpenPr", () => {
+  it("reads the open PR", () => {
+    expect(
+      parseOpenPr('[{"number":42,"url":"https://github.com/o/r/pull/42"}]'),
+    ).toEqual({ number: 42, url: "https://github.com/o/r/pull/42" });
+  });
+
+  it("returns null for no open PR (gh prints an empty array)", () => {
+    expect(parseOpenPr("[]")).toBeNull();
+    expect(parseOpenPr("[]\n")).toBeNull();
+  });
+
+  it("returns null rather than guessing on unusable output", () => {
+    // gh missing / not authenticated / a future --json shape.
+    expect(parseOpenPr("")).toBeNull();
+    expect(parseOpenPr("gh: command not found")).toBeNull();
+    expect(parseOpenPr('{"number":42}')).toBeNull();
+    expect(parseOpenPr('[{"url":"https://github.com/o/r/pull/42"}]')).toBeNull();
+  });
+
+  it("tolerates a missing url", () => {
+    expect(parseOpenPr('[{"number":7}]')).toEqual({ number: 7, url: null });
   });
 });
 

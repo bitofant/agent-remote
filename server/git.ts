@@ -70,6 +70,47 @@ export async function gh(
   }
 }
 
+/** A pull request GitHub already has open for a branch. */
+export interface OpenPr {
+  number: number;
+  url: string | null;
+}
+
+/** The open PR whose head is `branch`, if there is one. `null` covers both "no
+ * open PR" and "couldn't tell" (no `gh`, not authenticated, no remote, junk
+ * JSON) — the caller treats them alike and falls through to creating one, which
+ * is the pre-existing behaviour and reports its own failure. Draft PRs count as
+ * open; merged/closed ones don't, so a reused branch can get a fresh PR. */
+export async function openPrForBranch(
+  cwd: string,
+  branch: string,
+): Promise<OpenPr | null> {
+  const r = await gh(
+    cwd,
+    ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url", "--limit", "1"],
+    60_000,
+  );
+  return r.ok ? parseOpenPr(r.stdout) : null;
+}
+
+/** Read `gh pr list --json number,url` output. `[]` (no open PR) and unparseable
+ * output both mean null — the distinction is the caller's fallthrough either
+ * way. Pure, so the "no PR" shape is pinned by a test. */
+export function parseOpenPr(stdout: string): OpenPr | null {
+  try {
+    const rows: unknown = JSON.parse(stdout);
+    const row = Array.isArray(rows) ? (rows[0] as Record<string, unknown>) : null;
+    if (!row || typeof row.number !== "number" || !Number.isFinite(row.number))
+      return null;
+    return {
+      number: Math.trunc(row.number),
+      url: typeof row.url === "string" && row.url ? row.url : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function isRepo(cwd: string): Promise<boolean> {
   const r = await git(cwd, ["rev-parse", "--is-inside-work-tree"]);
   return r.ok && r.stdout.trim() === "true";

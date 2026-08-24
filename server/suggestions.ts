@@ -22,8 +22,9 @@ const MAX_TRANSCRIPT_CHARS = 4_000;
 const MAX_TRANSCRIPT_MESSAGES = 10;
 
 /** Flatten a message's visible text (text parts; a terse marker for tool calls).
- * Thinking is omitted — it's not what the developer reacts to. */
-function messageText(msg: ChatMessage): string {
+ * Thinking is omitted — it's not what the developer reacts to. Shared with
+ * autopr.ts's turn digest so both read a message the same way. */
+export function messageText(msg: ChatMessage): string {
   const chunks: string[] = [];
   for (const part of msg.parts) {
     if (part.type === "text" && part.text.trim()) chunks.push(part.text.trim());

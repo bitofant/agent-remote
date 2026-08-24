@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emptyChatState } from "../shared/chat.js";
 import type { ChatMessage, ChatState } from "../shared/protocol.js";
-import { decideFlow, shouldRunAutoPr } from "./autopr.js";
+import { buildTurnDigest, decideFlow, shouldRunAutoPr } from "./autopr.js";
 
 function msg(role: "user" | "assistant", text: string): ChatMessage {
   return {
@@ -66,6 +66,80 @@ describe("shouldRunAutoPr", () => {
       messages: [msg("user", "add a helper")],
     };
     expect(shouldRunAutoPr(state)).toBe(false);
+  });
+});
+
+describe("buildTurnDigest", () => {
+  it("pairs the developer's last request with the agent's final message", () => {
+    const digest = buildTurnDigest(settled());
+    expect(digest).toContain("add a helper");
+    expect(digest).toContain("Done, added it.");
+  });
+
+  it("uses the LAST assistant message, not the first", () => {
+    const state: ChatState = {
+      ...settled(),
+      messages: [
+        msg("user", "add a helper"),
+        msg("assistant", "Working on it."),
+        msg("assistant", "Stopped: the tests fail."),
+      ],
+    };
+    const digest = buildTurnDigest(state);
+    expect(digest).toContain("Stopped: the tests fail.");
+    expect(digest).not.toContain("Working on it.");
+  });
+
+  it("declines when the agent never replied to the last prompt", () => {
+    const state: ChatState = {
+      ...settled(),
+      messages: [
+        msg("user", "add a helper"),
+        msg("assistant", "Done, added it."),
+        // Aborted before the first token: a prompt with no reply after it.
+        msg("user", "now do the other thing"),
+      ],
+    };
+    expect(buildTurnDigest(state)).toBeNull();
+  });
+
+  it("declines an empty final message", () => {
+    const state: ChatState = {
+      ...settled(),
+      messages: [msg("user", "add a helper"), msg("assistant", "  ")],
+    };
+    expect(buildTurnDigest(state)).toBeNull();
+  });
+
+  it("keeps a tool-only final turn judgeable", () => {
+    const state: ChatState = {
+      ...settled(),
+      messages: [
+        msg("user", "add a helper"),
+        {
+          id: "a-tool",
+          role: "assistant",
+          parts: [
+            { type: "tool", toolId: "t1", name: "Edit", status: "done" },
+          ],
+          createdAt: 0,
+        },
+      ],
+    };
+    expect(buildTurnDigest(state)).toContain("[used tool: Edit]");
+  });
+
+  it("keeps the END of a long final message", () => {
+    const state: ChatState = {
+      ...settled(),
+      messages: [
+        msg("user", "add a helper"),
+        msg("assistant", `${"x".repeat(5_000)} STOPPED HERE`),
+      ],
+    };
+    const digest = buildTurnDigest(state) ?? "";
+    expect(digest).toContain("STOPPED HERE");
+    expect(digest.length).toBeLessThan(5_000);
   });
 });
 

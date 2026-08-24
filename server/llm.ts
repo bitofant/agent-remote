@@ -175,6 +175,24 @@ const PR_SUPERVISOR_SYSTEM = [
   '"prUrl": string|null, "reply": "<message to the agent, or the reason>"}.',
 ].join(" ");
 
+const PR_GATE_SYSTEM = [
+  "You gate an automatic pull-request flow for a developer's AI coding agent.",
+  "You are shown the developer's last request and the agent's FINAL message of",
+  "the turn that just ended. Decide whether that turn actually FINISHED the",
+  "work, so committing it and opening a pull request now is sensible.",
+  "Answer false whenever the turn did not reach a finished state: the agent was",
+  "interrupted or stopped early, it hit an error or a failing test it did not",
+  "resolve, it is asking the developer a question or waiting for a decision, or",
+  "it announced further work it has not done yet. Answer true when it reports",
+  "the requested change as complete and working.",
+  "Judge only how the turn ended — not whether the change is a good idea, and",
+  "not whether files were modified (that is checked separately).",
+  "When in doubt answer false: a missed pull request is cheap, a pull request of",
+  "half-finished work is not.",
+  'Reply with ONLY JSON: {"open": boolean, "reason": "<terse, <=12 words>"}.',
+  "The reason is required and must be terse; it is shown to the developer.",
+].join(" ");
+
 /** Append the user's free-text auto-PR instructions to a generator prompt. */
 function withInstructions(base: string, instructions?: string): string {
   const extra = (instructions ?? "").trim();
@@ -325,6 +343,43 @@ export async function supervisePr(
     : null;
   const url = typeof out.prUrl === "string" && out.prUrl.trim() ? out.prUrl.trim() : null;
   return { done, prNumber: num, prUrl: url, reply };
+}
+
+/** Verdict of the auto-PR turn gate. `trace` is always present — the endpoint
+ * was queried, so the deliberation is auditable in the transcript. */
+export interface PrGateVerdict {
+  open: boolean;
+  reason: string;
+  trace: { prompt: string; thoughts?: string; response: string };
+}
+
+/** Judge whether the turn that just settled finished its work, from a digest of
+ * the developer's request and the agent's final message. Best-effort: null when
+ * the endpoint is unavailable or the reply is unusable — the caller decides what
+ * an un-judgeable turn means (auto-PR proceeds, as it did before this gate). */
+export async function shouldOpenPr(
+  digest: string,
+  instructions?: string,
+): Promise<PrGateVerdict | null> {
+  if (!status.available || !status.model || !digest.trim()) return null;
+  const system = withInstructions(PR_GATE_SYSTEM, instructions);
+  let reply: { content: string; reasoning?: string };
+  try {
+    reply = await chat(system, digest);
+  } catch {
+    return null;
+  }
+  const out = parseJsonObject(reply.content);
+  if (!out || typeof out.open !== "boolean") return null;
+  return {
+    open: out.open,
+    reason: typeof out.reason === "string" ? out.reason.trim() : "",
+    trace: {
+      prompt: tracePrompt(system, digest),
+      thoughts: reply.reasoning,
+      response: reply.content,
+    },
+  };
 }
 
 /** Max distinct suggestions surfaced to the composer. */

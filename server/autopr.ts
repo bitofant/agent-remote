@@ -28,17 +28,52 @@ import {
   isDirty,
   isRepo,
   mainBranch,
+  openPrForBranch,
   sanitizeBranchName,
   sanitizeCommitMessage,
   stagedDiff,
   stagedFileCount,
   workingDiff,
 } from "./git.js";
-import { suggestBranchName, suggestCommitMessage } from "./llm.js";
+import {
+  llmStatus,
+  shouldOpenPr,
+  suggestBranchName,
+  suggestCommitMessage,
+} from "./llm.js";
+import { messageText } from "./suggestions.js";
 import { runPrSession } from "./prAgent.js";
 
 /** How many commit-message attempts before falling back to a generic subject. */
 const COMMIT_ATTEMPTS = 3;
+
+/** How much of each side of the exchange the turn gate sees (chars, from the
+ * end — the agent's verdict is in its closing lines, not its opening ones). */
+const MAX_DIGEST_CHARS = 2_000;
+
+function tail(text: string): string {
+  return text.length > MAX_DIGEST_CHARS ? text.slice(-MAX_DIGEST_CHARS) : text;
+}
+
+/** Render what the turn gate judges: the developer's last request and the
+ * agent's final message. `null` when the transcript doesn't end in an assistant
+ * message with content — the agent never actually replied (an interrupt before
+ * the first token, say), so there is no finished turn to open a PR for and no
+ * point asking the LLM. Exported for testing. */
+export function buildTurnDigest(state: ChatState): string | null {
+  const last = state.messages[state.messages.length - 1];
+  if (!last || last.role !== "assistant") return null;
+  const reply = messageText(last).trim();
+  if (!reply) return null;
+  const asked = [...state.messages]
+    .reverse()
+    .find((m) => m.role === "user");
+  const request = asked ? messageText(asked).trim() : "";
+  return [
+    `The developer asked:\n${tail(request) || "(no prompt on record)"}`,
+    `The agent's final message of the turn:\n${tail(reply)}`,
+  ].join("\n\n");
+}
 
 /** Whether a settled session should auto-open a PR: the capability is on, the
  * session is idle with no pending card or queued prompt, and a real exchange
@@ -85,13 +120,15 @@ export function attachAutoPr(
   // whole async flow, not just its first tick.
   const running = new Set<string>();
 
-  /** Post one AI-mode note into the session's transcript. No prompt/response —
-   * no LLM was consulted about it — so it renders as a one-liner. */
+  /** Post one AI-mode note into the session's transcript. Usually no
+   * prompt/response — no LLM was consulted — so it renders as a one-liner; the
+   * turn gate passes its trace so its verdict is expandable like any other. */
   const note = (
     sessionId: string,
-    outcome: "note" | "error",
+    outcome: "note" | "error" | "allow" | "deny" | "abstain",
     summary: string,
     reason?: string,
+    trace?: { prompt: string; thoughts?: string; response: string },
   ) => {
     manager.postAssistantTrace(sessionId, {
       requestId: `auto-pr:${Date.now()}`,
@@ -100,20 +137,69 @@ export function attachAutoPr(
       reason,
       summary,
       at: Date.now(),
+      ...trace,
     });
   };
 
-  const run = (sessionId: string) => {
+  /** Ask the LLM whether the turn that just settled actually finished, so an
+   * interrupted / errored / question-ending turn doesn't get a PR. Only the
+   * automatic path is gated — "Run now" is the developer saying it themselves.
+   * Fail-open: an unavailable endpoint or an unusable reply proceeds (auto-PR
+   * has never required the endpoint), but says so in the transcript. */
+  async function turnFinished(sessionId: string): Promise<boolean> {
+    const state = manager.chatState(sessionId);
+    const digest = state ? buildTurnDigest(state) : null;
+    if (!digest) {
+      note(
+        sessionId,
+        "deny",
+        "Skipping the PR",
+        "the agent never replied to the last prompt",
+      );
+      return false;
+    }
+    if (!llmStatus().available) {
+      note(
+        sessionId,
+        "abstain",
+        "Could not check whether the turn finished",
+        "LLM endpoint unavailable — continuing anyway",
+      );
+      return true;
+    }
+    const verdict = await shouldOpenPr(digest, state?.assistant.autoPr.instructions);
+    if (!verdict) {
+      note(
+        sessionId,
+        "abstain",
+        "Could not check whether the turn finished",
+        "no usable verdict — continuing anyway",
+      );
+      return true;
+    }
+    note(
+      sessionId,
+      verdict.open ? "allow" : "deny",
+      verdict.open ? "Turn looks finished" : "Skipping the PR",
+      verdict.reason || undefined,
+      verdict.trace,
+    );
+    return verdict.open;
+  }
+
+  const run = (sessionId: string, gate: boolean) => {
     if (running.has(sessionId)) return;
     running.add(sessionId);
-    void flow(sessionId)
+    // The gate runs inside the single-flight (see flow) so a second settle
+    // can't slip a run past it while the verdict is still in flight.
+    void flow(sessionId, gate)
       .catch((err: unknown) => {
         note(sessionId, "error", "Auto PR failed", (err as Error).message);
       })
       .finally(() => running.delete(sessionId));
   };
 
-  async function flow(sessionId: string): Promise<void> {
+  async function flow(sessionId: string, gate: boolean): Promise<void> {
     const folder = manager.sessionFolder(sessionId);
     if (!folder) return;
     const settings = manager.chatState(sessionId)?.assistant.autoPr;
@@ -124,6 +210,10 @@ export function attachAutoPr(
       note(sessionId, "error", "Not a git repository", folder);
       return;
     }
+
+    // Before touching git at all: did this turn actually finish? A stopped,
+    // errored or question-ending turn shouldn't even fetch, let alone push.
+    if (gate && !(await turnFinished(sessionId))) return;
 
     const base = await mainBranch(folder);
     // Best-effort refresh so the base comparison and the later pull are honest.
@@ -163,17 +253,33 @@ export function attachAutoPr(
     note(sessionId, "note", `Pushed ${working}`, "origin");
 
     // --- 4. PR -------------------------------------------------------------
-    note(sessionId, "note", "Opening the PR", `${harnessId} ${command}`);
-    const pr = await runPrSession(manager, {
-      folder,
-      harnessId,
-      command,
-      instructions,
-      report: (summary, detail) => note(sessionId, "error", summary, detail),
-    });
-    if (!pr) return;
+    // A branch keeps its PR across turns: the push above already updated it, so
+    // opening another would be a duplicate (and `/pr` would likely just fail).
+    const existing = working ? await openPrForBranch(folder, working) : null;
+    let pr: { prNumber: number | null; prUrl: string | null };
+    if (existing) {
+      pr = { prNumber: existing.number, prUrl: existing.url };
+      note(
+        sessionId,
+        "note",
+        `PR #${existing.number} already open`,
+        dirty ? "updated it with the new commit" : "nothing new to add",
+      );
+    } else {
+      note(sessionId, "note", "Opening the PR", `${harnessId} ${command}`);
+      const opened = await runPrSession(manager, {
+        folder,
+        harnessId,
+        command,
+        instructions,
+        report: (summary, detail) => note(sessionId, "error", summary, detail),
+      });
+      if (!opened) return;
+      pr = opened;
+      const created = pr.prNumber != null ? `PR #${pr.prNumber}` : "PR";
+      note(sessionId, "note", `${created} created`, pr.prUrl ?? undefined);
+    }
     const label = pr.prNumber != null ? `PR #${pr.prNumber}` : "PR";
-    note(sessionId, "note", `${label} created`, pr.prUrl ?? undefined);
 
     if (!autoMerge) return;
 
@@ -292,13 +398,14 @@ export function attachAutoPr(
       running.delete(sessionId);
     },
     onChatAction(sessionId, action) {
-      // On demand — deliberately ignores the checkbox.
-      if (action.type === "run-auto-pr") run(sessionId);
+      // On demand — deliberately ignores the checkbox, and the turn gate: the
+      // developer asking for a PR outranks any verdict about how the turn ended.
+      if (action.type === "run-auto-pr") run(sessionId, false);
     },
     onChatEvent(sessionId, event) {
       if (event.type !== "busy" || event.busy) return;
       const state = manager.chatState(sessionId);
-      if (state && shouldRunAutoPr(state)) run(sessionId);
+      if (state && shouldRunAutoPr(state)) run(sessionId, true);
     },
   });
 }
