@@ -17,6 +17,11 @@ export interface SessionInfo {
   id: string;
   harnessId: string;
   harnessName: string;
+  /** The folder this session belongs to: its launch cwd, fixed for its whole
+   * life. This — never `cwd` — is what the UI groups sessions by. */
+  folder: string;
+  /** Live working directory, kept in sync by shell integration: it drifts with
+   * every `cd`, so it's display/logging only (see `folder`). */
   cwd: string;
   ui: SessionUi;
   status: "running" | "exited";
