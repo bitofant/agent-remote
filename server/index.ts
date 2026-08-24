@@ -78,10 +78,10 @@ attachAssistant(manager);
 // server/suggestions.ts. Best-effort; no-op when the LLM endpoint is down.
 attachSuggestions(manager, adapters);
 
-// Auto-PR capability of AI-assistant mode: opens a PR for a session's work when
-// its turn settles, or on demand from the dialog's "Run now". Currently a stub
-// that only posts an AI-mode bubble. See server/autopr.ts.
-attachAutoPr(manager);
+// Auto-PR capability of AI-assistant mode: branch/commit/push the session's
+// work, open the PR by driving a real `pi /pr` session, and (with `auto merge`)
+// squash-merge it and return to main. See server/autopr.ts.
+attachAutoPr(manager, config.autoPr);
 
 const harnesses: HarnessInfo[] = [...adapters.values()].map((a) => ({
   id: a.id,
