@@ -124,13 +124,14 @@ export function attachAssistant(manager: SessionManager): () => void {
       const isQuestions = req.kind === "questions";
       // Blanket-accept mode: permission cards skip the LLM entirely (so it also
       // works with no endpoint); questions still need one.
-      const allowAll = isAllowEverything(settings.instructions) && isPermission;
+      const allowAll =
+        isAllowEverything(settings.permissions.instructions) && isPermission;
       if (!allowAll && !llmStatus().available) return;
 
       // Plan acceptance stays human-driven (see CLAUDE.md); `input` too.
       const want =
-        (isPermission && settings.canAcceptPermissions) ||
-        (isQuestions && settings.canAnswerQuestions);
+        (isPermission && settings.permissions.enabled) ||
+        (isQuestions && settings.questions.enabled);
       if (!want) return;
 
       handled.add(req.id);
@@ -186,11 +187,15 @@ export function attachAssistant(manager: SessionManager): () => void {
         tool: req.tool,
         options: req.options,
         questions: req.questions,
-        instructions: settings.instructions,
+        // Each capability follows its own instructions box.
+        instructions: isPermission
+          ? settings.permissions.instructions
+          : settings.questions.instructions,
         workspace: manager.sessionFolder(sessionId),
+        onlyIfSure: settings.questions.onlyIfSure,
         capabilities: {
-          permissions: settings.canAcceptPermissions,
-          questions: settings.canAnswerQuestions,
+          permissions: settings.permissions.enabled,
+          questions: settings.questions.enabled,
         },
       })
         .then((verdict) => {

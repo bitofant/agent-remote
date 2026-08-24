@@ -20,6 +20,15 @@ export interface LlmConfig {
   model: string;
 }
 
+/** Which harness (and slash command) auto-PR drives to draft/open the PR. Kept
+ * in config so the harness-agnostic core doesn't hardcode a harness id. */
+export interface AutoPrConfig {
+  /** Harness id to start for the PR session (default "pi"). */
+  harness?: string;
+  /** First prompt sent to it (default "/pr"). */
+  command?: string;
+}
+
 export interface Config {
   harnesses: {
     claude: HarnessConfig;
@@ -31,6 +40,8 @@ export interface Config {
     terminal: HarnessConfig;
   };
   llm: LlmConfig;
+  /** Optional overrides for the auto-PR capability (see AutoPrConfig). */
+  autoPr?: AutoPrConfig;
   /** Usernames allowed to log in. A registered account stays unusable until its
    * name appears here. */
   users: string[];

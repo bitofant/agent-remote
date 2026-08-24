@@ -138,12 +138,89 @@ const SUGGESTION_SYSTEM = [
   'Reply with ONLY JSON: {"suggestions": ["<next prompt>", ...]}.',
 ].join(" ");
 
-const QUESTIONS_SYSTEM = [
+const BRANCH_SYSTEM = [
+  "You name git branches for a developer's AI coding agent. Given a diff,",
+  "produce a short kebab-case slug describing the change: 2 to 4 words,",
+  "lowercase, ASCII letters/digits/dashes ONLY. No username or team prefix, no",
+  "slashes, no ticket ids, no quotes, no explanation.",
+  'Reply with ONLY JSON: {"branch": "<slug>"}.',
+].join(" ");
+
+// Adapted from `suggest_commit_message` in ~/scripts/git-helper.sh so the web
+// flow writes messages in the same house style as the user's own CLI helper.
+const COMMIT_SYSTEM = [
+  "You are a commit message generator.",
+  "OUTPUT FORMAT: Single line only, max 72 characters, imperative mood.",
+  "CONTENT: Describe WHAT changed. Be concise and technical.",
+  "GOOD EXAMPLES: add config to disable in prod; refactor exception handling;",
+  "fix rate limiting; add CHIRP endpoint, refactor error handling.",
+  "No trailing period, no scope prefix, no body, no quotes.",
+  'Reply with ONLY JSON: {"message": "<commit message>"}.',
+].join(" ");
+
+const PR_SUPERVISOR_SYSTEM = [
+  "You supervise a headless AI coding agent that was asked to open a GitHub pull",
+  "request. You are shown the conversation so far and must either reply to the",
+  "agent on the developer's behalf or declare the job done.",
+  "Declare done ONLY once the transcript shows the pull request was actually",
+  "created — normally a GitHub PR URL like",
+  "https://github.com/<owner>/<repo>/pull/<number>. Then return its number and",
+  "URL.",
+  "Otherwise return a short reply that moves the agent forward: approve a drafted",
+  "description it is asking about, answer its question, or tell it to proceed and",
+  "create the PR. Never ask the developer anything; never invent a PR number.",
+  "If the agent reports a blocking error it cannot recover from, set done to true",
+  'with a null number and explain in "reply".',
+  'Reply with ONLY JSON: {"done": boolean, "prNumber": number|null,',
+  '"prUrl": string|null, "reply": "<message to the agent, or the reason>"}.',
+].join(" ");
+
+const PR_GATE_SYSTEM = [
+  "You gate an automatic pull-request flow for a developer's AI coding agent.",
+  "You are shown the developer's last request and the agent's FINAL message of",
+  "the turn that just ended. Decide whether that turn actually FINISHED the",
+  "work, so committing it and opening a pull request now is sensible.",
+  "Answer false whenever the turn did not reach a finished state: the agent was",
+  "interrupted or stopped early, it hit an error or a failing test it did not",
+  "resolve, it is asking the developer a question or waiting for a decision, or",
+  "it announced further work it has not done yet. Answer true when it reports",
+  "the requested change as complete and working.",
+  "Judge only how the turn ended — not whether the change is a good idea, and",
+  "not whether files were modified (that is checked separately).",
+  "When in doubt answer false: a missed pull request is cheap, a pull request of",
+  "half-finished work is not.",
+  'Reply with ONLY JSON: {"open": boolean, "reason": "<terse, <=12 words>"}.',
+  "The reason is required and must be terse; it is shown to the developer.",
+].join(" ");
+
+/** Append the user's free-text auto-PR instructions to a generator prompt. */
+function withInstructions(base: string, instructions?: string): string {
+  const extra = (instructions ?? "").trim();
+  return extra ? `${base} Additional user instructions: ${extra}` : base;
+}
+
+// Shared base so the two strictness variants can't drift apart.
+const QUESTIONS_BASE = [
   "You answer multiple-choice questions posed by an AI coding agent on the",
   "developer's behalf, following any user instructions. Choose the single best",
-  "provided option label for each question (exact label text). If genuinely",
-  "unsure for a question, omit it.",
-  'Reply with ONLY JSON: {"answers": {"<question text>": "<chosen label>"}}.',
+  "provided option label for each question (exact label text).",
+];
+const QUESTIONS_JSON =
+  'Reply with ONLY JSON: {"answers": {"<question text>": "<chosen label>"}}.';
+
+const QUESTIONS_SYSTEM = [
+  ...QUESTIONS_BASE,
+  "If genuinely unsure for a question, omit it.",
+  QUESTIONS_JSON,
+].join(" ");
+
+// Stricter variant, for the "only answer if sure" setting.
+const QUESTIONS_SURE_SYSTEM = [
+  ...QUESTIONS_BASE,
+  "Answer ONLY when the correct option is unambiguous from the instructions or",
+  "the question itself. On ANY doubt, omit that question and leave it for the",
+  "developer — abstaining is strongly preferred over guessing.",
+  QUESTIONS_JSON,
 ].join(" ");
 
 async function chat(
@@ -180,6 +257,129 @@ async function chat(
 /** Render the outgoing prompt for the diagnostic trace shown in the UI. */
 function tracePrompt(system: string, user: string): string {
   return `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+}
+
+/** Ask for one JSON field, best-effort. Returns null on an unavailable
+ * endpoint, any transport error, or a reply that doesn't parse. Shared by the
+ * auto-PR generators below, which all want "a string or nothing". */
+async function askJson(
+  system: string,
+  user: string,
+): Promise<Record<string, unknown> | null> {
+  if (!status.available || !status.model || !user.trim()) return null;
+  try {
+    const reply = await chat(system, user);
+    return parseJsonObject(reply.content);
+  } catch {
+    return null;
+  }
+}
+
+/** Propose a kebab-case branch slug for a diff. Best-effort: null when the
+ * endpoint is down or the model declines — the caller falls back to a
+ * deterministic name. The result still goes through `sanitizeBranchName`. */
+export async function suggestBranchName(
+  diff: string,
+  instructions?: string,
+): Promise<string | null> {
+  const out = await askJson(
+    withInstructions(BRANCH_SYSTEM, instructions),
+    diff,
+  );
+  const branch = out?.branch;
+  return typeof branch === "string" && branch.trim() ? branch : null;
+}
+
+/** Propose a one-line commit subject for a staged diff. `rejected` carries
+ * previous attempts that failed validation so a retry doesn't repeat them.
+ * Best-effort: null when unavailable. Still validated by
+ * `sanitizeCommitMessage`. */
+export async function suggestCommitMessage(
+  diff: string,
+  instructions?: string,
+  rejected: string[] = [],
+): Promise<string | null> {
+  const user = rejected.length
+    ? `${diff}\n\nThese earlier attempts were REJECTED (not a single line of at most 72 characters):\n${rejected
+        .map((r) => `- ${r}`)
+        .join("\n")}\nGenerate a shorter, single-line message.`
+    : diff;
+  const out = await askJson(
+    withInstructions(COMMIT_SYSTEM, instructions),
+    user,
+  );
+  const message = out?.message;
+  return typeof message === "string" && message.trim() ? message : null;
+}
+
+/** One supervision verdict over the headless PR session's transcript. */
+export interface PrSupervision {
+  done: boolean;
+  prNumber: number | null;
+  prUrl: string | null;
+  /** Message to send back to the agent, or (when done) the closing reason. */
+  reply: string;
+}
+
+/** Read the PR agent's transcript and decide whether to answer it or stop.
+ * Best-effort: null when the endpoint is unavailable or the reply is unusable,
+ * which the caller treats as "can't supervise" and abandons the run to a human. */
+export async function supervisePr(
+  transcript: string,
+  instructions?: string,
+): Promise<PrSupervision | null> {
+  const out = await askJson(
+    withInstructions(PR_SUPERVISOR_SYSTEM, instructions),
+    transcript,
+  );
+  if (!out) return null;
+  const reply = typeof out.reply === "string" ? out.reply.trim() : "";
+  const done = out.done === true;
+  // A reply is the only way to advance an unfinished run; without one there's
+  // nothing to send, so treat it as unusable.
+  if (!done && !reply) return null;
+  const num = typeof out.prNumber === "number" && Number.isFinite(out.prNumber)
+    ? Math.trunc(out.prNumber)
+    : null;
+  const url = typeof out.prUrl === "string" && out.prUrl.trim() ? out.prUrl.trim() : null;
+  return { done, prNumber: num, prUrl: url, reply };
+}
+
+/** Verdict of the auto-PR turn gate. `trace` is always present — the endpoint
+ * was queried, so the deliberation is auditable in the transcript. */
+export interface PrGateVerdict {
+  open: boolean;
+  reason: string;
+  trace: { prompt: string; thoughts?: string; response: string };
+}
+
+/** Judge whether the turn that just settled finished its work, from a digest of
+ * the developer's request and the agent's final message. Best-effort: null when
+ * the endpoint is unavailable or the reply is unusable — the caller decides what
+ * an un-judgeable turn means (auto-PR proceeds, as it did before this gate). */
+export async function shouldOpenPr(
+  digest: string,
+  instructions?: string,
+): Promise<PrGateVerdict | null> {
+  if (!status.available || !status.model || !digest.trim()) return null;
+  const system = withInstructions(PR_GATE_SYSTEM, instructions);
+  let reply: { content: string; reasoning?: string };
+  try {
+    reply = await chat(system, digest);
+  } catch {
+    return null;
+  }
+  const out = parseJsonObject(reply.content);
+  if (!out || typeof out.open !== "boolean") return null;
+  return {
+    open: out.open,
+    reason: typeof out.reason === "string" ? out.reason.trim() : "",
+    trace: {
+      prompt: tracePrompt(system, digest),
+      thoughts: reply.reasoning,
+      response: reply.content,
+    },
+  };
 }
 
 /** Max distinct suggestions surfaced to the composer. */
@@ -233,14 +433,15 @@ export async function evaluate(
         options: q.options.map((o) => o.label),
       })),
     });
+    const system = req.onlyIfSure ? QUESTIONS_SURE_SYSTEM : QUESTIONS_SYSTEM;
     let reply: { content: string; reasoning?: string };
     try {
-      reply = await chat(QUESTIONS_SYSTEM, user);
+      reply = await chat(system, user);
     } catch {
       return { available: false };
     }
     const trace = {
-      prompt: tracePrompt(QUESTIONS_SYSTEM, user),
+      prompt: tracePrompt(system, user),
       thoughts: reply.reasoning,
       response: reply.content,
     };

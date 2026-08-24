@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { applyChatEvent, emptyChatState, isAllowEverything, promptParts } from "./chat.js";
-import type { ChatEvent, ChatState } from "./protocol.js";
+import {
+  ALLOW_EVERYTHING,
+  applyChatEvent,
+  assistantNeedsLlm,
+  deriveAssistantEnabled,
+  emptyChatState,
+  isAllowEverything,
+  promptParts,
+} from "./chat.js";
+import type { AssistantSettings, ChatEvent, ChatState } from "./protocol.js";
 
 // Fold a list of events over an initial state — how the reducer is used for real
 // (server replay + live client updates), so tests read as a script of events.
@@ -505,6 +513,18 @@ describe("applyChatEvent rewind", () => {
           type: "assistant-trace",
           trace: { ...trace, requestId: "r2", summary: "dropped", anchorMessageId: "a2" },
         },
+        // An AI-mode note (no LLM detail) prunes on the same rule.
+        {
+          type: "assistant-trace",
+          trace: {
+            requestId: "auto-pr:1",
+            kind: "auto-pr",
+            outcome: "note",
+            summary: "dropped note",
+            at: 0,
+            anchorMessageId: "a2",
+          },
+        },
       ],
       conversation(),
     );
@@ -555,5 +575,115 @@ describe("isAllowEverything", () => {
   it("does not match empty, absent or merely-similar instructions", () => {
     for (const s of [undefined, "", "allow everything in /tmp", "allow all"])
       expect(isAllowEverything(s)).toBe(false);
+  });
+});
+
+describe("assistant settings", () => {
+  /** A settings object with only the named capabilities enabled. */
+  function settings(patch: Partial<AssistantSettings> = {}): AssistantSettings {
+    return { ...emptyChatState().assistant, ...patch };
+  }
+
+  it("starts with every capability off, so the derived master is off", () => {
+    const s = emptyChatState().assistant;
+    expect(s).toEqual({
+      enabled: false,
+      permissions: { enabled: false, instructions: ALLOW_EVERYTHING },
+      questions: { enabled: false, instructions: "", onlyIfSure: false },
+      autoPr: { enabled: false, instructions: "", autoMerge: true },
+    });
+    expect(deriveAssistantEnabled(s)).toBe(false);
+  });
+
+  it("pre-sets the sub-options, but they stay inert until ticked", () => {
+    // Blanket-accept and auto-merge are what a user ticking a capability
+    // almost always wants; neither does anything while its capability is off.
+    const s = emptyChatState().assistant;
+    expect(isAllowEverything(s.permissions.instructions)).toBe(true);
+    expect(s.autoPr.autoMerge).toBe(true);
+    expect(deriveAssistantEnabled(s)).toBe(false);
+    // Pre-set blanket-accept must not make an off assistant claim it needs
+    // (or doesn't need) an endpoint on someone else's behalf.
+    expect(assistantNeedsLlm(s)).toBe(false);
+  });
+
+  it("derives the master switch from any single enabled capability", () => {
+    expect(
+      deriveAssistantEnabled(
+        settings({ permissions: { enabled: true, instructions: "" } }),
+      ),
+    ).toBe(true);
+    expect(
+      deriveAssistantEnabled(
+        settings({
+          questions: { enabled: true, instructions: "", onlyIfSure: false },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      deriveAssistantEnabled(
+        settings({ autoPr: { enabled: true, instructions: "", autoMerge: false } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("needs the LLM only for capabilities that actually consult it", () => {
+    // Questions always do.
+    expect(
+      assistantNeedsLlm(
+        settings({
+          questions: { enabled: true, instructions: "", onlyIfSure: false },
+        }),
+      ),
+    ).toBe(true);
+    // Permissions do, unless blanket-accept bypasses the endpoint.
+    expect(
+      assistantNeedsLlm(
+        settings({ permissions: { enabled: true, instructions: "only git" } }),
+      ),
+    ).toBe(true);
+    expect(
+      assistantNeedsLlm(
+        settings({
+          permissions: { enabled: true, instructions: "allow everything" },
+        }),
+      ),
+    ).toBe(false);
+    // Auto-PR never does, and neither does an all-off config.
+    expect(
+      assistantNeedsLlm(
+        settings({ autoPr: { enabled: true, instructions: "", autoMerge: false } }),
+      ),
+    ).toBe(false);
+    expect(assistantNeedsLlm(settings())).toBe(false);
+  });
+
+  it("folds an AI-mode note with no LLM detail, anchored to the last turn", () => {
+    // Auto-PR fires on busy:false, when nothing is streaming — the note must
+    // land on the just-finalized turn, and carry no prompt/response (no LLM was
+    // consulted), which is what makes its bubble non-expandable.
+    const state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "part-start", kind: "text" },
+      { type: "part-delta", delta: "done" },
+      { type: "assistant-end" },
+      {
+        type: "assistant-trace",
+        trace: {
+          requestId: "auto-pr:1",
+          kind: "auto-pr",
+          outcome: "note",
+          reason: "running…",
+          summary: "Running auto PR",
+          at: 1,
+        },
+      },
+    ]);
+    expect(state.streaming).toBeNull();
+    expect(state.assistantTraces).toHaveLength(1);
+    const trace = state.assistantTraces[0];
+    expect(trace.anchorMessageId).toBe("m1");
+    expect(trace.prompt).toBeUndefined();
+    expect(trace.response).toBeUndefined();
   });
 });

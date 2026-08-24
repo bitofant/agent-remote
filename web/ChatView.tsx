@@ -212,29 +212,34 @@ const TRACE_VERDICT: Record<AssistantTrace["outcome"], string> = {
   answer: "Answer",
   abstain: "Abstain",
   error: "No response",
+  note: "Auto PR",
 };
 
-// AI-mode deliberation bubble: whenever the backend assistant queried the LLM
-// about a card, it records what prompt it sent and the model's thoughts/reply.
-// Collapsed, it's a single line — colored verdict word + as much of the reason
-// as fits; tapping the line toggles the prompt/thoughts/response details.
+// AI-mode bubble: a deliberation (what prompt the backend assistant sent the LLM
+// about a card, and the model's thoughts/reply) or a plain note from a backend
+// capability that consulted no LLM. Collapsed, it's a single line — colored
+// verdict word + as much of the reason as fits; tapping toggles the details.
+// A note has nothing to expand, so it isn't interactive at all.
 function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
   const [open, setOpen] = useState(false);
-  return (
-    <div className="chat-assistant-trace" data-outcome={trace.outcome}>
-      <div
-        className="chat-assistant-trace-head"
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={(e) => {
+  const hasDetails = !!(trace.prompt || trace.thoughts || trace.response);
+  const toggle = hasDetails
+    ? {
+        role: "button",
+        tabIndex: 0,
+        "aria-expanded": open,
+        onClick: () => setOpen((o) => !o),
+        onKeyDown: (e: React.KeyboardEvent) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             setOpen((o) => !o);
           }
-        }}
-      >
+        },
+      }
+    : {};
+  return (
+    <div className="chat-assistant-trace" data-outcome={trace.outcome}>
+      <div className="chat-assistant-trace-head" {...toggle}>
         <svg
           className="chat-assistant-trace-icon"
           viewBox="0 0 24 24"
@@ -251,20 +256,24 @@ function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
       </div>
       {open && (
         <div className="chat-assistant-trace-details">
-          <div className="chat-assistant-trace-section">
-            <div className="chat-assistant-trace-label">Prompt</div>
-            <pre>{trace.prompt}</pre>
-          </div>
+          {trace.prompt && (
+            <div className="chat-assistant-trace-section">
+              <div className="chat-assistant-trace-label">Prompt</div>
+              <pre>{trace.prompt}</pre>
+            </div>
+          )}
           {trace.thoughts && (
             <div className="chat-assistant-trace-section">
               <div className="chat-assistant-trace-label">Thoughts</div>
               <pre>{trace.thoughts}</pre>
             </div>
           )}
-          <div className="chat-assistant-trace-section">
-            <div className="chat-assistant-trace-label">Response</div>
-            <pre>{trace.response || "(no response)"}</pre>
-          </div>
+          {trace.response && (
+            <div className="chat-assistant-trace-section">
+              <div className="chat-assistant-trace-label">Response</div>
+              <pre>{trace.response}</pre>
+            </div>
+          )}
         </div>
       )}
     </div>

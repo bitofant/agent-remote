@@ -2145,8 +2145,90 @@ body {
 
 /* AI-assistant config dialog (reuses the resume-dialog shell). */
 .assistant-dialog-body {
-  gap: 12px;
+  gap: 4px; /* sections carry their own padding */
   padding: 14px;
+}
+/* Checklist section: an enable checkbox + a disclosure button that toggles ONLY
+   the body. No fill — sections are grouped by spacing and the enabled tint, so
+   the body's --raised controls still rise off the dialog's --panel (there is no
+   fourth elevation step to nest into). */
+.assistant-section {
+  display: flex;
+  flex-direction: column;
+}
+.assistant-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--r-md);
+}
+.assistant-section-head:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+.assistant-section[data-on="true"] .assistant-section-head {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+}
+/* Deliberately a button, not a <label>: clicking the text must expand the
+   section, never tick the box beside it. */
+.assistant-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.assistant-section-toggle:focus-visible {
+  outline: none;
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.assistant-section-chevron {
+  display: flex;
+  flex: none;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+.assistant-section[data-open="true"] .assistant-section-chevron {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-section-chevron {
+    transition: none;
+  }
+}
+/* Indented to align under the label text (8px head pad + 13px box + 10px gap). */
+.assistant-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 8px 10px 31px;
+}
+/* Secondary action inside a section body (Run now). Filled, never outlined. */
+.assistant-run {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border-radius: var(--r-md);
+  background: var(--raised);
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.assistant-run:hover {
+  background: color-mix(in srgb, var(--accent) 15%, var(--raised));
+}
+.assistant-run:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .assistant-warning {
   padding: 8px 10px;
@@ -2303,8 +2385,11 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  cursor: pointer;
   min-width: 0;
+}
+/* Only deliberations expand; a plain note has no details to open. */
+.chat-assistant-trace-head[role="button"] {
+  cursor: pointer;
 }
 .chat-assistant-trace-icon {
   width: 15px;

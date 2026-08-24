@@ -84,9 +84,9 @@ describe.skipIf(!config || !enabled || !up)(
         type: "set-assistant",
         settings: {
           enabled: true,
-          canAcceptPermissions: true,
-          canAnswerQuestions: false,
-          instructions: ALLOW_EVERYTHING,
+          permissions: { enabled: true, instructions: ALLOW_EVERYTHING },
+          questions: { enabled: false, instructions: "", onlyIfSure: false },
+          autoPr: { enabled: false, instructions: "", autoMerge: false },
         },
       });
 
