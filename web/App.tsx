@@ -209,6 +209,14 @@ function isAgentCommand(command: string | null): boolean {
   return AGENT_HARNESS_IDS.has(bin);
 }
 
+// Session-row subtitle. A session that has `cd`'d away still lives in its launch
+// folder's tabs, so name where it actually is instead of a bare "running".
+function sessionMeta(s: SessionInfo, home: string): string {
+  if (s.status === "exited") return `exited (${s.exitCode ?? "?"})`;
+  if (s.currentCommand) return s.currentCommand;
+  return s.cwd === s.folder ? "running" : displayPath(s.cwd, home);
+}
+
 export function App() {
   // Auth gate: undefined = still checking, null = logged out, string = username.
   const [user, setUser] = useState<string | null | undefined>(undefined);
@@ -354,7 +362,7 @@ function Workspace({
       }
     }
     if (created) {
-      const folder = created.cwd;
+      const folder = created.folder;
       setActiveFolder(folder);
       setActiveSession((prev) => ({ ...prev, [folder]: created!.id }));
     }
@@ -492,12 +500,22 @@ function Workspace({
     onLogout();
   };
 
-  const sessionsInFolder = sessions.filter((s) => s.cwd === activeFolder);
+  // By launch folder, never live `cwd` — a `cd` must not re-parent a session
+  // into another folder's tabs (or out of every folder, hiding it entirely).
+  const sessionsInFolder = sessions.filter((s) => s.folder === activeFolder);
   const editorsInFolder = editors.filter((e) => e.folder === activeFolder);
   const tabCount = sessionsInFolder.length + editorsInFolder.length;
+  // The pin is only honoured if it names a tab of *this* folder — terminals are
+  // all mounted at once and shown purely on an id match, so a foreign pin would
+  // paint another folder's session over an empty tab list.
+  const pinned = activeFolder !== null ? activeSession[activeFolder] : undefined;
+  const pinnedHere =
+    pinned !== undefined &&
+    (sessionsInFolder.some((s) => s.id === pinned) ||
+      editorsInFolder.some((e) => e.id === pinned));
   const activeSessionId =
     activeFolder !== null
-      ? (activeSession[activeFolder] ??
+      ? ((pinnedHere ? pinned : undefined) ??
         editorsInFolder[editorsInFolder.length - 1]?.id ??
         sessionsInFolder[sessionsInFolder.length - 1]?.id ??
         null)
@@ -895,10 +913,11 @@ function Workspace({
                       <span className="session-name" title={s.harnessName}>
                         <HarnessGlyph id={s.harnessId} name={s.harnessName} />
                       </span>
-                      <span className="session-meta" title={s.currentCommand ?? ""}>
-                        {s.status === "exited"
-                          ? `exited (${s.exitCode ?? "?"})`
-                          : (s.currentCommand ?? "running")}
+                      <span
+                        className="session-meta"
+                        title={s.currentCommand ?? displayPath(s.cwd, home)}
+                      >
+                        {sessionMeta(s, home)}
                       </span>
                       <span
                         className="session-close"

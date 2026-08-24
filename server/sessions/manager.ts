@@ -32,9 +32,6 @@ const MAX_STDERR_TAIL = 2_000;
 
 interface Session {
   info: SessionInfo;
-  /** Launch cwd — fixed, unlike `info.cwd` which drifts with reported `cd`s.
-   * The folder the session belongs to; bumps folder recency on input. */
-  folder: string;
   // --- terminal flavor (ui: "terminal") ---
   pty?: IPty;
   buffer: string;
@@ -102,7 +99,7 @@ export class SessionManager {
   /** The folder the session was launched in (fixed for the session's life),
    * for ordering folders by which one most recently received input. */
   sessionFolder(sessionId: string): string | undefined {
-    return this.sessions.get(sessionId)?.folder;
+    return this.sessions.get(sessionId)?.info.folder;
   }
 
   /** How the session renders in the browser ("terminal" or "chat"). */
@@ -143,6 +140,7 @@ export class SessionManager {
       id: randomUUID(),
       harnessId: adapter.id,
       harnessName: adapter.name,
+      folder: opts.cwd,
       cwd: opts.cwd,
       ui: isChat ? "chat" : "terminal",
       status: "running",
@@ -180,7 +178,6 @@ export class SessionManager {
     const session: Session = {
       info,
       buffer: "",
-      folder: opts.cwd,
       chatSession,
       chat: emptyChatState(),
     };
@@ -219,7 +216,6 @@ export class SessionManager {
       info,
       pty: child,
       buffer: "",
-      folder: opts.cwd,
       parser: adapter.createEventParser?.(),
     };
 
@@ -235,8 +231,9 @@ export class SessionManager {
       }
       for (const event of events) {
         // Reflect live state: cwd + the running command (set on exec, cleared at prompt).
-        // Normalized: the UI groups sessions by `cwd === folder path`, and a
-        // shell reports `/x/y` where the folder key is `/x/y/`.
+        // `cwd` drifts with `cd` and never re-parents the session (that's
+        // `info.folder`); normalized so it compares against folder keys, which
+        // carry a trailing slash where a shell reports `/x/y`.
         if (event.type === "cwd") info.cwd = normalizeFolder(event.cwd);
         else if (event.type === "command-start")
           info.currentCommand = event.command.trim() || null;
@@ -275,7 +272,6 @@ export class SessionManager {
     const session: Session = {
       info,
       buffer: "",
-      folder: opts.cwd,
       child,
       translator,
       chat: emptyChatState(),
