@@ -82,11 +82,16 @@ export function emptyChatState(): ChatState {
     commands: [],
     usage: null,
     promptSuggestions: [],
+    // Every capability starts OFF, so the derived master switch does too and
+    // nothing is auto-answered until it's ticked. Their sub-options are
+    // pre-set to the settings a user who ticks one almost always wants:
+    // blanket-accept permissions, and auto-merge for auto-PR. Inert while the
+    // capability above them is off. Mirrored by DEFAULT_ASSISTANT in App.tsx.
     assistant: {
       enabled: false,
-      permissions: { enabled: false, instructions: "" },
+      permissions: { enabled: false, instructions: ALLOW_EVERYTHING },
       questions: { enabled: false, instructions: "", onlyIfSure: false },
-      autoPr: { enabled: false, instructions: "", autoMerge: false },
+      autoPr: { enabled: false, instructions: "", autoMerge: true },
     },
     autoDecisions: {},
     assistantTraces: [],

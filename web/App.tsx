@@ -56,13 +56,14 @@ interface EditorTab {
 // Per-chat-session AI-assistant mode. The BACKEND owns this (it lives in the
 // session's ChatState and the server acts even with no browser open); the UI
 // just reads it from ChatState and writes it back via `set-assistant`.
-// Must match `emptyChatState()`: every capability starts off, so the derived
-// master switch starts off too.
+// Must match `emptyChatState()`: every capability starts off (so the derived
+// master switch starts off too), with their sub-options pre-set to what a user
+// who ticks one usually wants — blanket-accept permissions, auto-merge for PRs.
 const DEFAULT_ASSISTANT: AssistantSettings = {
   enabled: false,
-  permissions: { enabled: false, instructions: "" },
+  permissions: { enabled: false, instructions: ALLOW_EVERYTHING },
   questions: { enabled: false, instructions: "", onlyIfSure: false },
-  autoPr: { enabled: false, instructions: "", autoMerge: false },
+  autoPr: { enabled: false, instructions: "", autoMerge: true },
 };
 
 /** The three checklist sections of the assistant dialog. */

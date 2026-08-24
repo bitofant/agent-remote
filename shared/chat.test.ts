@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  ALLOW_EVERYTHING,
   applyChatEvent,
   assistantNeedsLlm,
   deriveAssistantEnabled,
@@ -587,11 +588,23 @@ describe("assistant settings", () => {
     const s = emptyChatState().assistant;
     expect(s).toEqual({
       enabled: false,
-      permissions: { enabled: false, instructions: "" },
+      permissions: { enabled: false, instructions: ALLOW_EVERYTHING },
       questions: { enabled: false, instructions: "", onlyIfSure: false },
-      autoPr: { enabled: false, instructions: "", autoMerge: false },
+      autoPr: { enabled: false, instructions: "", autoMerge: true },
     });
     expect(deriveAssistantEnabled(s)).toBe(false);
+  });
+
+  it("pre-sets the sub-options, but they stay inert until ticked", () => {
+    // Blanket-accept and auto-merge are what a user ticking a capability
+    // almost always wants; neither does anything while its capability is off.
+    const s = emptyChatState().assistant;
+    expect(isAllowEverything(s.permissions.instructions)).toBe(true);
+    expect(s.autoPr.autoMerge).toBe(true);
+    expect(deriveAssistantEnabled(s)).toBe(false);
+    // Pre-set blanket-accept must not make an off assistant claim it needs
+    // (or doesn't need) an endpoint on someone else's behalf.
+    expect(assistantNeedsLlm(s)).toBe(false);
   });
 
   it("derives the master switch from any single enabled capability", () => {
