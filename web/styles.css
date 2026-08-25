@@ -2402,6 +2402,15 @@ body {
   flex: none;
   font-weight: 600;
 }
+/* A note leads with its whole summary sentence instead of a one-word verdict,
+   so it has to be able to shrink (same colors — it keeps the base class). */
+.chat-assistant-trace-verdict.summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-assistant-trace[data-outcome="allow"] .chat-assistant-trace-verdict {
   color: var(--success);
 }
@@ -2416,6 +2425,12 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0.85;
+}
+.chat-assistant-trace-chevron {
+  flex: none;
+  margin-left: auto;
+  padding-left: 6px;
+  opacity: 0.6;
 }
 .chat-assistant-trace-details {
   margin-top: 2px;

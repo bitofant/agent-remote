@@ -205,24 +205,44 @@ function ProsePart({ part }: { part: ChatPart }) {
 const ROBOT_ICON =
   "M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z";
 
-// Colored verdict word shown at the head of each AI-mode trace bubble.
+// Octicons `git-merge` (16px grid) — the auto-PR pipeline's own glyph, so its
+// progress notes are distinguishable at a glance from card deliberations.
+const MERGE_ICON = {
+  box: "0 0 16 16",
+  d: "M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM3.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.5 4.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z",
+};
+
+// Colored verdict word — the LLM's answer, so it heads deliberations only.
 const TRACE_VERDICT: Record<AssistantTrace["outcome"], string> = {
   allow: "Allow",
   deny: "Deny",
   answer: "Answer",
   abstain: "Abstain",
   error: "No response",
-  note: "Auto PR",
+  note: "Note",
 };
 
 // AI-mode bubble: a deliberation (what prompt the backend assistant sent the LLM
 // about a card, and the model's thoughts/reply) or a plain note from a backend
-// capability that consulted no LLM. Collapsed, it's a single line — colored
-// verdict word + as much of the reason as fits; tapping toggles the details.
-// A note has nothing to expand, so it isn't interactive at all.
+// capability. Collapsed, it's a single line; tapping toggles the details.
+// A deliberation leads with the colored verdict word (its summary would just
+// restate it) — a note has no verdict, so its `summary` IS the line and the
+// reason trails it. Getting that backwards printed "Auto PR origin" for what
+// should read "Pushed joran/x to origin".
 function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
   const [open, setOpen] = useState(false);
-  const hasDetails = !!(trace.prompt || trace.thoughts || trace.response);
+  const icon =
+    trace.kind === "auto-pr"
+      ? MERGE_ICON
+      : { box: "0 0 24 24", d: ROBOT_ICON };
+  // An LLM spoke → show its verdict; otherwise the note narrates itself.
+  const deliberated = !!(trace.prompt || trace.response);
+  const hasDetails = !!(
+    trace.prompt ||
+    trace.thoughts ||
+    trace.response ||
+    trace.detail
+  );
   const toggle = hasDetails
     ? {
         role: "button",
@@ -242,20 +262,36 @@ function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
       <div className="chat-assistant-trace-head" {...toggle}>
         <svg
           className="chat-assistant-trace-icon"
-          viewBox="0 0 24 24"
+          viewBox={icon.box}
           aria-hidden="true"
         >
-          <path d={ROBOT_ICON} fill="currentColor" />
+          <path d={icon.d} fill="currentColor" />
         </svg>
-        <span className="chat-assistant-trace-verdict">
-          {TRACE_VERDICT[trace.outcome]}
+        <span
+          className={`chat-assistant-trace-verdict${deliberated ? "" : " summary"}`}
+        >
+          {deliberated ? TRACE_VERDICT[trace.outcome] : trace.summary}
         </span>
         {trace.reason && (
           <span className="chat-assistant-trace-reason">{trace.reason}</span>
         )}
+        {/* Notes are expandable now too (a failed step's full stderr), so the
+            line has to advertise it — tapping was previously discoverable only
+            on deliberations. */}
+        {hasDetails && (
+          <span className="chat-assistant-trace-chevron" aria-hidden="true">
+            {open ? "▾" : "▸"}
+          </span>
+        )}
       </div>
       {open && (
         <div className="chat-assistant-trace-details">
+          {trace.detail && (
+            <div className="chat-assistant-trace-section">
+              <div className="chat-assistant-trace-label">Details</div>
+              <pre>{trace.detail}</pre>
+            </div>
+          )}
           {trace.prompt && (
             <div className="chat-assistant-trace-section">
               <div className="chat-assistant-trace-label">Prompt</div>

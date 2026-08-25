@@ -113,7 +113,12 @@ export class Client {
       case "exit":
         this.sessions = this.sessions.map((s) =>
           s.id === msg.sessionId
-            ? { ...s, status: "exited", exitCode: msg.exitCode }
+            ? {
+                ...s,
+                status: "exited" as const,
+                exitCode: msg.exitCode,
+                stopped: msg.stopped,
+              }
             : s,
         );
         this.emitSessions();

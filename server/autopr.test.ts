@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { emptyChatState } from "../shared/chat.js";
 import type { ChatMessage, ChatState } from "../shared/protocol.js";
-import { buildTurnDigest, decideFlow, shouldRunAutoPr } from "./autopr.js";
+import {
+  buildTurnDigest,
+  decideFlow,
+  firstLine,
+  shouldRunAutoPr,
+} from "./autopr.js";
 
 function msg(role: "user" | "assistant", text: string): ChatMessage {
   return {
@@ -170,5 +175,23 @@ describe("decideFlow", () => {
     expect(decideFlow({ dirty: false, onMain: true, diffVsBase: true })).toBe(
       "nothing",
     );
+  });
+});
+
+describe("firstLine", () => {
+  it("skips leading blank lines", () => {
+    expect(firstLine("\n\n  fatal: not a branch\nmore\n")).toBe(
+      "fatal: not a branch",
+    );
+  });
+
+  it("is undefined for empty output, so the note shows no reason", () => {
+    expect(firstLine("   \n\n")).toBeUndefined();
+  });
+
+  it("truncates a line too long for a single note line", () => {
+    const line = firstLine("x".repeat(500))!;
+    expect(line.length).toBeLessThanOrEqual(160);
+    expect(line.endsWith("…")).toBe(true);
   });
 });

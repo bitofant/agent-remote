@@ -26,6 +26,10 @@ export interface SessionInfo {
   ui: SessionUi;
   status: "running" | "exited";
   exitCode: number | null;
+  /** We terminated it (Stop/Close, or a backend flow like auto-PR finishing)
+   * rather than the harness dying on its own — so the UI can say "closed"
+   * instead of reporting SIGTERM's non-zero exit code as a failure. */
+  stopped?: boolean;
   createdAt: number;
   /** Command line currently executing in the session, or null when idle at the
    * prompt. Kept live by shell integration; always null for harnesses without
@@ -413,11 +417,15 @@ export interface AssistantTrace {
   /** Structured outcome for the trace bubble's colored verdict word:
    * allow (green) / deny (red) / answer / abstain / error / note (neutral). */
   outcome: "allow" | "deny" | "answer" | "abstain" | "error" | "note";
-  /** Terse reason for the outcome, shown inline after the verdict word. */
+  /** Terse reason for the outcome, shown inline after the verdict/summary. */
   reason?: string;
-  /** One-line outcome summary (e.g. "Allowed", "Denied — …", "Answered",
-   * "Abstained", "No response from endpoint"). Plain-text form for the
-   * render-log / accessibility; the bubble uses `outcome` + `reason`. */
+  /** Long-form detail a note expands into (e.g. a git step's full stderr), for
+   * notes that consulted no LLM and so have no prompt/response to show. */
+  detail?: string;
+  /** One-line outcome summary (e.g. "Allowed", "Denied — …", "Pushed x to
+   * origin"). For a deliberation the bubble shows the verdict word instead (the
+   * LLM's answer is the point); for a note it IS the line, so write it as a
+   * self-contained sentence — the reason is only ever a trailing detail. */
   summary: string;
   at: number;
   /** Id of the assistant message this deliberation belongs to (the turn whose
@@ -620,7 +628,13 @@ export type ServerMessage =
   | { type: "sessions"; sessions: SessionInfo[] }
   | { type: "started"; session: SessionInfo }
   | { type: "output"; sessionId: string; data: string }
-  | { type: "exit"; sessionId: string; exitCode: number | null }
+  /** `stopped` mirrors `SessionInfo.stopped` (we killed it, it didn't die). */
+  | {
+      type: "exit";
+      sessionId: string;
+      exitCode: number | null;
+      stopped?: boolean;
+    }
   | { type: "removed"; sessionId: string }
   | { type: "sessionEvent"; sessionId: string; event: SessionEvent }
   /** Full chat-state snapshot, sent on connect for each chat session (the
