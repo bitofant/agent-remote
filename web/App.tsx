@@ -219,7 +219,10 @@ function isAgentCommand(command: string | null): boolean {
 // Session-row subtitle. A session that has `cd`'d away still lives in its launch
 // folder's tabs, so name where it actually is instead of a bare "running".
 function sessionMeta(s: SessionInfo, home: string): string {
-  if (s.status === "exited") return `exited (${s.exitCode ?? "?"})`;
+  // A session we killed ourselves exits non-zero by definition (SIGTERM); an
+  // exit code there would read as a failure.
+  if (s.status === "exited")
+    return s.stopped ? "closed" : `exited (${s.exitCode ?? "?"})`;
   if (s.currentCommand) return s.currentCommand;
   return s.cwd === s.folder ? "running" : displayPath(s.cwd, home);
 }

@@ -55,6 +55,19 @@ function tail(text: string): string {
   return text.length > MAX_DIGEST_CHARS ? text.slice(-MAX_DIGEST_CHARS) : text;
 }
 
+/** How much of a failure's first line fits on a note's single line. */
+const MAX_REASON_CHARS = 160;
+
+/** First non-empty line of a command's output, for the inline reason (the whole
+ * output goes in the note's expandable `detail`). Exported for testing. */
+export function firstLine(text: string): string | undefined {
+  const line = text.split("\n").find((l) => l.trim())?.trim();
+  if (!line) return undefined;
+  return line.length > MAX_REASON_CHARS
+    ? `${line.slice(0, MAX_REASON_CHARS - 1)}…`
+    : line;
+}
+
 /** Render what the turn gate judges: the developer's last request and the
  * agent's final message. `null` when the transcript doesn't end in an assistant
  * message with content — the agent never actually replied (an interrupt before
@@ -121,14 +134,20 @@ export function attachAutoPr(
   const running = new Set<string>();
 
   /** Post one AI-mode note into the session's transcript. Usually no
-   * prompt/response — no LLM was consulted — so it renders as a one-liner; the
-   * turn gate passes its trace so its verdict is expandable like any other. */
+   * prompt/response — no LLM was consulted — so the bubble shows `summary` as
+   * its line: write each one as a self-contained sentence ("Pushed x to
+   * origin"), with `reason` a trailing detail and never the substance. `detail`
+   * expands behind the disclosure; the turn gate passes its trace instead, so
+   * its verdict reads like any other deliberation. */
   const note = (
     sessionId: string,
     outcome: "note" | "error" | "allow" | "deny" | "abstain",
     summary: string,
     reason?: string,
-    trace?: { prompt: string; thoughts?: string; response: string },
+    extra?: {
+      detail?: string;
+      trace?: { prompt: string; thoughts?: string; response: string };
+    },
   ) => {
     manager.postAssistantTrace(sessionId, {
       requestId: `auto-pr:${Date.now()}`,
@@ -136,8 +155,22 @@ export function attachAutoPr(
       outcome,
       reason,
       summary,
+      detail: extra?.detail,
       at: Date.now(),
-      ...trace,
+      ...extra?.trace,
+    });
+  };
+
+  /** A failed git/gh step: one red line, the command's whole stderr behind the
+   * disclosure — the first line alone regularly omits the actual cause. */
+  const failed = (
+    sessionId: string,
+    summary: string,
+    result: { stderr: string },
+  ) => {
+    const stderr = result.stderr.trim();
+    note(sessionId, "error", summary, firstLine(stderr), {
+      detail: stderr || undefined,
     });
   };
 
@@ -162,7 +195,7 @@ export function attachAutoPr(
       note(
         sessionId,
         "abstain",
-        "Could not check whether the turn finished",
+        "Couldn't verify the turn finished",
         "LLM endpoint unavailable — continuing anyway",
       );
       return true;
@@ -172,7 +205,7 @@ export function attachAutoPr(
       note(
         sessionId,
         "abstain",
-        "Could not check whether the turn finished",
+        "Couldn't verify the turn finished",
         "no usable verdict — continuing anyway",
       );
       return true;
@@ -182,7 +215,7 @@ export function attachAutoPr(
       verdict.open ? "allow" : "deny",
       verdict.open ? "Turn looks finished" : "Skipping the PR",
       verdict.reason || undefined,
-      verdict.trace,
+      { trace: verdict.trace },
     );
     return verdict.open;
   }
@@ -194,7 +227,10 @@ export function attachAutoPr(
     // can't slip a run past it while the verdict is still in flight.
     void flow(sessionId, gate)
       .catch((err: unknown) => {
-        note(sessionId, "error", "Auto PR failed", (err as Error).message);
+        const e = err as Error;
+        note(sessionId, "error", "Auto PR failed", firstLine(e?.message ?? ""), {
+          detail: e?.stack ?? String(err),
+        });
       })
       .finally(() => running.delete(sessionId));
   };
@@ -225,7 +261,7 @@ export function attachAutoPr(
 
     const plan = decideFlow({ dirty, onMain, diffVsBase });
     if (plan === "nothing") {
-      note(sessionId, "note", "Nothing to open a PR for", "returning to " + base);
+      note(sessionId, "note", "Nothing to open a PR for", "the tree is clean");
       await returnToBase(sessionId, folder, base);
       return;
     }
@@ -233,7 +269,7 @@ export function attachAutoPr(
     // --- 1. branch ---------------------------------------------------------
     let working = branch;
     if (onMain) {
-      working = await cutBranch(sessionId, folder, instructions);
+      working = await cutBranch(sessionId, folder, base, instructions);
       if (!working) return;
     }
 
@@ -247,10 +283,10 @@ export function attachAutoPr(
       180_000,
     );
     if (!push.ok) {
-      note(sessionId, "error", "Push failed", push.stderr.trim().split("\n")[0]);
+      failed(sessionId, "Push failed", push);
       return;
     }
-    note(sessionId, "note", `Pushed ${working}`, "origin");
+    note(sessionId, "note", `Pushed ${working ?? "HEAD"} to origin`);
 
     // --- 4. PR -------------------------------------------------------------
     // A branch keeps its PR across turns: the push above already updated it, so
@@ -263,10 +299,15 @@ export function attachAutoPr(
         sessionId,
         "note",
         `PR #${existing.number} already open`,
-        dirty ? "updated it with the new commit" : "nothing new to add",
+        dirty ? "pushed the new commit to it" : "nothing new to add",
       );
     } else {
-      note(sessionId, "note", "Opening the PR", `${harnessId} ${command}`);
+      note(
+        sessionId,
+        "note",
+        "Drafting the pull request",
+        `in a ${harnessId} ${command} session`,
+      );
       const opened = await runPrSession(manager, {
         folder,
         harnessId,
@@ -276,8 +317,8 @@ export function attachAutoPr(
       });
       if (!opened) return;
       pr = opened;
-      const created = pr.prNumber != null ? `PR #${pr.prNumber}` : "PR";
-      note(sessionId, "note", `${created} created`, pr.prUrl ?? undefined);
+      const created = pr.prNumber != null ? `PR #${pr.prNumber}` : "the PR";
+      note(sessionId, "note", `Opened ${created}`, pr.prUrl ?? undefined);
     }
     const label = pr.prNumber != null ? `PR #${pr.prNumber}` : "PR";
 
@@ -297,10 +338,10 @@ export function attachAutoPr(
       "--delete-branch",
     ]);
     if (!merge.ok) {
-      note(sessionId, "error", `Merging ${label} failed`, merge.stderr.trim().split("\n")[0]);
+      failed(sessionId, `Merging ${label} failed`, merge);
       return;
     }
-    note(sessionId, "note", `${label} merged`, "squash");
+    note(sessionId, "note", `Merged ${label}`, "squashed, branch deleted");
 
     // --- 6. back to main ---------------------------------------------------
     await returnToBase(sessionId, folder, base);
@@ -311,6 +352,7 @@ export function attachAutoPr(
   async function cutBranch(
     sessionId: string,
     folder: string,
+    base: string,
     instructions?: string,
   ): Promise<string | null> {
     const prefix = await branchPrefix(folder);
@@ -321,10 +363,10 @@ export function attachAutoPr(
 
     const checkout = await git(folder, ["checkout", "-b", name]);
     if (!checkout.ok) {
-      note(sessionId, "error", "Could not create branch", checkout.stderr.trim());
+      failed(sessionId, `Could not create branch ${name}`, checkout);
       return null;
     }
-    note(sessionId, "note", `Branched ${name}`, undefined);
+    note(sessionId, "note", `Created branch ${name}`, `off ${base}`);
     return name;
   }
 
@@ -336,7 +378,7 @@ export function attachAutoPr(
   ): Promise<boolean> {
     const add = await git(folder, ["add", "-A"]);
     if (!add.ok) {
-      note(sessionId, "error", "Could not stage changes", add.stderr.trim());
+      failed(sessionId, "Could not stage the changes", add);
       return false;
     }
     const diff = await stagedDiff(folder);
@@ -362,7 +404,7 @@ export function attachAutoPr(
       message,
     ]);
     if (!commit.ok) {
-      note(sessionId, "error", "Commit failed", commit.stderr.trim().split("\n")[0]);
+      failed(sessionId, "Commit failed", commit);
       return false;
     }
     note(sessionId, "note", "Committed", message);
@@ -377,15 +419,15 @@ export function attachAutoPr(
   ): Promise<void> {
     const checkout = await git(folder, ["checkout", base]);
     if (!checkout.ok) {
-      note(sessionId, "error", `Could not check out ${base}`, checkout.stderr.trim().split("\n")[0]);
+      failed(sessionId, `Could not check out ${base}`, checkout);
       return;
     }
     const pull = await git(folder, ["pull", "--ff-only", "origin", base], 120_000);
     if (!pull.ok) {
-      note(sessionId, "error", `Could not update ${base}`, pull.stderr.trim().split("\n")[0]);
+      failed(sessionId, `Could not update ${base}`, pull);
       return;
     }
-    note(sessionId, "note", `Back on ${base}`, "up to date");
+    note(sessionId, "note", `Back on ${base}`, `fast-forwarded to origin/${base}`);
   }
 
   return manager.subscribe({

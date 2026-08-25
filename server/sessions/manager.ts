@@ -304,7 +304,9 @@ export class SessionManager {
 
     const finish = (exitCode: number | null) => {
       if (info.status === "exited") return;
-      if (exitCode !== 0 && session.stderrTail?.trim()) {
+      // SIGTERM yields a non-zero code; the tail is then whatever the harness
+      // happened to warn about at startup, not a cause of death.
+      if (!info.stopped && exitCode !== 0 && session.stderrTail?.trim()) {
         this.applyChat(session, {
           type: "notice",
           level: "error",
@@ -464,8 +466,12 @@ export class SessionManager {
     for (const l of this.listeners) l.onRemoved?.(sessionId);
   }
 
+  /** Terminate a session's process. Flags it as OUR doing first: the exit that
+   * follows carries SIGTERM's non-zero code, which is expected — so no failure
+   * notice, and the UI says "closed" rather than reporting an exit code. */
   private kill(session: Session | undefined): void {
     if (!session) return;
+    session.info.stopped = true;
     if (session.pty) session.pty.kill();
     else if (session.chatSession) session.chatSession.close();
     else session.child?.kill("SIGTERM");

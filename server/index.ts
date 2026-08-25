@@ -623,7 +623,15 @@ wss.on("connection", (ws: WebSocket, user: string) => {
   const unsubscribe = manager.subscribe({
     onStarted: (session) => send({ type: "started", session }),
     onOutput: (sessionId, data) => send({ type: "output", sessionId, data }),
-    onExit: (sessionId, exitCode) => send({ type: "exit", sessionId, exitCode }),
+    onExit: (sessionId, exitCode) =>
+      send({
+        type: "exit",
+        sessionId,
+        exitCode,
+        // Read back off the session: the listener signature carries only the
+        // code, and a deliberate stop must look different from a crash.
+        stopped: manager.sessionInfo(sessionId)?.stopped,
+      }),
     onRemoved: (sessionId) => send({ type: "removed", sessionId }),
     onEvent: (sessionId, event) =>
       send({ type: "sessionEvent", sessionId, event }),
