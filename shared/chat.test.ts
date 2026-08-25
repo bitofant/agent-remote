@@ -686,4 +686,66 @@ describe("assistant settings", () => {
     expect(trace.prompt).toBeUndefined();
     expect(trace.response).toBeUndefined();
   });
+
+  it("honours a pinned anchor while its turn is in the transcript", () => {
+    // Auto-PR pins the turn that started the run, so notes posted minutes later
+    // stay with it instead of trailing whatever the developer has since sent.
+    const state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "part-start", kind: "text" },
+      { type: "part-delta", delta: "done" },
+      { type: "assistant-end" },
+      {
+        type: "user-message",
+        message: {
+          id: "m2",
+          role: "user",
+          parts: [{ type: "text", text: "next" }],
+          createdAt: 2,
+        },
+      },
+      {
+        type: "assistant-trace",
+        trace: {
+          requestId: "auto-pr:1",
+          kind: "auto-pr",
+          outcome: "note",
+          summary: "Pushed joran/x to origin",
+          at: 3,
+          anchorMessageId: "m1",
+        },
+      },
+    ]);
+    expect(state.assistantTraces[0].anchorMessageId).toBe("m1");
+  });
+
+  it("re-anchors a trace whose pinned turn is gone to the latest message", () => {
+    // A stale pin (its turn rewound or capped out of history) must not leave the
+    // trace dangling: the UI renders nothing after the last message, so a
+    // dangling trace would vanish — or, if parked at the end, would sit below
+    // every message sent after it.
+    const state = reduce([
+      {
+        type: "user-message",
+        message: {
+          id: "m9",
+          role: "user",
+          parts: [{ type: "text", text: "hi" }],
+          createdAt: 1,
+        },
+      },
+      {
+        type: "assistant-trace",
+        trace: {
+          requestId: "auto-pr:1",
+          kind: "auto-pr",
+          outcome: "note",
+          summary: "Opened PR #1",
+          at: 2,
+          anchorMessageId: "long-gone",
+        },
+      },
+    ]);
+    expect(state.assistantTraces[0].anchorMessageId).toBe("m9");
+  });
 });
