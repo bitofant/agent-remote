@@ -133,6 +133,13 @@ export function attachAutoPr(
   // whole async flow, not just its first tick.
   const running = new Set<string>();
 
+  // The turn each in-flight run belongs to. A run takes minutes (LLM gate, git,
+  // a whole PR session) and the developer keeps chatting meanwhile, so without
+  // this every note would anchor to whatever message happened to be last when
+  // it was posted — the notes would trail the live conversation instead of
+  // staying with the turn that triggered them. Pinned once, at run start.
+  const anchors = new Map<string, string | undefined>();
+
   /** Post one AI-mode note into the session's transcript. Usually no
    * prompt/response — no LLM was consulted — so the bubble shows `summary` as
    * its line: write each one as a self-contained sentence ("Pushed x to
@@ -157,6 +164,7 @@ export function attachAutoPr(
       summary,
       detail: extra?.detail,
       at: Date.now(),
+      anchorMessageId: anchors.get(sessionId),
       ...extra?.trace,
     });
   };
@@ -223,6 +231,11 @@ export function attachAutoPr(
   const run = (sessionId: string, gate: boolean) => {
     if (running.has(sessionId)) return;
     running.add(sessionId);
+    const state = manager.chatState(sessionId);
+    anchors.set(
+      sessionId,
+      state?.streaming?.id ?? state?.messages[state.messages.length - 1]?.id,
+    );
     // The gate runs inside the single-flight (see flow) so a second settle
     // can't slip a run past it while the verdict is still in flight.
     void flow(sessionId, gate)
@@ -232,7 +245,10 @@ export function attachAutoPr(
           detail: e?.stack ?? String(err),
         });
       })
-      .finally(() => running.delete(sessionId));
+      .finally(() => {
+        running.delete(sessionId);
+        anchors.delete(sessionId);
+      });
   };
 
   async function flow(sessionId: string, gate: boolean): Promise<void> {
