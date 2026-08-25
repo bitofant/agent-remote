@@ -282,11 +282,12 @@ function Workspace({
   const [assistantDialogOpen, setAssistantDialogOpen] = useState(false);
   const [assistantDraft, setAssistantDraft] =
     useState<AssistantSettings>(DEFAULT_ASSISTANT);
-  // Which checklist sections are expanded (UI-only; ticking a box drives it).
+  // Which checklist sections are expanded (UI-only). All open by default —
+  // the settings should be readable without hunting for a chevron.
   const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({
-    permissions: false,
-    questions: false,
-    autoPr: false,
+    permissions: true,
+    questions: true,
+    autoPr: true,
   });
   // Pending debounced push of the instruction textareas (see pushAssistant).
   const assistantPush = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -627,14 +628,10 @@ function Workspace({
   const onAssistantButton = () => {
     if (activeSessionId === null) return;
     const cur = activeAssistant ?? DEFAULT_ASSISTANT;
-    // Opening must never change a setting — seed the draft verbatim, and show
-    // exactly the enabled sections expanded.
+    // Opening must never change a setting — seed the draft verbatim; every
+    // section starts expanded so all options are visible at a glance.
     setAssistantDraft(cur);
-    setOpenSections({
-      permissions: cur.permissions.enabled,
-      questions: cur.questions.enabled,
-      autoPr: cur.autoPr.enabled,
-    });
+    setOpenSections({ permissions: true, questions: true, autoPr: true });
     setAssistantDialogOpen(true);
   };
 
@@ -653,10 +650,11 @@ function Workspace({
     pushAssistant(next, debounce);
   }
 
-  /** Ticking a box also reveals its settings; unticking tucks them away. */
+  /** Ticking a box also reveals its settings; unticking leaves it expanded
+   * (sections default to open, so collapsing on untick would hide them). */
   const setSectionEnabled = (key: SectionKey, enabled: boolean) => {
     patchSection(key, { enabled });
-    setOpenSections((o) => ({ ...o, [key]: enabled }));
+    if (enabled) setOpenSections((o) => ({ ...o, [key]: true }));
   };
 
   const assistantSection = (key: SectionKey, label: string, body: ReactNode) => {
