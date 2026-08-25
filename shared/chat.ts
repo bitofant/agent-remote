@@ -291,10 +291,19 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
       // to the latest message. This survives the streaming→finalized handoff
       // (same message id), so the bubble stays inline beside that turn in both
       // phases — and is clock-independent (no timestamp interleaving).
-      const anchorMessageId =
-        event.trace.anchorMessageId ??
-        state.streaming?.id ??
-        state.messages[state.messages.length - 1]?.id;
+      // A caller-supplied anchor is only honoured if that turn is still in the
+      // transcript: auto-PR pins one for a run that spans minutes, and a stale
+      // id would render nowhere (or, worse, sink to the end and let every later
+      // message slide in above it). Unanchored means "before any message".
+      const pinned = event.trace.anchorMessageId;
+      const known =
+        pinned !== undefined &&
+        (pinned === state.streaming?.id ||
+          state.messages.some((m) => m.id === pinned));
+      const anchorMessageId = known
+        ? pinned
+        : (state.streaming?.id ??
+          state.messages[state.messages.length - 1]?.id);
       return {
         ...state,
         assistantTraces: [

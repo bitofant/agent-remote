@@ -1158,11 +1158,12 @@ export function ChatView({
       .map((t, i) => (
         <AssistantTraceBubble key={`trace-${t.requestId}-${t.at}-${i}`} trace={t} />
       ));
-  const renderedIds = new Set(state.messages.map((m) => m.id));
-  if (state.streaming) renderedIds.add(state.streaming.id);
-  const orphanTraces = state.assistantTraces.filter(
-    (t) => !t.anchorMessageId || !renderedIds.has(t.anchorMessageId),
-  );
+  // An unanchored trace predates every message (posted into an empty
+  // transcript), so it leads. Nothing renders *after* the messages: a trace
+  // parked at the end would stay there while every later message slid in above
+  // it — the reducer keeps anchors pointing at live turns, and one whose turn
+  // has aged out of history goes with it.
+  const leadingTraces = state.assistantTraces.filter((t) => !t.anchorMessageId);
 
   // Typing `/foo` (the whole composer, no space yet) is a live command query: it
   // opens the menu and prefix-filters it. `/resume` and `/rewind` are the
@@ -1406,6 +1407,9 @@ export function ChatView({
             {exited ? "Session ended." : "Send a prompt to get started."}
           </div>
         )}
+        {leadingTraces.map((t, i) => (
+          <AssistantTraceBubble key={`trace-${t.requestId}-${t.at}-${i}`} trace={t} />
+        ))}
         {state.messages.map((m) => (
           <Fragment key={m.id}>
             <Bubble
@@ -1423,11 +1427,6 @@ export function ChatView({
             {tracesFor(state.streaming.id)}
           </Fragment>
         )}
-        {/* Traces whose anchor turn is no longer rendered (e.g. capped out of
-            history) fall back to the end so they're never lost. */}
-        {orphanTraces.map((t, i) => (
-          <AssistantTraceBubble key={`trace-${t.requestId}-${t.at}-${i}`} trace={t} />
-        ))}
         {state.queued.map((text, i) => (
           <div key={`q-${i}`} className="chat-bubble user queued">
             {text}
