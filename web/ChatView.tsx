@@ -1043,6 +1043,37 @@ export function ChatView({
     resizePending.current = true;
   }, [state.draft, draft]);
 
+  // --- Continuity Mode's armed prompt (display + cancel) -------------------
+  // The backend composed the next prompt and owns the timer that sends it (so
+  // it fires with no browser open); here we show the text and sweep a ring
+  // around Send. Any intervention withdraws it. Latched by id, so a withdrawn
+  // prompt stays withdrawn while a fresh one still arms.
+  const [cancelledPrompt, setCancelledPrompt] = useState<string | null>(null);
+  const armedPrompt =
+    state.autoPrompt && state.autoPrompt.id !== cancelledPrompt
+      ? state.autoPrompt
+      : null;
+
+  const cancelAutoPrompt = useCallback(() => {
+    const armed = state.autoPrompt;
+    if (!armed || armed.id === cancelledPrompt) return;
+    setCancelledPrompt(armed.id);
+    client.chatAction(sessionId, { type: "cancel-auto-prompt", id: armed.id });
+  }, [client, sessionId, state.autoPrompt, cancelledPrompt]);
+
+  // Adopt the composed text outright — unlike the draft echo above this is
+  // explicit backend intent, not another client's keystrokes, so it overrides
+  // the caret/ack guards. Keyed on the prompt id, so it runs once per arming.
+  const adoptedPrompt = useRef<string | null>(null);
+  useEffect(() => {
+    const armed = state.autoPrompt;
+    if (!armed || adoptedPrompt.current === armed.id) return;
+    adoptedPrompt.current = armed.id;
+    syncedDraft.current = armed.text;
+    setDraft(armed.text);
+    resizePending.current = true;
+  }, [state.autoPrompt]);
+
   // Adopted text needs the same auto-grow typing gets, but only once React has
   // rendered it (scrollHeight is measured on the new value, not the old).
   useLayoutEffect(() => {
@@ -1120,6 +1151,8 @@ export function ChatView({
 
   // Auto-grow the composer with its content (up to the CSS max-height).
   const onDraftChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    // Editing the composed text means taking over: stop the countdown.
+    cancelAutoPrompt();
     setDraft(e.target.value);
     setMenuDismissed(false);
     const ta = e.target;
@@ -1567,6 +1600,16 @@ export function ChatView({
       {!exited && (
         <div
           className={`chat-composer${dragOver ? " drag-over" : ""}`}
+          // Reaching for any control other than Send is intervening: withdraw
+          // the armed prompt so only a deliberate Send submits it.
+          onPointerDownCapture={(e) => {
+            if (!armedPrompt) return;
+            const control = (e.target as HTMLElement).closest(
+              "button, input, textarea",
+            );
+            if (control && !control.classList.contains("chat-send"))
+              cancelAutoPrompt();
+          }}
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes("Files")) {
               e.preventDefault();
@@ -1671,7 +1714,23 @@ export function ChatView({
             </button>
           )}
           <button
-            className="chat-send"
+            className={`chat-send${armedPrompt ? " auto-press" : ""}`}
+            // The ring is display-only — the backend sends it. `animation-delay`
+            // is negative so a client joining mid-countdown paints the arc it's
+            // actually at instead of restarting the sweep.
+            style={
+              armedPrompt
+                ? ({
+                    ["--auto-duration" as string]: `${armedPrompt.delayMs}ms`,
+                    // Custom property, not `animation-delay`: the animation runs
+                    // on ::after, and only custom properties inherit into it.
+                    ["--auto-elapsed" as string]: `-${Math.max(
+                      0,
+                      Date.now() - armedPrompt.at,
+                    )}ms`,
+                  } as React.CSSProperties)
+                : undefined
+            }
             disabled={!canSend}
             onClick={send}
           >

@@ -478,6 +478,10 @@ describe("applyChatEvent rewind", () => {
           type: "assistant-decision",
           decision: { requestId: "r1", action: "confirm", delayMs: 2000 },
         },
+        {
+          type: "auto-prompt",
+          prompt: { id: "p1", text: "carry on", delayMs: 8000, at: 0 },
+        },
       ],
     );
     expect(before.streaming).not.toBeNull();
@@ -490,6 +494,7 @@ describe("applyChatEvent rewind", () => {
     expect(state.pendingRequests).toEqual([]);
     expect(state.promptSuggestions).toEqual([]);
     expect(state.autoDecisions).toEqual({});
+    expect(state.autoPrompt).toBeNull();
     expect(state.rewindPreview).toBeNull();
   });
 
@@ -566,6 +571,56 @@ describe("applyChatEvent rewind", () => {
   });
 });
 
+describe("applyChatEvent auto-prompt", () => {
+  const prompt = (id: string, text: string): ChatEvent => ({
+    type: "auto-prompt",
+    prompt: { id, text, delayMs: 8_000, at: 1_000 },
+  });
+
+  it("arms a composed prompt for the composer countdown", () => {
+    const state = reduce([prompt("p1", "carry on")]);
+    expect(state.autoPrompt).toEqual({
+      id: "p1",
+      text: "carry on",
+      delayMs: 8_000,
+      at: 1_000,
+    });
+  });
+
+  it("clears it when the matching id is withdrawn", () => {
+    const state = reduce([
+      prompt("p1", "carry on"),
+      { type: "auto-prompt-cleared", id: "p1" },
+    ]);
+    expect(state.autoPrompt).toBeNull();
+  });
+
+  it("ignores a stale clear, so it can't kill a fresher prompt", () => {
+    const state = reduce([
+      prompt("p1", "carry on"),
+      prompt("p2", "no, do this instead"),
+      { type: "auto-prompt-cleared", id: "p1" },
+    ]);
+    expect(state.autoPrompt?.id).toBe("p2");
+  });
+
+  it("is spent by any prompt actually being sent", () => {
+    const state = reduce([
+      prompt("p1", "carry on"),
+      {
+        type: "user-message",
+        message: {
+          id: "u1",
+          role: "user",
+          parts: [{ type: "text", text: "carry on" }],
+          createdAt: 0,
+        },
+      },
+    ]);
+    expect(state.autoPrompt).toBeNull();
+  });
+});
+
 describe("isAllowEverything", () => {
   it("matches the sentinel regardless of case, spacing or trailing punctuation", () => {
     for (const s of ["allow everything", "  Allow Everything ", "ALLOW EVERYTHING."])
@@ -591,6 +646,7 @@ describe("assistant settings", () => {
       permissions: { enabled: false, instructions: ALLOW_EVERYTHING },
       questions: { enabled: false, instructions: "", onlyIfSure: false },
       autoPr: { enabled: false, instructions: "", autoMerge: true },
+      continuity: { enabled: false, instructions: "", newSession: "after-pr" },
     });
     expect(deriveAssistantEnabled(s)).toBe(false);
   });
@@ -601,6 +657,7 @@ describe("assistant settings", () => {
     const s = emptyChatState().assistant;
     expect(isAllowEverything(s.permissions.instructions)).toBe(true);
     expect(s.autoPr.autoMerge).toBe(true);
+    expect(s.continuity.newSession).toBe("after-pr");
     expect(deriveAssistantEnabled(s)).toBe(false);
     // Pre-set blanket-accept must not make an off assistant claim it needs
     // (or doesn't need) an endpoint on someone else's behalf.
@@ -623,6 +680,23 @@ describe("assistant settings", () => {
     expect(
       deriveAssistantEnabled(
         settings({ autoPr: { enabled: true, instructions: "", autoMerge: false } }),
+      ),
+    ).toBe(true);
+    expect(
+      deriveAssistantEnabled(
+        settings({
+          continuity: { enabled: true, instructions: "", newSession: "never" },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("needs the LLM for continuity — it has no prompt to send without one", () => {
+    expect(
+      assistantNeedsLlm(
+        settings({
+          continuity: { enabled: true, instructions: "", newSession: "never" },
+        }),
       ),
     ).toBe(true);
   });

@@ -45,7 +45,8 @@ import { normalizeFolder } from "./paths.js";
 import { startLlmPolling, llmStatus } from "./llm.js";
 import { attachAssistant } from "./assistant.js";
 import { attachSuggestions } from "./suggestions.js";
-import { attachAutoPr } from "./autopr.js";
+import { attachTurnRouter } from "./turnRouter.js";
+import { attachContinuity } from "./continuity.js";
 import type {
   ChatImageRef,
   ClientMessage,
@@ -78,10 +79,15 @@ attachAssistant(manager);
 // server/suggestions.ts. Best-effort; no-op when the LLM endpoint is down.
 attachSuggestions(manager, adapters);
 
-// Auto-PR capability of AI-assistant mode: branch/commit/push the session's
-// work, open the PR by driving a real `pi /pr` session, and (with `auto merge`)
-// squash-merge it and return to main. See server/autopr.ts.
-attachAutoPr(manager, config.autoPr);
+// Where a settled turn goes: the LLM routes it to auto-PR (branch/commit/push,
+// open the PR by driving a real `pi /pr` session, and with `auto merge`
+// squash-merge it and return to main) or to Continuity Mode (write and send the
+// developer's next message). See server/turnRouter.ts.
+attachTurnRouter(manager, config.autoPr);
+
+// The other half of Continuity Mode: cancel an armed prompt when a human types,
+// withdraws it, or the session moves on. See server/continuity.ts.
+attachContinuity(manager);
 
 const harnesses: HarnessInfo[] = [...adapters.values()].map((a) => ({
   id: a.id,

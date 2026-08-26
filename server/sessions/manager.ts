@@ -14,6 +14,7 @@ import type {
 import type {
   AssistantDecision,
   AssistantTrace,
+  AutoPrompt,
   ChatAction,
   ChatEvent,
   ChatState,
@@ -397,6 +398,12 @@ export class SessionManager {
       this.applyChat(session, { type: "draft", text: action.text });
       return;
     }
+    // Withdrawing a Continuity Mode prompt; server/continuity.ts observes the
+    // resulting event and cancels its send timer.
+    if (action.type === "cancel-auto-prompt") {
+      this.applyChat(session, { type: "auto-prompt-cleared", id: action.id });
+      return;
+    }
     if (action.type === "prompt") {
       // Sending consumes the draft, whatever it holds. (Guarded only to skip a
       // no-op broadcast: the sender usually cleared it already.)
@@ -428,6 +435,21 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session?.chat)
       this.applyChat(session, { type: "prompt-suggestion", suggestions });
+  }
+
+  /** Arm Continuity Mode's composed prompt on a chat session — the composer's
+   * countdown ring. The backend does the actual sending; no-op for non-chat/
+   * absent sessions. */
+  postAutoPrompt(sessionId: string, prompt: AutoPrompt): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.chat) this.applyChat(session, { type: "auto-prompt", prompt });
+  }
+
+  /** Withdraw an armed auto-prompt (it fired, or continuity gave up on it). */
+  clearAutoPrompt(sessionId: string, id: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.chat)
+      this.applyChat(session, { type: "auto-prompt-cleared", id });
   }
 
   /** Record an AI-assistant deliberation (prompt/thoughts/response) for a card,

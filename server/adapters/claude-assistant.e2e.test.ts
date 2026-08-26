@@ -93,6 +93,7 @@ describe.skipIf(!config || !enabled || !up || !llmUp)(
           },
           questions: { enabled: false, instructions: "", onlyIfSure: false },
           autoPr: { enabled: false, instructions: "", autoMerge: false },
+          continuity: { enabled: false, instructions: "", newSession: "never" },
         },
       });
 
