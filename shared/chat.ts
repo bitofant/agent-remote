@@ -51,13 +51,19 @@ export function isAllowEverything(instructions: string | undefined): boolean {
  * some capability is. The manager recomputes it on every `set-assistant` so a
  * client can't desync it from the checklist. */
 export function deriveAssistantEnabled(s: AssistantSettings): boolean {
-  return s.permissions.enabled || s.questions.enabled || s.autoPr.enabled;
+  return (
+    s.permissions.enabled ||
+    s.questions.enabled ||
+    s.autoPr.enabled ||
+    s.continuity.enabled
+  );
 }
 
 /** Does this configuration need the LLM endpoint to do anything? Auto-PR runs
- * without it, blanket-accept permissions bypass it, questions always need it. */
+ * without it, blanket-accept permissions bypass it, questions always need it —
+ * and continuity can't write a prompt without it at all. */
 export function assistantNeedsLlm(s: AssistantSettings): boolean {
-  if (s.questions.enabled) return true;
+  if (s.questions.enabled || s.continuity.enabled) return true;
   return s.permissions.enabled && !isAllowEverything(s.permissions.instructions);
 }
 
@@ -92,12 +98,14 @@ export function emptyChatState(): ChatState {
       permissions: { enabled: false, instructions: ALLOW_EVERYTHING },
       questions: { enabled: false, instructions: "", onlyIfSure: false },
       autoPr: { enabled: false, instructions: "", autoMerge: true },
+      continuity: { enabled: false, instructions: "", newSession: "after-pr" },
     },
     autoDecisions: {},
     assistantTraces: [],
     capabilities: {},
     rewindPreview: null,
     draft: "",
+    autoPrompt: null,
   };
 }
 
@@ -112,6 +120,8 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         messages: capMessages([...state.messages, event.message]),
         // A new prompt makes the prior turn's suggestions stale — drop them.
         promptSuggestions: [],
+        // A prompt sent is an armed auto-prompt spent, whoever sent it.
+        autoPrompt: null,
       };
 
     case "busy": {
@@ -270,6 +280,15 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
     case "draft":
       return state.draft === event.text ? state : { ...state, draft: event.text };
 
+    case "auto-prompt":
+      return { ...state, autoPrompt: event.prompt };
+
+    case "auto-prompt-cleared":
+      // Id-matched: a clear racing a freshly-armed prompt must not kill it.
+      return state.autoPrompt?.id === event.id
+        ? { ...state, autoPrompt: null }
+        : state;
+
     case "assistant-decision":
       return {
         ...state,
@@ -337,6 +356,7 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         pendingRequests: [],
         promptSuggestions: [],
         autoDecisions: {},
+        autoPrompt: null,
         rewindPreview: null,
         assistantTraces: state.assistantTraces.filter(
           (t) => t.anchorMessageId !== undefined && kept.has(t.anchorMessageId),

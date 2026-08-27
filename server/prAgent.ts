@@ -27,13 +27,15 @@ export interface PrResult {
 }
 
 /** Blanket-accept permissions for the spawned session, and explicitly no
- * auto-PR — the PR session must never open a PR about itself. */
+ * auto-PR (it must never open a PR about itself) and no continuity (it must
+ * never start prompting itself once the supervisor is done with it). */
 function prSessionAssistant(): AssistantSettings {
   const settings: AssistantSettings = {
     enabled: false,
     permissions: { enabled: true, instructions: ALLOW_EVERYTHING },
     questions: { enabled: false, instructions: "", onlyIfSure: true },
     autoPr: { enabled: false, instructions: "", autoMerge: false },
+    continuity: { enabled: false, instructions: "", newSession: "never" },
   };
   return { ...settings, enabled: deriveAssistantEnabled(settings) };
 }

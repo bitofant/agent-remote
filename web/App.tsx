@@ -10,6 +10,7 @@ import {
 } from "react";
 import type {
   AssistantSettings,
+  ContinuityNewSession,
   FolderInfo,
   HarnessInfo,
   ResumableSession,
@@ -64,10 +65,11 @@ const DEFAULT_ASSISTANT: AssistantSettings = {
   permissions: { enabled: false, instructions: ALLOW_EVERYTHING },
   questions: { enabled: false, instructions: "", onlyIfSure: false },
   autoPr: { enabled: false, instructions: "", autoMerge: true },
+  continuity: { enabled: false, instructions: "", newSession: "after-pr" },
 };
 
-/** The three checklist sections of the assistant dialog. */
-type SectionKey = "permissions" | "questions" | "autoPr";
+/** The checklist sections of the assistant dialog. */
+type SectionKey = "permissions" | "questions" | "autoPr" | "continuity";
 
 // Tracks the on-screen keyboard via the visual viewport. `height` is the
 // visible height the app is pinned to while the keyboard is up. `open` stays
@@ -288,6 +290,7 @@ function Workspace({
     permissions: true,
     questions: true,
     autoPr: true,
+    continuity: true,
   });
   // Pending debounced push of the instruction textareas (see pushAssistant).
   const assistantPush = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -631,7 +634,12 @@ function Workspace({
     // Opening must never change a setting — seed the draft verbatim; every
     // section starts expanded so all options are visible at a glance.
     setAssistantDraft(cur);
-    setOpenSections({ permissions: true, questions: true, autoPr: true });
+    setOpenSections({
+      permissions: true,
+      questions: true,
+      autoPr: true,
+      continuity: true,
+    });
     setAssistantDialogOpen(true);
   };
 
@@ -688,11 +696,12 @@ function Workspace({
     );
   };
 
-  /** The instructions box shared by all three sections. */
+  /** The instructions box shared by every section. */
   const assistantInstructions = (
     key: SectionKey,
     placeholder: string,
     extra?: ReactNode,
+    label = "Instructions (optional)",
   ) => (
     <div className="assistant-field">
       <div className="assistant-field-head">
@@ -700,7 +709,7 @@ function Workspace({
           className="assistant-field-label"
           htmlFor={`assistant-instructions-${key}`}
         >
-          Instructions (optional)
+          {label}
         </label>
         {extra}
       </div>
@@ -1399,6 +1408,42 @@ function Workspace({
                         >
                           Run now
                         </button>
+                      </>,
+                    )}
+                    {assistantSection(
+                      "continuity",
+                      "Continuity mode",
+                      <>
+                        <div className="assistant-field">
+                          <label
+                            className="assistant-field-label"
+                            htmlFor="assistant-new-session"
+                          >
+                            Start new session
+                          </label>
+                          <div className="assistant-select">
+                            <select
+                              id="assistant-new-session"
+                              value={assistantDraft.continuity.newSession}
+                              onChange={(e) =>
+                                patchSection("continuity", {
+                                  newSession: e.target
+                                    .value as ContinuityNewSession,
+                                })
+                              }
+                            >
+                              <option value="never">Never</option>
+                              <option value="after-pr">After PR</option>
+                              <option value="always">Always</option>
+                            </select>
+                          </div>
+                        </div>
+                        {assistantInstructions(
+                          "continuity",
+                          "e.g. pick the next task from TODO.md, plan it thoroughly, then implement it",
+                          undefined,
+                          "Prompt instructions",
+                        )}
                       </>,
                     )}
                   </div>

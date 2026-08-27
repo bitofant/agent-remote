@@ -2097,23 +2097,28 @@ body {
   box-shadow: none;
 }
 
-/* Auto-action countdown: a ring is painted clockwise around the button the LLM
-   is about to "press"; when the sweep completes (same duration as the JS
-   timer), the button fires. Cancelled by removing the class. Degrades to no
-   ring if @property is unsupported — the timer still fires. */
+/* Auto-action countdown: a ring is painted clockwise around the button the
+   backend is about to "press" — an option on a permission card, or Send for a
+   Continuity Mode prompt; when the sweep completes (same duration as the
+   backend's timer), the button fires. Cancelled by removing the class. Degrades
+   to no ring if @property is unsupported — the timer still fires.
+   `--auto-elapsed` is a negative delay so a client joining mid-countdown paints
+   the arc it's actually at; it must be a custom property, since the animation
+   lives on ::after and only custom properties inherit into a pseudo-element. */
 @property --auto-angle {
   syntax: "<angle>";
   inherits: false;
   initial-value: 0deg;
 }
-.chat-request-actions button.auto-press {
+button.auto-press {
   position: relative;
 }
-.chat-request-actions button.auto-press::after {
+button.auto-press::after {
   content: "";
   position: absolute;
   inset: -3px;
-  border-radius: var(--r-md);
+  /* Concentric with the button it rings (see --auto-radius overrides). */
+  border-radius: var(--auto-radius, var(--r-md));
   padding: 3px;
   background: conic-gradient(#fff var(--auto-angle), transparent 0deg);
   /* Mask to just the ring (border), not the fill. */
@@ -2126,7 +2131,12 @@ body {
     linear-gradient(#000 0 0);
   mask-composite: exclude;
   animation: auto-press-sweep var(--auto-duration, 4s) linear forwards;
+  animation-delay: var(--auto-elapsed, 0ms);
   pointer-events: none;
+}
+/* The composer's Send sits on the larger radius, so its ring must too. */
+.chat-send.auto-press {
+  --auto-radius: var(--r-lg);
 }
 @keyframes auto-press-sweep {
   from {
@@ -2137,7 +2147,7 @@ body {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-request-actions button.auto-press::after {
+  button.auto-press::after {
     animation: none;
     background: none;
   }
@@ -2276,6 +2286,46 @@ body {
   gap: 8px;
   font-size: 13px;
   cursor: pointer;
+}
+/* Nested dropdown inside a section body (Continuity's "Start new session").
+   Filled, never outlined; the arrow is redrawn as a mask (appearance:none takes
+   the native one away) so it takes its colour from the palette — same idiom as
+   .chat-model, deliberately not a second implementation of the arrow. */
+.assistant-select {
+  position: relative;
+  align-self: flex-start;
+}
+.assistant-select::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 9px;
+  height: 6px;
+  margin-top: -3px;
+  background: var(--muted);
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'/></svg>")
+    no-repeat center / contain;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'/></svg>")
+    no-repeat center / contain;
+  pointer-events: none;
+}
+.assistant-select select {
+  background-color: var(--raised);
+  color: var(--text);
+  border-radius: var(--r-md);
+  /* Right padding clears the wrapper's arrow. */
+  padding: 6px 24px 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.assistant-select select:hover {
+  background-color: color-mix(in srgb, var(--accent) 12%, var(--raised));
+}
+.assistant-select select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .assistant-dialog-actions {
   display: flex;

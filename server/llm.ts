@@ -17,13 +17,28 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 const POLL_MS = 25_000;
 const MODELS_TIMEOUT_MS = 4_000;
-const EVAL_TIMEOUT_MS = 10_000;
+// Floor for every deliberation. A local reasoning model on a contended GPU
+// routinely needs far more than a few seconds, and a timeout is not a soft
+// failure: callers without a fallback (the PR supervisor) abort their whole
+// flow on one. Never lower this below 30s for a "snappier" card.
+const EVAL_TIMEOUT_MS = 30_000;
+// Deliberations that aren't blocking anyone: the turn router and Continuity
+// Mode run after a turn has already ended, so latency just widens the pause
+// before the countdown starts.
+const BACKGROUND_TIMEOUT_MS = 60_000;
+/** Every LLM request is retried once — they fail transiently (a contended
+ * endpoint drops or times out a request that succeeds moments later) and most
+ * callers have no fallback beyond giving up. Lives in `chat` rather than per
+ * call site so a new caller can't silently miss it. */
+const RETRY_DELAY_MS = 250;
 
 /** `${baseUrl}/models` etc., tolerating a trailing slash on baseUrl. */
 function url(path: string): string {
   const base = (cfg?.baseUrl ?? "").replace(/\/+$/, "");
   return `${base}/${path}`;
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchJson(
   target: string,
@@ -181,22 +196,71 @@ const PR_SUPERVISOR_SYSTEM = [
   '"prUrl": string|null, "reply": "<message to the agent, or the reason>"}.',
 ].join(" ");
 
-const PR_GATE_SYSTEM = [
-  "You gate an automatic pull-request flow for a developer's AI coding agent.",
+const TURN_ROUTE_SYSTEM = [
+  "You route the turn that just ended in a developer's AI coding agent session,",
+  "deciding what should happen next while the developer is away.",
   "You are shown the developer's last request and the agent's FINAL message of",
-  "the turn that just ended. Decide whether that turn actually FINISHED the",
-  "work, so committing it and opening a pull request now is sensible.",
-  "Answer false whenever the turn did not reach a finished state: the agent was",
+  "the turn that just ended. A turn is FINISHED when the agent reports the",
+  "requested change as complete and working. It is UNFINISHED whenever it was",
   "interrupted or stopped early, it hit an error or a failing test it did not",
   "resolve, it is asking the developer a question or waiting for a decision, or",
-  "it announced further work it has not done yet. Answer true when it reports",
-  "the requested change as complete and working.",
+  "it announced further work it has not done yet.",
   "Judge only how the turn ended — not whether the change is a good idea, and",
   "not whether files were modified (that is checked separately).",
-  "When in doubt answer false: a missed pull request is cheap, a pull request of",
-  "half-finished work is not.",
-  'Reply with ONLY JSON: {"open": boolean, "reason": "<terse, <=12 words>"}.',
+  "Choose ONE route:",
+  '"auto-pr" — the turn is FINISHED: commit the work and open a pull request.',
+  '"continuity" — a reply from the developer would move things along. That covers',
+  "an UNFINISHED turn (the agent asked a question, offered options to choose",
+  "between, reported a blocker it could work around, or announced further work",
+  "it has not done yet) AND a FINISHED turn when auto-pr is not available — then",
+  "the reply simply starts the next piece of work.",
+  '"none" — neither fits: nothing of substance happened, or the situation needs',
+  "a human (a destructive decision, repeated failures, an explicit request to",
+  "stop).",
+  "The user message lists the routes ACTUALLY AVAILABLE — never choose one that",
+  'is not listed; if none of them fits, answer "none". Do not answer "none"',
+  "merely because the work is done: that is what the routes are for.",
+  'Reply with ONLY JSON: {"route": "auto-pr"|"continuity"|"none",',
+  '"reason": "<terse, <=12 words>"}.',
   "The reason is required and must be terse; it is shown to the developer.",
+].join(" ");
+
+const TASK_COMPLETE_SYSTEM = [
+  "You decide whether a developer's AI coding agent session has finished the",
+  "task it was working on, so its context can be cleared and the next piece of",
+  "work started in a fresh session. You are shown the recent conversation.",
+  "Answer true only when the work under discussion is done and nothing in the",
+  "transcript is still open — no unanswered question, no failing step, no",
+  "announced-but-undone follow-up. When in doubt answer false: keeping the",
+  "context costs nothing, losing it mid-task is expensive.",
+  'Reply with ONLY JSON: {"complete": boolean, "reason": "<terse, <=12 words>"}.',
+].join(" ");
+
+// Shared base so the continue/fresh variants can't drift apart.
+const CONTINUITY_BASE = [
+  "You write the developer's NEXT message to their AI coding agent, in their",
+  "voice: imperative, concrete, no preamble, no quotes, no greeting, no sign-off.",
+  "Write only the message itself — the agent reads it as if the developer typed",
+  "it. Follow any user instructions exactly; they describe how the developer",
+  "wants the work driven.",
+];
+const CONTINUITY_JSON = 'Reply with ONLY JSON: {"prompt": "<message>"}.';
+
+const CONTINUITY_SYSTEM = [
+  ...CONTINUITY_BASE,
+  "You are shown the conversation so far. Answer whatever the agent last asked,",
+  "decide whatever it asked you to decide, or tell it the next step. Never ask",
+  "the agent what you should do — you are the one deciding.",
+  CONTINUITY_JSON,
+].join(" ");
+
+const CONTINUITY_FRESH_SYSTEM = [
+  ...CONTINUITY_BASE,
+  "The conversation you are shown is FINISHED work, and the agent reading your",
+  "message is a NEW session with no memory of it. So write a self-contained",
+  "message that starts the next piece of work: say what to do, not what was",
+  "just done, and don't refer back to the old conversation.",
+  CONTINUITY_JSON,
 ].join(" ");
 
 /** Append the user's free-text auto-PR instructions to a generator prompt. */
@@ -232,6 +296,7 @@ const QUESTIONS_SURE_SYSTEM = [
 async function chat(
   system: string,
   user: string,
+  timeoutMs = EVAL_TIMEOUT_MS,
 ): Promise<{ content: string; reasoning?: string }> {
   const body = {
     model: status.model,
@@ -242,22 +307,32 @@ async function chat(
     temperature: 0,
     stream: false,
   };
-  const data = (await fetchJson(
-    url("chat/completions"),
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-    EVAL_TIMEOUT_MS,
-  )) as {
-    choices?: {
-      message?: { content?: string; reasoning_content?: string };
-    }[];
+  const init = {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
   };
-  const msg = data?.choices?.[0]?.message;
-  const reasoning = msg?.reasoning_content?.trim();
-  return { content: msg?.content ?? "", reasoning: reasoning || undefined };
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await sleep(RETRY_DELAY_MS);
+    try {
+      const data = (await fetchJson(
+        url("chat/completions"),
+        init,
+        timeoutMs,
+      )) as {
+        choices?: {
+          message?: { content?: string; reasoning_content?: string };
+        }[];
+      };
+      const msg = data?.choices?.[0]?.message;
+      const reasoning = msg?.reasoning_content?.trim();
+      return { content: msg?.content ?? "", reasoning: reasoning || undefined };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 /** Render the outgoing prompt for the diagnostic trace shown in the UI. */
@@ -271,10 +346,11 @@ function tracePrompt(system: string, user: string): string {
 async function askJson(
   system: string,
   user: string,
+  timeoutMs = EVAL_TIMEOUT_MS,
 ): Promise<Record<string, unknown> | null> {
   if (!status.available || !status.model || !user.trim()) return null;
   try {
-    const reply = await chat(system, user);
+    const reply = await chat(system, user, timeoutMs);
     return parseJsonObject(reply.content);
   } catch {
     return null;
@@ -334,9 +410,12 @@ export async function supervisePr(
   transcript: string,
   instructions?: string,
 ): Promise<PrSupervision | null> {
+  // Background budget: `runPrSession` already allows 5min per turn, and a null
+  // here has no fallback — it strands the PR session with the branch pushed.
   const out = await askJson(
     withInstructions(PR_SUPERVISOR_SYSTEM, instructions),
     transcript,
+    BACKGROUND_TIMEOUT_MS,
   );
   if (!out) return null;
   const reply = typeof out.reply === "string" ? out.reply.trim() : "";
@@ -351,41 +430,136 @@ export async function supervisePr(
   return { done, prNumber: num, prUrl: url, reply };
 }
 
-/** Verdict of the auto-PR turn gate. `trace` is always present — the endpoint
- * was queried, so the deliberation is auditable in the transcript. */
-export interface PrGateVerdict {
-  open: boolean;
-  reason: string;
-  trace: { prompt: string; thoughts?: string; response: string };
+/** The deliberation record every LLM verdict carries, for the AI-mode bubble. */
+export interface LlmTrace {
+  prompt: string;
+  thoughts?: string;
+  response: string;
 }
 
-/** Judge whether the turn that just settled finished its work, from a digest of
- * the developer's request and the agent's final message. Best-effort: null when
- * the endpoint is unavailable or the reply is unusable — the caller decides what
- * an un-judgeable turn means (auto-PR proceeds, as it did before this gate). */
-export async function shouldOpenPr(
-  digest: string,
-  instructions?: string,
-): Promise<PrGateVerdict | null> {
-  if (!status.available || !status.model || !digest.trim()) return null;
-  const system = withInstructions(PR_GATE_SYSTEM, instructions);
+/** Ask for a JSON verdict AND keep the deliberation, for calls whose reasoning
+ * is surfaced in the transcript. `askJson`'s trace-less sibling. Nothing is
+ * waiting on these, so they get the longer background budget. */
+async function askTraced(
+  system: string,
+  user: string,
+): Promise<{ out: Record<string, unknown>; trace: LlmTrace } | null> {
+  if (!status.available || !status.model || !user.trim()) return null;
   let reply: { content: string; reasoning?: string };
   try {
-    reply = await chat(system, digest);
+    reply = await chat(system, user, BACKGROUND_TIMEOUT_MS);
   } catch {
     return null;
   }
   const out = parseJsonObject(reply.content);
-  if (!out || typeof out.open !== "boolean") return null;
+  if (!out) return null;
   return {
-    open: out.open,
-    reason: typeof out.reason === "string" ? out.reason.trim() : "",
+    out,
     trace: {
-      prompt: tracePrompt(system, digest),
+      prompt: tracePrompt(system, user),
       thoughts: reply.reasoning,
       response: reply.content,
     },
   };
+}
+
+/** Which capability handles the turn that just settled. */
+export interface TurnRoute {
+  route: "auto-pr" | "continuity" | "none";
+  reason: string;
+  trace: LlmTrace;
+}
+
+/** Route a settled turn between auto-PR and continuity. Only the routes the
+ * session actually has enabled are offered, so a disabled one is never picked.
+ * Best-effort: null when the endpoint is unavailable or the reply is unusable —
+ * the caller decides what an unroutable turn means. */
+export async function routeTurn(
+  digest: string,
+  opts: {
+    canPr: boolean;
+    canContinue: boolean;
+    prInstructions?: string;
+    continuityInstructions?: string;
+  },
+): Promise<TurnRoute | null> {
+  const available: string[] = [];
+  if (opts.canPr) available.push("auto-pr");
+  if (opts.canContinue) available.push("continuity");
+  available.push("none");
+  const user = [
+    `Routes available: ${available.join(", ")}.`,
+    opts.canPr && opts.prInstructions?.trim()
+      ? `Pull-request instructions from the developer: ${opts.prInstructions.trim()}`
+      : "",
+    opts.canContinue && opts.continuityInstructions?.trim()
+      ? `Instructions from the developer for how to keep the work going: ${opts.continuityInstructions.trim()}`
+      : "",
+    "",
+    digest,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const result = await askTraced(TURN_ROUTE_SYSTEM, user);
+  if (!result) return null;
+  const raw = result.out.route;
+  const route =
+    raw === "auto-pr" || raw === "continuity" || raw === "none" ? raw : null;
+  if (!route) return null;
+  // Never honour a route the session didn't offer.
+  const clamped =
+    (route === "auto-pr" && !opts.canPr) ||
+    (route === "continuity" && !opts.canContinue)
+      ? "none"
+      : route;
+  return {
+    route: clamped,
+    reason:
+      typeof result.out.reason === "string" ? result.out.reason.trim() : "",
+    trace: result.trace,
+  };
+}
+
+/** Is the session's task done, so its context can be cleared and the next piece
+ * of work started fresh? Only asked in `newSession: "always"`. Best-effort. */
+export async function taskComplete(
+  transcript: string,
+  instructions?: string,
+): Promise<{ complete: boolean; reason: string; trace: LlmTrace } | null> {
+  const result = await askTraced(
+    withInstructions(TASK_COMPLETE_SYSTEM, instructions),
+    transcript,
+  );
+  if (!result || typeof result.out.complete !== "boolean") return null;
+  return {
+    complete: result.out.complete,
+    reason:
+      typeof result.out.reason === "string" ? result.out.reason.trim() : "",
+    trace: result.trace,
+  };
+}
+
+/** Write the developer's next message to the agent from the conversation so
+ * far. `fresh` means it will be read by a brand-new session with no memory of
+ * that conversation, so the message must stand alone. Best-effort: null when
+ * the endpoint is unavailable or nothing usable came back — continuity then
+ * simply doesn't fire (it cannot run without the endpoint). */
+export async function continuityPrompt(
+  transcript: string,
+  opts: { instructions?: string; fresh: boolean },
+): Promise<{ text: string; trace: LlmTrace } | null> {
+  const result = await askTraced(
+    withInstructions(
+      opts.fresh ? CONTINUITY_FRESH_SYSTEM : CONTINUITY_SYSTEM,
+      opts.instructions,
+    ),
+    transcript,
+  );
+  if (!result) return null;
+  const text =
+    typeof result.out.prompt === "string" ? result.out.prompt.trim() : "";
+  return text ? { text, trace: result.trace } : null;
 }
 
 /** Max distinct suggestions surfaced to the composer. */

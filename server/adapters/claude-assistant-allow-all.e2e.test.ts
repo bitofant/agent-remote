@@ -87,6 +87,7 @@ describe.skipIf(!config || !enabled || !up)(
           permissions: { enabled: true, instructions: ALLOW_EVERYTHING },
           questions: { enabled: false, instructions: "", onlyIfSure: false },
           autoPr: { enabled: false, instructions: "", autoMerge: false },
+          continuity: { enabled: false, instructions: "", newSession: "never" },
         },
       });
 

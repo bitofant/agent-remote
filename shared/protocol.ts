@@ -369,7 +369,17 @@ export interface AssistantSettings {
   };
   /** Open a PR for the session's work when its turn settles. */
   autoPr: AssistantCapability & { autoMerge: boolean };
+  /** Keep the agent working: when a settled turn didn't finish the job, write
+   * the developer's next message from the transcript and send it. */
+  continuity: AssistantCapability & { newSession: ContinuityNewSession };
 }
+
+/** When Continuity Mode clears the context and starts a fresh session instead
+ * of replying in the current one:
+ * - `never`    — always continue in place
+ * - `after-pr` — only once auto-PR has merged the work (the default)
+ * - `always`   — that, plus whenever the LLM judges the task complete */
+export type ContinuityNewSession = "never" | "after-pr" | "always";
 
 /** One capability of AI-assistant mode: on/off plus its own free-text
  * instructions, so the capabilities don't fight over one shared box. */
@@ -397,6 +407,22 @@ export interface AssistantDecision {
   delayMs: number;
 }
 
+/** A prompt Continuity Mode composed on the developer's behalf and is about to
+ * send. Same split as AssistantDecision: the text sits in the composer behind a
+ * countdown ring on Send, but the BACKEND owns the timer and sends it — so the
+ * loop continues with no browser open. Cleared when it fires or a human
+ * intervenes (typing, or `cancel-auto-prompt`). */
+export interface AutoPrompt {
+  id: string;
+  text: string;
+  /** Grace window (ms) before it is sent — scaled to how long a human would
+   * take to read the agent's last message and type this reply. */
+  delayMs: number;
+  /** When the countdown started, so a client joining mid-sweep renders the
+   * remaining slice instead of restarting the animation. */
+  at: number;
+}
+
 /** A record of one AI-assistant deliberation over a pending card: the prompt
  * sent to the LLM, the model's surfaced reasoning/response, and a one-line
  * summary of the resulting decision. Surfaced in the transcript as a
@@ -407,7 +433,7 @@ export interface AssistantTrace {
    * (`auto-pr:<at>`) for AI-mode notes that aren't about a card. */
   requestId: string;
   /** Which dialog kind was judged, or the backend capability that ran. */
-  kind: "confirm" | "select" | "questions" | "auto-pr";
+  kind: "confirm" | "select" | "questions" | "auto-pr" | "continuity";
   /** The full prompt sent to the LLM (system + user), when one was sent. */
   prompt?: string;
   /** The model's surfaced reasoning, if any (e.g. `reasoning_content`). */
@@ -510,6 +536,9 @@ export interface ChatState {
    * lose what was being typed (the chat analogue of a terminal's unsubmitted
    * line living in the PTY). Cleared when the prompt is actually sent. */
   draft: string;
+  /** Continuity Mode's composed prompt awaiting its grace window, or null.
+   * Drives the countdown ring around Send; the backend does the sending. */
+  autoPrompt: AutoPrompt | null;
 }
 
 /** Normalized streaming events a chat adapter emits. */
@@ -566,7 +595,13 @@ export type ChatEvent =
   | { type: "rewind-preview"; preview: RewindPreview | null }
   /** The session's unsent composer text changed (typed, or cleared on send).
    * Server-authoritative so every client/reload sees the same draft. */
-  | { type: "draft"; text: string };
+  | { type: "draft"; text: string }
+  /** Continuity Mode armed a prompt: clients show it in the composer with a
+   * countdown ring on Send. The backend sends it when the window closes. */
+  | { type: "auto-prompt"; prompt: AutoPrompt }
+  /** That armed prompt was withdrawn (sent, or a human intervened). Ignored
+   * unless the id matches, so a stale clear can't kill a fresher prompt. */
+  | { type: "auto-prompt-cleared"; id: string };
 
 /** Actions the browser can take on a chat session. */
 export type ChatAction =
@@ -597,8 +632,9 @@ export type ChatAction =
    * its pending verdict so only a manual response resolves it. Harness-agnostic. */
   | { type: "cancel-assistant"; requestId: string }
   /** Run the auto-PR flow now, regardless of its checkbox ("Run now"). Carries
-   * no state — observed by `server/autopr.ts` via `SessionListener.onChatAction`
-   * and never forwarded to the adapter. Harness-agnostic. */
+   * no state — observed by `server/turnRouter.ts` via
+   * `SessionListener.onChatAction` and never forwarded to the adapter.
+   * Harness-agnostic. */
   | { type: "run-auto-pr" }
   /** Rewind the conversation to just before this user prompt: interrupt the
    * agent, truncate its context and the transcript, optionally restoring files
@@ -610,7 +646,11 @@ export type ChatAction =
   | { type: "rewind-preview"; messageId: string }
   /** Stash the composer's unsent text so it survives a reload. Handled by the
    * manager itself (not the adapter) — harness-agnostic. */
-  | { type: "set-draft"; text: string };
+  | { type: "set-draft"; text: string }
+  /** User intervened on a Continuity Mode prompt the backend was about to send:
+   * withdraw it (the text stays in the composer to edit). Handled by the manager
+   * itself (not the adapter) — harness-agnostic. */
+  | { type: "cancel-auto-prompt"; id: string };
 
 /** Messages the browser sends to the backend. */
 export type ClientMessage =

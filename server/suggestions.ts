@@ -34,9 +34,17 @@ export function messageText(msg: ChatMessage): string {
 }
 
 /** Render the tail of the conversation as a plain `User:`/`Assistant:` script,
- * newest-biased and bounded, for the suggestion prompt. Exported for testing. */
-export function buildSuggestionTranscript(state: ChatState): string {
-  const recent = state.messages.slice(-MAX_TRANSCRIPT_MESSAGES);
+ * newest-biased and bounded. Shared by the suggestion prompt, the PR supervisor
+ * and Continuity Mode — the last of which widens the window, since it has to
+ * answer what the agent actually asked rather than guess a follow-up. Exported
+ * for testing. */
+export function buildSuggestionTranscript(
+  state: ChatState,
+  opts?: { maxMessages?: number; maxChars?: number },
+): string {
+  const maxMessages = opts?.maxMessages ?? MAX_TRANSCRIPT_MESSAGES;
+  const maxChars = opts?.maxChars ?? MAX_TRANSCRIPT_CHARS;
+  const recent = state.messages.slice(-maxMessages);
   const lines: string[] = [];
   for (const msg of recent) {
     const text = messageText(msg);
@@ -44,8 +52,8 @@ export function buildSuggestionTranscript(state: ChatState): string {
     lines.push(`${msg.role === "user" ? "User" : "Assistant"}: ${text}`);
   }
   const transcript = lines.join("\n\n");
-  return transcript.length > MAX_TRANSCRIPT_CHARS
-    ? transcript.slice(-MAX_TRANSCRIPT_CHARS)
+  return transcript.length > maxChars
+    ? transcript.slice(-maxChars)
     : transcript;
 }
 
