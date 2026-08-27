@@ -17,18 +17,28 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 const POLL_MS = 25_000;
 const MODELS_TIMEOUT_MS = 4_000;
-const EVAL_TIMEOUT_MS = 10_000;
+// Floor for every deliberation. A local reasoning model on a contended GPU
+// routinely needs far more than a few seconds, and a timeout is not a soft
+// failure: callers without a fallback (the PR supervisor) abort their whole
+// flow on one. Never lower this below 30s for a "snappier" card.
+const EVAL_TIMEOUT_MS = 30_000;
 // Deliberations that aren't blocking anyone: the turn router and Continuity
 // Mode run after a turn has already ended, so latency just widens the pause
-// before the countdown starts. A local reasoning model regularly needs more
-// than the 10s a *card* evaluation can afford to wait.
+// before the countdown starts.
 const BACKGROUND_TIMEOUT_MS = 60_000;
+/** Every LLM request is retried once — they fail transiently (a contended
+ * endpoint drops or times out a request that succeeds moments later) and most
+ * callers have no fallback beyond giving up. Lives in `chat` rather than per
+ * call site so a new caller can't silently miss it. */
+const RETRY_DELAY_MS = 250;
 
 /** `${baseUrl}/models` etc., tolerating a trailing slash on baseUrl. */
 function url(path: string): string {
   const base = (cfg?.baseUrl ?? "").replace(/\/+$/, "");
   return `${base}/${path}`;
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchJson(
   target: string,
@@ -297,22 +307,32 @@ async function chat(
     temperature: 0,
     stream: false,
   };
-  const data = (await fetchJson(
-    url("chat/completions"),
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-    timeoutMs,
-  )) as {
-    choices?: {
-      message?: { content?: string; reasoning_content?: string };
-    }[];
+  const init = {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
   };
-  const msg = data?.choices?.[0]?.message;
-  const reasoning = msg?.reasoning_content?.trim();
-  return { content: msg?.content ?? "", reasoning: reasoning || undefined };
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await sleep(RETRY_DELAY_MS);
+    try {
+      const data = (await fetchJson(
+        url("chat/completions"),
+        init,
+        timeoutMs,
+      )) as {
+        choices?: {
+          message?: { content?: string; reasoning_content?: string };
+        }[];
+      };
+      const msg = data?.choices?.[0]?.message;
+      const reasoning = msg?.reasoning_content?.trim();
+      return { content: msg?.content ?? "", reasoning: reasoning || undefined };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 /** Render the outgoing prompt for the diagnostic trace shown in the UI. */
@@ -326,10 +346,11 @@ function tracePrompt(system: string, user: string): string {
 async function askJson(
   system: string,
   user: string,
+  timeoutMs = EVAL_TIMEOUT_MS,
 ): Promise<Record<string, unknown> | null> {
   if (!status.available || !status.model || !user.trim()) return null;
   try {
-    const reply = await chat(system, user);
+    const reply = await chat(system, user, timeoutMs);
     return parseJsonObject(reply.content);
   } catch {
     return null;
@@ -389,9 +410,12 @@ export async function supervisePr(
   transcript: string,
   instructions?: string,
 ): Promise<PrSupervision | null> {
+  // Background budget: `runPrSession` already allows 5min per turn, and a null
+  // here has no fallback — it strands the PR session with the branch pushed.
   const out = await askJson(
     withInstructions(PR_SUPERVISOR_SYSTEM, instructions),
     transcript,
+    BACKGROUND_TIMEOUT_MS,
   );
   if (!out) return null;
   const reply = typeof out.reply === "string" ? out.reply.trim() : "";
