@@ -1,12 +1,16 @@
 import {
+  createContext,
   Fragment,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import type {
+  AgentRun,
   AssistantDecision,
   AssistantTrace,
   ChatImageRef,
@@ -71,6 +75,35 @@ function ToolBodyView({ body }: { body: ToolBody }) {
   }
 }
 
+/** Sub-agent transcripts, flat and keyed by the tool call that spawned them, plus
+ * the lazy loader for resumed sessions. A context rather than props: ToolPart →
+ * Bubble → ToolPart nests arbitrarily deep for an agent inside an agent. */
+const AgentsContext = createContext<{
+  agents: Record<string, AgentRun>;
+  onLoad: (toolId: string) => void;
+}>({ agents: {}, onLoad: () => {} });
+
+/** The sub-agent's own chat session: the same bubbles as the main transcript, in
+ * a box capped at half the viewport with its own scroll. */
+function AgentPanel({ run, live }: { run: AgentRun; live: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const count = run.state.messages.length;
+  // Follow a running sub-agent, independently of the outer transcript.
+  useEffect(() => {
+    if (live && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [count, live]);
+  // Only reached while loading — an otherwise-empty run falls back to the
+  // ordinary tool view in ToolPart.
+  if (count === 0) return <div className="chat-agent empty">Loading transcript…</div>;
+  return (
+    <div className="chat-agent" ref={ref}>
+      {run.state.messages.map((m) => (
+        <Bubble key={m.id} message={m} />
+      ))}
+    </div>
+  );
+}
+
 function ToolPart({
   part,
   open,
@@ -83,11 +116,20 @@ function ToolPart({
 }) {
   const glyph = toolGlyph(part.status);
   const view = toolView(part);
+  const { agents, onLoad } = useContext(AgentsContext);
+  const run = agents[part.toolId];
+  // An empty run keeps the ordinary tool view — see renderPart.
+  const nested = run && (run.loading || run.state.messages.length > 0);
   return (
     <details
       className={`chat-tool${standalone ? " standalone" : ""}`}
       data-status={part.status}
       open={open}
+      onToggle={(e) => {
+        // A resumed session's runs arrive as empty stubs; fetch on first expand.
+        if (!run || !e.currentTarget.open) return;
+        if (run.state.messages.length === 0 && !run.loading) onLoad(part.toolId);
+      }}
     >
       <summary>
         <span className="chat-tool-glyph">{glyph}</span>
@@ -95,8 +137,16 @@ function ToolPart({
         {view.primary && <span className="chat-tool-preview">{view.primary}</span>}
         {view.secondary && <span className="chat-tool-desc">{view.secondary}</span>}
       </summary>
-      <ToolBodyView body={view.body} />
-      {part.output && <pre className="chat-tool-output">{part.output}</pre>}
+      {/* A sub-agent's transcript replaces the args dump and the <pre> report —
+          the report is already its last bubble (see the reducer's agent-done). */}
+      {nested ? (
+        <AgentPanel run={run} live={part.status !== "done" && part.status !== "error"} />
+      ) : (
+        <>
+          <ToolBodyView body={view.body} />
+          {part.output && <pre className="chat-tool-output">{part.output}</pre>}
+        </>
+      )}
     </details>
   );
 }
@@ -1420,7 +1470,18 @@ export function ChatView({
     insertAtCursor("/");
   };
 
+  // Memoized so expanding a tool bubble doesn't re-render every other one.
+  const agentsCtx = useMemo(
+    () => ({
+      agents: state.agents,
+      onLoad: (toolId: string) =>
+        client.chatAction(sessionId, { type: "load-agent", toolId }),
+    }),
+    [state.agents, client, sessionId],
+  );
+
   return (
+    <AgentsContext.Provider value={agentsCtx}>
     <div
       className="chat-view"
       style={{ display: active ? "flex" : "none" }}
@@ -1849,5 +1910,6 @@ export function ChatView({
         />
       )}
     </div>
+    </AgentsContext.Provider>
   );
 }

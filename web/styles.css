@@ -1975,6 +1975,41 @@ body {
   color: var(--muted);
 }
 
+/* A sub-agent's own chat session, inside the tool bubble that spawned it.
+   Half the viewport with its own scroll — an agent run is a whole conversation,
+   and it must not push the main transcript off the screen. */
+.chat-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 50vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 12px;
+}
+.chat-agent.empty {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+/* Nested content rises, never sinks: the panel sits on the tool bubble's
+   --panel, so its own bubbles step up to --raised (tool bodies already
+   color-mix off --raised, so no fourth surface is needed). */
+.chat-agent .chat-tool.standalone,
+.chat-agent .chat-bubble.assistant {
+  background: var(--raised);
+}
+/* The panel is the width budget now — nested turns use all of it. */
+.chat-agent .chat-turn {
+  max-width: 100%;
+}
+/* A 40vh body would be most of the panel; keep the nested transcript scannable. */
+.chat-agent .chat-tool-args,
+.chat-agent .chat-tool-code,
+.chat-agent .chat-tool-diff,
+.chat-agent .chat-tool-output {
+  max-height: 20vh;
+}
+
 /* A blocking agent-side question (permission prompt etc.). */
 /* Keeps its outline: this one blocks the turn, so the accent ring is signal
    rather than decoration. 8px padding under --r-lg leaves nested --r-sm

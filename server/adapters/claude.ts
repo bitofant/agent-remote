@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import {
   forkSession,
   getSessionMessages,
+  getSubagentMessages,
+  listSubagents,
   query,
   type SessionMessage,
   type ModelInfo,
@@ -337,12 +341,16 @@ class ClaudeChatSession implements ChatSession {
   private promptUuids = new Map<string, string>();
   /** Turn in progress (drives the busy indicator). */
   private busy = false;
-  /** Set on stream `message_start`, cleared on `result`. Lets us ignore the
-   * SDK's whole-message echo of a turn we already built from deltas. */
-  private streamedThisTurn = false;
-  /** Streaming tool-use blocks keyed by block index; args arrive as
-   * input_json_delta fragments. */
-  private toolBlocks = new Map<number, ToolBlock>();
+  /** Streaming state per conversation thread: `""` is the main one, a sub-agent
+   * uses its spawning tool-call id. Block indices and the echo flag are
+   * per-thread — concurrent sub-agents would otherwise clobber each other and
+   * the main turn. */
+  private streams = new Map<string, StreamCtx>();
+  /** Tool calls known to have spawned a sub-agent, so their tool_result can also
+   * close the nested transcript with the final report. */
+  private agentToolIds = new Set<string>();
+  /** tool-call id → on-disk sub-agent id for a resumed session; built once. */
+  private subagents?: Record<string, string>;
   /** Pending permission decisions keyed by ChatUiRequest id. */
   private permResolvers = new Map<
     string,
@@ -411,6 +419,10 @@ class ClaudeChatSession implements ChatSession {
         // env rather than merging, so spread process.env to keep PATH/HOME/etc.
         ...(this.env ? { env: { ...process.env, ...this.env } } : {}),
         includePartialMessages: true,
+        // Without this the SDK forwards only a sub-agent's tool_use/tool_result
+        // blocks (a heartbeat); with it the whole nested conversation arrives,
+        // tagged by parent_tool_use_id, so we can render it as a nested session.
+        forwardSubagentText: true,
         // Predicted next-prompt suggestions (the TUI's follow-up hint). Emitted
         // as a `prompt_suggestion` SDK message after each turn (never the first);
         // mapped to a `prompt-suggestion` ChatEvent. Nearly free (rides the
@@ -740,7 +752,61 @@ class ClaudeChatSession implements ChatSession {
       case "usage":
         void this.reportUsage();
         break;
+      case "load-agent":
+        void this.loadAgent(action.toolId);
+        break;
     }
+  }
+
+  /** Fill a resumed session's sub-agent transcript from its own on-disk JSONL.
+   * Lazy (driven by the client expanding the bubble): the live stream only ever
+   * carried the runs of this process, and a session can hold dozens. */
+  private async loadAgent(toolId: string): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!sessionId) return;
+    this.emit({ type: "agent-start", toolId, loading: true });
+    try {
+      const agentId = (await this.subagentIndex())[toolId];
+      if (!agentId) return void this.emit({ type: "agent-done", toolId });
+      const messages = await getSubagentMessages(sessionId, agentId, {
+        dir: this.opts.cwd,
+      });
+      for (const m of messages) {
+        if (this.closed) return;
+        const content = (m.message as { content?: unknown } | undefined)?.content;
+        if (m.type === "assistant") {
+          this.replayAssistantMessage(content, m.uuid, toolId);
+        } else if (m.type === "user") {
+          this.handleToolResults(content, toolId);
+          this.replayUserMessage(content, m.uuid, toolId);
+        }
+      }
+    } catch (err) {
+      this.emit({
+        type: "notice",
+        level: "error",
+        text: `Couldn't load sub-agent transcript: ${(err as Error).message}`,
+      });
+    } finally {
+      // Always clears `loading` — an empty run just falls back to the tool output.
+      this.emit({ type: "agent-done", toolId });
+    }
+  }
+
+  /** tool-call id → sub-agent id, from the sidecar meta files the CLI writes
+   * beside each transcript. The SDK exposes the ids but not the tool call they
+   * belong to, and that mapping is the whole join. Cached per session. */
+  private async subagentIndex(): Promise<Record<string, string>> {
+    if (this.subagents) return this.subagents;
+    const index: Record<string, string> = {};
+    const sessionId = this.sessionId;
+    if (!sessionId) return index;
+    const ids = await listSubagents(sessionId, { dir: this.opts.cwd });
+    for (const agentId of ids) {
+      const meta = await readAgentMeta(this.opts.cwd, sessionId, agentId);
+      if (meta?.toolUseId) index[meta.toolUseId] = agentId;
+    }
+    return (this.subagents = index);
   }
 
   /** Fetch the structured `/usage` data (session cost + plan rate-limit
@@ -780,6 +846,35 @@ class ClaudeChatSession implements ChatSession {
 
   private emit(event: ChatEvent): void {
     this.handlers?.onEvent(event);
+  }
+
+  /** Emit into the main transcript (`parent` null) or, for a sub-agent message,
+   * into that agent's nested transcript. The message-building helpers below all
+   * take a `parent` and route through here, so one code path serves both. */
+  private emitFor(parent: string | null, event: ChatEvent): void {
+    if (parent == null) this.emit(event);
+    else this.emit({ type: "agent-event", toolId: parent, event });
+  }
+
+  /** Streaming state for a thread, created on first use. */
+  private streamCtx(parent: string | null): StreamCtx {
+    const key = parent ?? "";
+    let ctx = this.streams.get(key);
+    if (!ctx) this.streams.set(key, (ctx = { toolBlocks: new Map(), streamed: false }));
+    return ctx;
+  }
+
+  /** Announce a sub-agent the first time we see anything belonging to it (and
+   * refresh its labels when a later message carries them). Idempotent in the
+   * reducer, so `task_started` and the lazy path can both call it. */
+  private noteAgent(
+    toolId: string,
+    meta: { agentType?: string; description?: string } = {},
+  ): void {
+    if (this.agentToolIds.has(toolId) && !meta.agentType && !meta.description)
+      return;
+    this.agentToolIds.add(toolId);
+    this.emit({ type: "agent-start", toolId, ...meta });
   }
 
   /** Read the session's on-disk transcript (user + assistant entries, in order). */
@@ -895,8 +990,7 @@ class ClaudeChatSession implements ChatSession {
     this.generation++;
     this.teardown();
     this.busy = false;
-    this.streamedThisTurn = false;
-    this.toolBlocks.clear();
+    this.streams.clear();
     const idx = this.promptIds.indexOf(messageId);
     if (idx !== -1) this.promptIds = this.promptIds.slice(0, idx);
     this.promptUuids.clear(); // forkSession remapped every uuid
@@ -938,9 +1032,15 @@ class ClaudeChatSession implements ChatSession {
   }
 
   private handleMessage(msg: SDKMessage): void {
+    // Everything a sub-agent produces is tagged with the tool call that spawned
+    // it; route it into that nested transcript instead of the main one.
+    const meta = subagentMeta(msg);
+    const parent = meta?.parentToolId ?? null;
+    if (meta) this.noteAgent(meta.parentToolId, meta);
+
     switch (msg.type) {
       case "stream_event":
-        this.handleStreamEvent(msg.event as StreamEvent);
+        this.handleStreamEvent(msg.event as StreamEvent, parent);
         break;
       case "system":
         // init carries the session id (our resume key) + resumed permission mode.
@@ -975,15 +1075,38 @@ class ClaudeChatSession implements ChatSession {
             level: "error",
             text: `Compaction failed${msg.compact_error ? `: ${msg.compact_error}` : ""}`,
           });
+        } else if (msg.subtype === "task_started") {
+          // Earliest, most explicit sub-agent signal (the lazy noteAgent above
+          // covers harnesses/paths that never send it).
+          const task = msg as unknown as TaskMessage;
+          if (task.tool_use_id)
+            this.noteAgent(task.tool_use_id, {
+              agentType: task.subagent_type,
+              description: task.description,
+            });
+        } else if (msg.subtype === "task_notification") {
+          // A backgrounded sub-agent finished: its tool_result was only the
+          // "launched" stub, so the real answer arrives here.
+          const task = msg as unknown as TaskMessage;
+          if (task.tool_use_id && this.agentToolIds.has(task.tool_use_id))
+            this.emit({
+              type: "agent-done",
+              toolId: task.tool_use_id,
+              report: task.summary,
+            });
         }
         break;
       case "user": {
         const content = (msg.message as { content?: unknown } | undefined)
           ?.content;
-        this.handleToolResults(content);
-        // Live user echoes skipped (emitted on the `prompt` action). isReplay is
-        // a vestigial safety net — the SDK doesn't emit it on resume.
-        if ("isReplay" in msg && msg.isReplay) {
+        this.handleToolResults(content, parent);
+        // A sub-agent's own prompt IS shown (it opens its nested transcript);
+        // on the main thread the live echo is skipped, since the prompt bubble
+        // was already emitted by the `prompt` action.
+        if (parent) {
+          this.replayUserMessage(content, undefined, parent);
+        } else if ("isReplay" in msg && msg.isReplay) {
+          // Vestigial safety net — the SDK doesn't emit isReplay on resume.
           this.replayUserMessage(content);
         } else if (msg.uuid && userText(content)) {
           // The CLI's echo of a prompt we sent — the only place its transcript
@@ -996,17 +1119,18 @@ class ClaudeChatSession implements ChatSession {
       case "assistant":
         // Live turns are built from deltas; ignore the SDK's whole-message echo.
         // A whole message with no preceding deltas is rebuilt as a safety net.
-        if (!this.streamedThisTurn)
+        if (!this.streamCtx(parent).streamed)
           this.replayAssistantMessage(
             (msg.message as { content?: unknown } | undefined)?.content,
             msg.uuid,
+            parent,
           );
         break;
       case "result":
-        // Turn finished (success, error, or interrupt) — clear busy.
+        // Turn finished (success, error, or interrupt) — clear busy. Sub-agents
+        // are bounded by the turn, so their threads go too.
         this.busy = false;
-        this.streamedThisTurn = false;
-        this.toolBlocks.clear();
+        this.streams.clear();
         this.emit({ type: "busy", busy: false });
         break;
       case "prompt_suggestion":
@@ -1049,17 +1173,41 @@ class ClaudeChatSession implements ChatSession {
         this.replayUserMessage(content, m.uuid);
       }
     }
+    // Mark which replayed tool calls have a sub-agent transcript on disk. The
+    // stub is empty on purpose — it's how the client knows the bubble is worth
+    // expanding, and the transcript itself loads on that expand.
+    try {
+      const index = await this.subagentIndex();
+      for (const toolId of Object.keys(index)) {
+        if (this.closed) return;
+        const meta = await readAgentMeta(this.opts.cwd, sessionId, index[toolId]);
+        this.noteAgent(toolId, {
+          agentType: meta?.agentType,
+          description: meta?.description,
+        });
+      }
+    } catch {
+      // Best-effort: no stubs just means those bubbles keep the plain output.
+    }
   }
 
   /** Rebuild a replayed user prompt into a bubble (only genuine user text).
    * Replays carry their transcript uuid, so rewind targets resolve exactly. */
-  private replayUserMessage(content: unknown, uuid?: string): void {
+  private replayUserMessage(
+    content: unknown,
+    uuid?: string,
+    parent: string | null = null,
+  ): void {
     const text = userText(content);
     if (!text) return;
     const id = uuid ?? randomUUID();
-    this.promptIds.push(id);
-    if (uuid) this.promptUuids.set(id, uuid);
-    this.emit({
+    // Rewind identity is main-thread only: a sub-agent's prompts are not
+    // targets, and mixing them into promptIds would shift every position.
+    if (!parent) {
+      this.promptIds.push(id);
+      if (uuid) this.promptUuids.set(id, uuid);
+    }
+    this.emitFor(parent, {
       type: "user-message",
       message: {
         id,
@@ -1082,21 +1230,25 @@ class ClaudeChatSession implements ChatSession {
   }
 
   /** Rebuild a whole assistant message into a bubble via the live delta events. */
-  private replayAssistantMessage(content: unknown, uuid: string): void {
+  private replayAssistantMessage(
+    content: unknown,
+    uuid: string,
+    parent: string | null = null,
+  ): void {
     if (!Array.isArray(content)) return;
-    this.emit({ type: "assistant-start", messageId: uuid });
+    this.emitFor(parent, { type: "assistant-start", messageId: uuid });
     for (const block of content as ContentBlock[]) {
       if (block?.type === "text" && typeof block.text === "string") {
-        this.emit({ type: "part-start", kind: "text" });
-        this.emit({ type: "part-delta", delta: block.text });
+        this.emitFor(parent, { type: "part-start", kind: "text" });
+        this.emitFor(parent, { type: "part-delta", delta: block.text });
       } else if (
         block?.type === "thinking" &&
         typeof block.thinking === "string"
       ) {
-        this.emit({ type: "part-start", kind: "thinking" });
-        this.emit({ type: "part-delta", delta: block.thinking });
+        this.emitFor(parent, { type: "part-start", kind: "thinking" });
+        this.emitFor(parent, { type: "part-delta", delta: block.thinking });
       } else if (block?.type === "tool_use" && block.id) {
-        this.emit({
+        this.emitFor(parent, {
           type: "tool-call",
           toolId: block.id,
           name: block.name ?? "tool",
@@ -1104,29 +1256,35 @@ class ClaudeChatSession implements ChatSession {
         });
       }
     }
-    this.emit({ type: "assistant-end" });
+    this.emitFor(parent, { type: "assistant-end" });
   }
 
-  private handleStreamEvent(event: StreamEvent | undefined): void {
+  private handleStreamEvent(
+    event: StreamEvent | undefined,
+    parent: string | null = null,
+  ): void {
+    const ctx = this.streamCtx(parent);
     switch (event?.type) {
       case "message_start": {
-        this.toolBlocks.clear();
+        ctx.toolBlocks.clear();
         // Mark the turn streamed so its whole-message echo is ignored.
-        this.streamedThisTurn = true;
-        if (!this.busy) {
+        ctx.streamed = true;
+        // busy tracks the whole turn, which a sub-agent runs inside of.
+        if (!parent && !this.busy) {
           this.busy = true;
           this.emit({ type: "busy", busy: true });
         }
-        this.emit({ type: "assistant-start", messageId: randomUUID() });
+        this.emitFor(parent, { type: "assistant-start", messageId: randomUUID() });
         break;
       }
       case "content_block_start": {
         const block = event.content_block;
-        if (block?.type === "text") this.emit({ type: "part-start", kind: "text" });
+        if (block?.type === "text")
+          this.emitFor(parent, { type: "part-start", kind: "text" });
         else if (block?.type === "thinking")
-          this.emit({ type: "part-start", kind: "thinking" });
+          this.emitFor(parent, { type: "part-start", kind: "thinking" });
         else if (block?.type === "tool_use" && typeof event.index === "number")
-          this.toolBlocks.set(event.index, {
+          ctx.toolBlocks.set(event.index, {
             id: block.id ?? randomUUID(),
             name: block.name ?? "tool",
             initialInput: block.input,
@@ -1137,24 +1295,24 @@ class ClaudeChatSession implements ChatSession {
       case "content_block_delta": {
         const delta = event.delta;
         if (delta?.type === "text_delta" && delta.text)
-          this.emit({ type: "part-delta", delta: delta.text });
+          this.emitFor(parent, { type: "part-delta", delta: delta.text });
         else if (delta?.type === "thinking_delta" && delta.thinking)
-          this.emit({ type: "part-delta", delta: delta.thinking });
+          this.emitFor(parent, { type: "part-delta", delta: delta.thinking });
         else if (
           delta?.type === "input_json_delta" &&
           typeof event.index === "number"
         ) {
-          const tool = this.toolBlocks.get(event.index);
+          const tool = ctx.toolBlocks.get(event.index);
           if (tool) tool.json += delta.partial_json ?? "";
         }
         break;
       }
       case "content_block_stop": {
         if (typeof event.index !== "number") break;
-        const tool = this.toolBlocks.get(event.index);
+        const tool = ctx.toolBlocks.get(event.index);
         if (!tool) break;
-        this.toolBlocks.delete(event.index);
-        this.emit({
+        ctx.toolBlocks.delete(event.index);
+        this.emitFor(parent, {
           type: "tool-call",
           toolId: tool.id,
           name: tool.name,
@@ -1163,16 +1321,20 @@ class ClaudeChatSession implements ChatSession {
         break;
       }
       case "message_stop":
-        this.emit({ type: "assistant-end" });
+        this.emitFor(parent, { type: "assistant-end" });
         break;
     }
   }
 
-  private handleToolResults(content: unknown): void {
+  private handleToolResults(content: unknown, parent: string | null = null): void {
     if (!Array.isArray(content)) return;
     for (const block of content as ToolResultBlock[]) {
       if (block?.type !== "tool_result" || !block.tool_use_id) continue;
-      this.emit({
+      // NB: the Agent tool's result is deliberately NOT treated as the report.
+      // For a backgrounded sub-agent it's only the "launched successfully" stub
+      // (the answer arrives later via task_notification), and for a foreground
+      // one the forwarded conversation already ends with the answer.
+      this.emitFor(parent, {
         type: "tool-end",
         toolId: block.tool_use_id,
         output: contentText(block.content),
@@ -1250,6 +1412,102 @@ interface ToolBlock {
   name: string;
   initialInput: unknown;
   json: string;
+}
+
+/** Streaming state of one conversation thread (the main one, or a sub-agent). */
+interface StreamCtx {
+  /** Streaming tool-use blocks keyed by block index; args arrive as
+   * input_json_delta fragments. */
+  toolBlocks: Map<number, ToolBlock>;
+  /** Set on `message_start`. Lets us ignore the SDK's whole-message echo of a
+   * turn we already built from deltas. */
+  streamed: boolean;
+}
+
+/** The `system`/`task_*` sub-agent lifecycle messages, loosely typed. */
+interface TaskMessage {
+  tool_use_id?: string;
+  subagent_type?: string;
+  description?: string;
+  summary?: string;
+}
+
+/** The sidecar the CLI writes beside each sub-agent transcript. `toolUseId` is
+ * the join we need and the only place it exists — the SDK lists sub-agent ids
+ * but never says which tool call they came from. */
+export interface AgentMeta {
+  agentType?: string;
+  description?: string;
+  toolUseId?: string;
+}
+
+/** Parse an `agent-<id>.meta.json`, tolerating junk (best-effort diagnostics). */
+export function parseAgentMeta(raw: string): AgentMeta | null {
+  try {
+    const meta = JSON.parse(raw) as AgentMeta;
+    if (!meta || typeof meta !== "object") return null;
+    return {
+      agentType: typeof meta.agentType === "string" ? meta.agentType : undefined,
+      description:
+        typeof meta.description === "string" ? meta.description : undefined,
+      toolUseId: typeof meta.toolUseId === "string" ? meta.toolUseId : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Sub-agent transcripts live at
+ * `~/.claude/projects/<projectKey>/<sessionId>/subagents/agent-<agentId>.jsonl`
+ * (documented by the SDK). The project key is a mangled cwd, so rather than
+ * reproduce that mangling we scan the project dirs for the one holding this
+ * session. Resolved once per lookup batch by the caller's cache. */
+async function readAgentMeta(
+  cwd: string | undefined,
+  sessionId: string,
+  agentId: string,
+): Promise<AgentMeta | null> {
+  const projects = join(homedir(), ".claude", "projects");
+  const { readdir } = await import("node:fs/promises");
+  let keys: string[];
+  try {
+    keys = await readdir(projects);
+  } catch {
+    return null;
+  }
+  // Prefer the project whose key looks like this cwd, so the common case is one
+  // hit rather than a full scan.
+  const hint = cwd ? cwd.replace(/[^a-zA-Z0-9]/g, "-") : "";
+  for (const key of keys.sort((a, b) => (a === hint ? -1 : b === hint ? 1 : 0))) {
+    const path = join(projects, key, sessionId, "subagents", `agent-${agentId}.meta.json`);
+    try {
+      return parseAgentMeta(await readFile(path, "utf8"));
+    } catch {
+      // Not this project — keep looking.
+    }
+  }
+  return null;
+}
+
+/** Which sub-agent an SDK message belongs to, or null for the main thread.
+ * Every message variant carries `parent_tool_use_id`; the assistant/user ones
+ * additionally name the agent kind and its task. */
+export function subagentMeta(
+  msg: unknown,
+): { parentToolId: string; agentType?: string; description?: string } | null {
+  const m = msg as {
+    parent_tool_use_id?: unknown;
+    subagent_type?: unknown;
+    task_description?: unknown;
+  } | null;
+  const parent = m?.parent_tool_use_id;
+  if (typeof parent !== "string" || !parent) return null;
+  return {
+    parentToolId: parent,
+    agentType: typeof m?.subagent_type === "string" ? m.subagent_type : undefined,
+    description:
+      typeof m?.task_description === "string" ? m.task_description : undefined,
+  };
 }
 
 function parseToolArgs(tool: ToolBlock): unknown {

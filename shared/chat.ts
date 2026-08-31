@@ -3,6 +3,7 @@
 // event log); the browser applies the same reducer to live events.
 
 import type {
+  AgentRun,
   AssistantSettings,
   ChatEvent,
   ChatImageRef,
@@ -72,6 +73,7 @@ const MAX_MESSAGES = 200;
 const MAX_TOOL_OUTPUT = 20_000;
 const MAX_NOTICES = 20;
 const MAX_TRACES = 20;
+const MAX_AGENTS = 30;
 
 export function emptyChatState(): ChatState {
   return {
@@ -106,6 +108,7 @@ export function emptyChatState(): ChatState {
     rewindPreview: null,
     draft: "",
     autoPrompt: null,
+    agents: {},
   };
 }
 
@@ -222,6 +225,45 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         output: capOutput(event.output),
         status: event.isError ? "error" : "done",
       }));
+
+    case "agent-start": {
+      const prev = state.agents[event.toolId];
+      const run: AgentRun = {
+        // Metadata only ever fills in — a repeat start must never reset a
+        // transcript that's already streaming.
+        ...(prev ?? { toolId: event.toolId, state: emptyChatState() }),
+        agentType: event.agentType ?? prev?.agentType,
+        description: event.description ?? prev?.description,
+        loading: event.loading ?? prev?.loading,
+      };
+      return { ...state, agents: capAgents({ ...state.agents, [event.toolId]: run }) };
+    }
+
+    case "agent-event": {
+      const run = agentRun(state, event.toolId);
+      return {
+        ...state,
+        agents: capAgents({
+          ...state.agents,
+          [event.toolId]: { ...run, state: applyChatEvent(run.state, event.event) },
+        }),
+      };
+    }
+
+    case "agent-done": {
+      const run = agentRun(state, event.toolId);
+      return {
+        ...state,
+        agents: capAgents({
+          ...state.agents,
+          [event.toolId]: {
+            ...run,
+            loading: false,
+            state: withReport(run.state, event.report),
+          },
+        }),
+      };
+    }
 
     case "queue":
       return { ...state, queued: event.queued };
@@ -361,6 +403,7 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         assistantTraces: state.assistantTraces.filter(
           (t) => t.anchorMessageId !== undefined && kept.has(t.anchorMessageId),
         ),
+        agents: reachableAgents(messages, state.agents),
       };
     }
 
@@ -369,6 +412,75 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
     default:
       return state;
   }
+}
+
+/** The run for this tool call, created empty if the adapter routed a nested
+ * event before (or without) announcing the agent. */
+function agentRun(state: ChatState, toolId: string): AgentRun {
+  return state.agents[toolId] ?? { toolId, state: emptyChatState() };
+}
+
+/** Keep the newest runs. Insertion order is the map's own key order, so the
+ * oldest keys fall off the front. */
+function capAgents(agents: Record<string, AgentRun>): Record<string, AgentRun> {
+  const keys = Object.keys(agents);
+  if (keys.length <= MAX_AGENTS) return agents;
+  const next: Record<string, AgentRun> = {};
+  for (const key of keys.slice(-MAX_AGENTS)) next[key] = agents[key];
+  return next;
+}
+
+/** Make sure the sub-agent's final report is the last bubble. The report is
+ * usually already there (it IS the sub-agent's last assistant message) — append
+ * only when the transcript is empty or ends with something else, so a run whose
+ * text was never forwarded still shows its answer. */
+function withReport(state: ChatState, report: string | undefined): ChatState {
+  const text = (report ?? "").trim();
+  if (!text) return state;
+  const last = state.messages[state.messages.length - 1];
+  if (last?.role === "assistant" && messageText(last).trim().endsWith(text))
+    return state;
+  return {
+    ...state,
+    messages: capMessages([
+      ...state.messages,
+      {
+        id: `report-${state.messages.length}`,
+        role: "assistant",
+        parts: [{ type: "text", text }],
+        createdAt: Date.now(),
+      },
+    ]),
+  };
+}
+
+function messageText(message: ChatMessage): string {
+  return message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+/** Runs still referenced by a tool call in the surviving transcript, followed
+ * transitively into those runs' own transcripts (an agent that spawned an
+ * agent). Everything else belonged to the rewound turns. */
+function reachableAgents(
+  messages: ChatMessage[],
+  agents: Record<string, AgentRun>,
+): Record<string, AgentRun> {
+  const kept: Record<string, AgentRun> = {};
+  const queue = toolIds(messages);
+  for (let i = 0; i < queue.length; i++) {
+    const id = queue[i];
+    const run = agents[id];
+    if (!run || kept[id]) continue;
+    kept[id] = run;
+    queue.push(...toolIds(run.state.messages));
+  }
+  return kept;
+}
+
+function toolIds(messages: ChatMessage[]): string[] {
+  return messages.flatMap((m) =>
+    m.parts.filter((p) => p.type === "tool").map((p) => p.toolId),
+  );
 }
 
 /** Return a copy of `map` without `key` (unchanged if the key is absent). */

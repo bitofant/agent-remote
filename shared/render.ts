@@ -3,7 +3,7 @@
 // calls renderMessage() to capture exactly what the UI produces.
 
 import { Marked } from "marked";
-import type { ChatMessage, ChatPart } from "./protocol.js";
+import type { AgentRun, ChatMessage, ChatPart } from "./protocol.js";
 
 export const escapeHtml = (s: string): string =>
   s
@@ -350,7 +350,11 @@ export function groupParts(parts: ChatPart[]): PartGroup[] {
 /** Render one part to the HTML the UI shows (see ChatView's Bubble/ToolPart).
  * `standalone` marks a tool that is its own bubble rather than nested in one
  * (the permission card embeds a nested one). */
-export function renderPart(part: ChatPart, standalone = false): RenderedPart {
+export function renderPart(
+  part: ChatPart,
+  standalone = false,
+  agents?: Record<string, AgentRun>,
+): RenderedPart {
   switch (part.type) {
     case "text":
       return {
@@ -401,16 +405,26 @@ export function renderPart(part: ChatPart, standalone = false): RenderedPart {
           ? `<span class="chat-tool-desc">${escapeHtml(view.secondary)}</span>`
           : "") +
         `</summary>`;
-      const body = renderToolBody(view.body);
-      const output = part.output
-        ? `<pre class="chat-tool-output">${escapeHtml(part.output)}</pre>`
-        : "";
       const cls = standalone ? "chat-tool standalone" : "chat-tool";
+      // A tool that spawned a sub-agent shows that agent's own chat session
+      // instead of its args and a <pre> of the report — the report is already
+      // the last nested bubble (see the reducer's agent-done).
+      // An empty run keeps the ordinary tool view: the panel would say nothing
+      // while the tool's own output (e.g. a background agent's launch stub) is
+      // the only information there is.
+      const run = agents?.[part.toolId];
+      const nested = run && (run.loading || run.state.messages.length > 0);
+      const inner = nested
+        ? renderAgentPanel(run, agents ?? {})
+        : renderToolBody(view.body) +
+          (part.output
+            ? `<pre class="chat-tool-output">${escapeHtml(part.output)}</pre>`
+            : "");
       return {
         type: "tool",
-        component: "ToolPart",
+        component: nested ? "AgentPart" : "ToolPart",
         className: cls,
-        html: `<details class="${cls}" data-status="${part.status}">${summary}${body}${output}</details>`,
+        html: `<details class="${cls}" data-status="${part.status}">${summary}${inner}</details>`,
       };
     }
   }
@@ -419,7 +433,29 @@ export function renderPart(part: ChatPart, standalone = false): RenderedPart {
 /** Render a whole message the way ChatView's Bubble does. User bubbles show the
  * joined text of their text parts as plain (escaped) text; assistant bubbles
  * render each part. */
-export function renderMessage(message: ChatMessage): RenderedMessage {
+/** The sub-agent's transcript as a scrollable panel of full turns. Recursion
+ * carries the flat root map through, so an agent inside an agent nests again. */
+function renderAgentPanel(
+  run: AgentRun,
+  agents: Record<string, AgentRun>,
+): string {
+  if (run.state.messages.length === 0)
+    return `<div class="chat-agent empty">Loading transcript…</div>`;
+  const turns = run.state.messages
+    .map((m) => {
+      const rendered = renderMessage(m, agents);
+      return m.role === "user"
+        ? `<div class="chat-turn user"><div class="chat-bubble user">${rendered.html}</div></div>`
+        : `<div class="chat-turn assistant">${rendered.html}</div>`;
+    })
+    .join("");
+  return `<div class="chat-agent">${turns}</div>`;
+}
+
+export function renderMessage(
+  message: ChatMessage,
+  agents?: Record<string, AgentRun>,
+): RenderedMessage {
   if (message.role === "user") {
     const text = message.parts
       .map((p) => (p.type === "text" ? p.text : ""))
@@ -447,7 +483,7 @@ export function renderMessage(message: ChatMessage): RenderedMessage {
   const html = groupParts(message.parts)
     .map((g) => {
       if (g.kind === "tool") {
-        const rendered = renderPart(g.part, true);
+        const rendered = renderPart(g.part, true, agents);
         parts.push(rendered);
         return rendered.html;
       }

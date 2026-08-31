@@ -127,11 +127,10 @@ manager.subscribe({
     // Log finalized-message renders (diagnostics). Skip high-frequency streaming
     // events (and draft keystrokes, which touch no message) — final form lands
     // on assistant-end/tool-end; chatLog dedupes.
-    if (
-      event.type !== "part-delta" &&
-      event.type !== "tool-update" &&
-      event.type !== "draft"
-    ) {
+    // An agent-event is as frequent as whatever it wraps, so judge the inner one.
+    const kind =
+      event.type === "agent-event" ? event.event.type : event.type;
+    if (kind !== "part-delta" && kind !== "tool-update" && kind !== "draft") {
       const state = manager.chatState(sessionId);
       const info = manager.sessionInfo(sessionId);
       if (state)

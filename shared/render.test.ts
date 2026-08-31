@@ -8,6 +8,7 @@ import {
   toolView,
 } from "./render.js";
 import type { ChatMessage, ChatPart } from "./protocol.js";
+import { emptyChatState } from "./chat.js";
 
 // Small helper to build a tool part with just the args we're exercising.
 function toolPart(args: unknown): Extract<ChatPart, { type: "tool" }> {
@@ -262,5 +263,79 @@ describe("groupParts", () => {
     const after = groupParts([tool, { type: "text", text: "and then" }]);
     expect(before[0].key).toBe("tool-t1");
     expect(after[0].key).toBe(before[0].key);
+  });
+});
+
+describe("renderPart sub-agent panels", () => {
+  const agentTool = (): Extract<ChatPart, { type: "tool" }> => ({
+    type: "tool",
+    toolId: "t1",
+    name: "Agent",
+    args: { description: "Explore X", subagent_type: "Explore", prompt: "long…" },
+    output: "the final report",
+    status: "done",
+  });
+  const run = (messages: ChatMessage[], loading?: boolean) => ({
+    t1: {
+      toolId: "t1",
+      agentType: "Explore",
+      state: { ...emptyChatState(), messages },
+      loading,
+    },
+  });
+  const assistant = (id: string, text: string): ChatMessage => ({
+    id,
+    role: "assistant",
+    parts: [{ type: "text", text }],
+    createdAt: 0,
+  });
+
+  it("renders today's args + output when there is no run", () => {
+    const rendered = renderPart(agentTool(), true);
+    expect(rendered.component).toBe("ToolPart");
+    expect(rendered.html).toContain('<pre class="chat-tool-output">the final report</pre>');
+    expect(rendered.html).not.toContain("chat-agent");
+  });
+
+  it("replaces args and the duplicate report <pre> with the nested transcript", () => {
+    const rendered = renderPart(agentTool(), true, run([
+      { id: "n0", role: "user", parts: [{ type: "text", text: "go" }], createdAt: 0 },
+      assistant("n1", "the final report"),
+    ]));
+    expect(rendered.component).toBe("AgentPart");
+    expect(rendered.html).toContain('<div class="chat-agent">');
+    expect(rendered.html).toContain('<div class="chat-turn user">');
+    expect(rendered.html).toContain("the final report");
+    expect(rendered.html).not.toContain("chat-tool-output");
+    expect(rendered.html).not.toContain("chat-tool-args");
+    // The collapsed summary line is untouched.
+    expect(rendered.html).toContain('<span class="chat-tool-preview">Explore X</span>');
+  });
+
+  it("shows a placeholder while a resumed transcript loads", () => {
+    const rendered = renderPart(agentTool(), true, run([], true));
+    expect(rendered.html).toContain("Loading transcript…");
+  });
+
+  it("falls back to the ordinary tool view for an empty run", () => {
+    // A backgrounded agent's tool output is a launch stub, not a report — an
+    // empty panel would hide the only information there is.
+    const rendered = renderPart(agentTool(), true, run([]));
+    expect(rendered.component).toBe("ToolPart");
+    expect(rendered.html).toContain("chat-tool-output");
+    expect(rendered.html).not.toContain("chat-agent");
+  });
+
+  it("nests an agent inside an agent through the flat map", () => {
+    const inner: Extract<ChatPart, { type: "tool" }> = {
+      type: "tool", toolId: "t2", name: "Agent", args: {}, output: "", status: "done",
+    };
+    const agents = {
+      ...run([{ id: "n1", role: "assistant", parts: [inner], createdAt: 0 }]),
+      t2: { toolId: "t2", state: { ...emptyChatState(), messages: [assistant("d1", "deep")] } },
+    };
+    const html = renderPart(agentTool(), true, agents).html;
+    expect(html.match(/class="chat-agent"/g)).toHaveLength(2);
+    expect(html).toContain("deep");
   });
 });
