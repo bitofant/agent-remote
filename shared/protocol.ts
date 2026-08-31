@@ -248,6 +248,23 @@ export interface ChatMessage {
   createdAt: number;
 }
 
+/** A sub-agent run: the nested conversation a tool call spawned (claude's
+ * Agent/Task tool). Lives in a FLAT map on the root `ChatState`, keyed by the
+ * spawning tool part's `toolId` — an agent inside an agent gets its own flat
+ * entry, so arbitrary depth needs no recursive data shape. */
+export interface AgentRun {
+  /** Tool-call id of the spawning tool part — the join key. */
+  toolId: string;
+  /** Harness label for the agent kind ("Explore", "Plan", …). */
+  agentType?: string;
+  /** One-line task description. */
+  description?: string;
+  /** The sub-agent's own conversation, folded by the very same reducer. */
+  state: ChatState;
+  /** Transcript is being fetched from disk (resumed session, first expand). */
+  loading?: boolean;
+}
+
 /** One structured multiple-choice question (the `questions` request kind —
  * e.g. Claude's AskUserQuestion tool). Each option carries a human label and
  * an explanatory description. */
@@ -543,6 +560,9 @@ export interface ChatState {
   /** Continuity Mode's composed prompt awaiting its grace window, or null.
    * Drives the countdown ring around Send; the backend does the sending. */
   autoPrompt: AutoPrompt | null;
+  /** Sub-agent runs keyed by the tool-call id that spawned them (see AgentRun).
+   * Flat and root-only; empty for harnesses that report no sub-agents. */
+  agents: Record<string, AgentRun>;
 }
 
 /** Normalized streaming events a chat adapter emits. */
@@ -605,7 +625,22 @@ export type ChatEvent =
   | { type: "auto-prompt"; prompt: AutoPrompt }
   /** That armed prompt was withdrawn (sent, or a human intervened). Ignored
    * unless the id matches, so a stale clear can't kill a fresher prompt. */
-  | { type: "auto-prompt-cleared"; id: string };
+  | { type: "auto-prompt-cleared"; id: string }
+  /** A tool call spawned a sub-agent: open a nested transcript for it. Idempotent
+   * — a repeat only fills in metadata it didn't have. */
+  | {
+      type: "agent-start";
+      toolId: string;
+      agentType?: string;
+      description?: string;
+      loading?: boolean;
+    }
+  /** Envelope: apply `event` to the nested transcript of `toolId` instead of the
+   * root. One variant rather than a nested twin of every event kind. */
+  | { type: "agent-event"; toolId: string; event: ChatEvent }
+  /** The sub-agent finished. `report` is its final answer — appended as the last
+   * nested bubble unless the transcript already ends with it. */
+  | { type: "agent-done"; toolId: string; report?: string };
 
 /** Actions the browser can take on a chat session. */
 export type ChatAction =
@@ -654,7 +689,12 @@ export type ChatAction =
   /** User intervened on a Continuity Mode prompt the backend was about to send:
    * withdraw it (the text stays in the composer to edit). Handled by the manager
    * itself (not the adapter) — harness-agnostic. */
-  | { type: "cancel-auto-prompt"; id: string };
+  | { type: "cancel-auto-prompt"; id: string }
+  /** Fetch a resumed session's sub-agent transcript from disk (lazy, on first
+   * expand — the live stream only carries runs from this process). The adapter
+   * replies with agent-start/agent-event/agent-done. No-op for harnesses that
+   * report no sub-agents. */
+  | { type: "load-agent"; toolId: string };
 
 /** Messages the browser sends to the backend. */
 export type ClientMessage =

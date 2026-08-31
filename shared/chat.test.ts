@@ -571,6 +571,144 @@ describe("applyChatEvent rewind", () => {
   });
 });
 
+describe("applyChatEvent sub-agents", () => {
+  // A main turn that calls the Agent tool with id `t`.
+  const spawn = (t: string): ChatEvent[] => [
+    { type: "assistant-start", messageId: "a1" },
+    { type: "tool-call", toolId: t, name: "Agent", args: { subagent_type: "Explore" } },
+    { type: "assistant-end" },
+  ];
+  // One nested assistant turn inside agent `t`.
+  const nested = (t: string, id: string, text: string): ChatEvent[] =>
+    [
+      { type: "assistant-start", messageId: id },
+      { type: "part-start", kind: "text" },
+      { type: "part-delta", delta: text },
+      { type: "assistant-end" },
+    ].map((event) => ({ type: "agent-event", toolId: t, event }) as ChatEvent);
+
+  it("folds nested events into the run's own transcript, not the root", () => {
+    const state = reduce([
+      ...spawn("t1"),
+      { type: "agent-start", toolId: "t1", agentType: "Explore", description: "look" },
+      ...nested("t1", "n1", "found it"),
+    ]);
+    expect(state.messages.map((m) => m.id)).toEqual(["a1"]);
+    const run = state.agents.t1;
+    expect(run).toMatchObject({ toolId: "t1", agentType: "Explore", description: "look" });
+    expect(run.state.messages).toHaveLength(1);
+    expect(run.state.messages[0].parts).toEqual([{ type: "text", text: "found it" }]);
+    // Nested state never grows its own agents map — the root map is flat.
+    expect(run.state.agents).toEqual({});
+  });
+
+  it("creates a run on demand when a nested event arrives before any start", () => {
+    const state = reduce([...spawn("t1"), ...nested("t1", "n1", "hi")]);
+    expect(state.agents.t1.state.messages).toHaveLength(1);
+  });
+
+  it("keeps an existing transcript when agent-start repeats, but fills metadata", () => {
+    const state = reduce([
+      ...spawn("t1"),
+      { type: "agent-start", toolId: "t1" },
+      ...nested("t1", "n1", "hi"),
+      { type: "agent-start", toolId: "t1", agentType: "Explore", loading: true },
+    ]);
+    expect(state.agents.t1.state.messages).toHaveLength(1);
+    expect(state.agents.t1.agentType).toBe("Explore");
+    expect(state.agents.t1.loading).toBe(true);
+  });
+
+  it("appends the final report as the last nested bubble, and clears loading", () => {
+    const state = reduce([
+      ...spawn("t1"),
+      { type: "agent-start", toolId: "t1", loading: true },
+      ...nested("t1", "n1", "working…"),
+      { type: "agent-done", toolId: "t1", report: "the answer" },
+    ]);
+    const msgs = state.agents.t1.state.messages;
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toMatchObject({ role: "assistant", parts: [{ type: "text", text: "the answer" }] });
+    expect(state.agents.t1.loading).toBe(false);
+  });
+
+  it("does not duplicate a report the transcript already ends with", () => {
+    const state = reduce([
+      ...spawn("t1"),
+      ...nested("t1", "n1", "the answer"),
+      { type: "agent-done", toolId: "t1", report: "  the answer\n" },
+    ]);
+    expect(state.agents.t1.state.messages).toHaveLength(1);
+  });
+
+  it("nests an agent inside an agent as its own flat entry", () => {
+    const state = reduce([
+      ...spawn("t1"),
+      // The sub-agent itself calls the Agent tool (id t2).
+      ...([
+        { type: "assistant-start", messageId: "n1" },
+        { type: "tool-call", toolId: "t2", name: "Agent" },
+        { type: "assistant-end" },
+      ] as ChatEvent[]).map((event) => ({ type: "agent-event", toolId: "t1", event }) as ChatEvent),
+      ...nested("t2", "n2", "deep"),
+    ]);
+    expect(Object.keys(state.agents).sort()).toEqual(["t1", "t2"]);
+    expect(state.agents.t2.state.messages[0].parts).toEqual([
+      { type: "text", text: "deep" },
+    ]);
+  });
+
+  it("prunes runs unreachable from the surviving transcript on rewind", () => {
+    const state = reduce([
+      {
+        type: "user-message",
+        message: { id: "u1", role: "user", parts: [{ type: "text", text: "a" }], createdAt: 0 },
+      },
+      ...spawn("t1"),
+      ...nested("t1", "n1", "kept"),
+      {
+        type: "user-message",
+        message: { id: "u2", role: "user", parts: [{ type: "text", text: "b" }], createdAt: 0 },
+      },
+      { type: "assistant-start", messageId: "a2" },
+      { type: "tool-call", toolId: "t9", name: "Agent" },
+      { type: "assistant-end" },
+      ...nested("t9", "n9", "dropped"),
+    ]);
+    expect(Object.keys(state.agents).sort()).toEqual(["t1", "t9"]);
+    const after = applyChatEvent(state, { type: "rewind", messageId: "u2" });
+    expect(Object.keys(after.agents)).toEqual(["t1"]);
+  });
+
+  it("keeps a nested-only run alive on rewind (reachability is transitive)", () => {
+    const state = reduce([
+      ...spawn("t1"),
+      ...([
+        { type: "assistant-start", messageId: "n1" },
+        { type: "tool-call", toolId: "t2", name: "Agent" },
+        { type: "assistant-end" },
+      ] as ChatEvent[]).map((event) => ({ type: "agent-event", toolId: "t1", event }) as ChatEvent),
+      ...nested("t2", "n2", "deep"),
+      {
+        type: "user-message",
+        message: { id: "u2", role: "user", parts: [{ type: "text", text: "b" }], createdAt: 0 },
+      },
+    ]);
+    const after = applyChatEvent(state, { type: "rewind", messageId: "u2" });
+    expect(Object.keys(after.agents).sort()).toEqual(["t1", "t2"]);
+  });
+
+  it("caps how many runs it keeps, dropping the oldest", () => {
+    const events: ChatEvent[] = [];
+    for (let i = 0; i < 40; i++) events.push({ type: "agent-start", toolId: `t${i}` });
+    const state = reduce(events);
+    const ids = Object.keys(state.agents);
+    expect(ids).toHaveLength(30);
+    expect(ids[0]).toBe("t10");
+    expect(ids[29]).toBe("t39");
+  });
+});
+
 describe("applyChatEvent auto-prompt", () => {
   const prompt = (id: string, text: string): ChatEvent => ({
     type: "auto-prompt",

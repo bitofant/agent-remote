@@ -2,7 +2,7 @@
 // original ChatMessage and its rendered form (shared/render.ts's renderMessage)
 // so we can review how each message type is displayed.
 
-import type { ChatState } from "../shared/protocol.js";
+import type { ChatMessage, ChatState } from "../shared/protocol.js";
 import { renderMessage } from "../shared/render.js";
 import { logChatRender } from "./db.js";
 
@@ -22,8 +22,12 @@ export function recordChatRenders(
   if (!seen) logged.set(sessionId, (seen = new Map()));
   for (const message of state.messages) {
     const original = JSON.stringify(message);
-    if (seen.get(message.id) === original) continue;
-    seen.set(message.id, original);
+    // A tool call's sub-agent transcript is part of what's displayed, so it has
+    // to be in the signature too — otherwise a growing nested transcript never
+    // refreshes the row.
+    const signature = original + agentSignature(message, state);
+    if (seen.get(message.id) === signature) continue;
+    seen.set(message.id, signature);
     logChatRender({
       sessionId,
       messageId: message.id,
@@ -31,9 +35,23 @@ export function recordChatRenders(
       harnessId: meta.harnessId ?? null,
       cwd: meta.cwd ?? null,
       original,
-      rendered: JSON.stringify(renderMessage(message)),
+      rendered: JSON.stringify(renderMessage(message, state.agents)),
     });
   }
+}
+
+/** Cheap change-detector for the sub-agent transcripts this message displays:
+ * per referenced run, its message count and the size of the last one. */
+function agentSignature(message: ChatMessage, state: ChatState): string {
+  let sig = "";
+  for (const part of message.parts) {
+    if (part.type !== "tool") continue;
+    const run = state.agents[part.toolId];
+    if (!run) continue;
+    const last = run.state.messages[run.state.messages.length - 1];
+    sig += `|${part.toolId}:${run.state.messages.length}:${JSON.stringify(last ?? null).length}:${run.loading ? 1 : 0}`;
+  }
+  return sig;
 }
 
 /** Drop a finished session's dedupe state. */
