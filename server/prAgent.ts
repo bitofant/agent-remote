@@ -59,9 +59,12 @@ export async function runPrSession(
     command: string;
     instructions?: string;
     report: Report;
+    /** The spawned session, as soon as it exists — so the caller's notes can
+     * link to its tab (it's left open for a human on any failure). */
+    onSession?: (sessionId: string) => void;
   },
 ): Promise<PrResult | null> {
-  const { folder, harnessId, command, instructions, report } = opts;
+  const { folder, harnessId, command, instructions, report, onSession } = opts;
 
   let sessionId: string;
   try {
@@ -70,6 +73,7 @@ export async function runPrSession(
     report(`Could not start the ${harnessId} session`, (err as Error).message);
     return null;
   }
+  onSession?.(sessionId);
 
   // Turn bookkeeping: one waiter per in-flight prompt, settled by the turn
   // ending or the session dying.

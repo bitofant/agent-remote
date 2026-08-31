@@ -133,13 +133,26 @@ export async function runAutoPr(
       dirty ? "pushed the new commit to it" : "nothing new to add",
     );
   } else {
-    note("note", "Drafting the pull request", `in a ${harnessId} ${command} session`);
+    // The session id exists only once it's started, so the "drafting" note is
+    // posted from the callback — a beat later, but carrying a link to its tab.
+    // The failure notes want it most: a run that hits a bound deliberately
+    // LEAVES that session open for a human, who otherwise has to find it by eye.
+    let prSession: string | undefined;
     const opened = await runPrSession(manager, {
       folder,
       harnessId,
       command,
       instructions,
-      report: (summary, detail) => note("error", summary, detail),
+      onSession: (id) => {
+        prSession = id;
+        note(
+          "note",
+          "Drafting the pull request",
+          `in a ${harnessId} ${command} session`,
+          { session: id },
+        );
+      },
+      report: (summary, detail) => note("error", summary, detail, { session: prSession }),
     });
     if (!opened) return;
     pr = opened;

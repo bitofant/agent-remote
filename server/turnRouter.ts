@@ -83,7 +83,13 @@ export type Note = (
   outcome: AssistantTrace["outcome"],
   summary: string,
   reason?: string,
-  extra?: { detail?: string; trace?: LlmTrace },
+  extra?: {
+    detail?: string;
+    trace?: LlmTrace;
+    /** Another session the note is about (not the origin it's posted to), for
+     * the bubble's jump-to-tab link — e.g. auto-PR's spawned `/pr` session. */
+    session?: string;
+  },
 ) => void;
 
 /** What a runner is handed: the session it works for, plus its narration
@@ -141,6 +147,7 @@ export function attachTurnRouter(
         reason,
         summary,
         detail: extra?.detail,
+        sessionId: extra?.session,
         at: Date.now(),
         anchorMessageId: anchors.get(sessionId),
         ...extra?.trace,

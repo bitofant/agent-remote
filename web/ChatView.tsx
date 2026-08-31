@@ -20,6 +20,7 @@ import type {
 import { groupParts, renderMarkdown, toolGlyph, toolView } from "../shared/render";
 import type { ToolBody } from "../shared/render";
 import type { Client } from "./client";
+import { linkRuns } from "./linkify";
 import { relativeTime } from "./time";
 
 // Chat-bubble view for chat sessions (ui: "chat"). Harness-agnostic: renders the
@@ -212,6 +213,31 @@ const MERGE_ICON = {
   d: "M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM3.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.5 4.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z",
 };
 
+// Note lines carry machine-written urls (the PR they opened, a remote in an
+// error), so anchor them. `stopPropagation` because the line around them is the
+// expand toggle — a tap on the link must only follow it.
+function Linked({ text }: { text: string }) {
+  return (
+    <>
+      {linkRuns(text).map((run, i) =>
+        run.url ? (
+          <a
+            key={i}
+            href={run.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {run.text}
+          </a>
+        ) : (
+          <span key={i}>{run.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
 // Colored verdict word — the LLM's answer, so it heads deliberations only.
 const TRACE_VERDICT: Record<AssistantTrace["outcome"], string> = {
   allow: "Allow",
@@ -229,7 +255,15 @@ const TRACE_VERDICT: Record<AssistantTrace["outcome"], string> = {
 // restate it) — a note has no verdict, so its `summary` IS the line and the
 // reason trails it. Getting that backwards printed "Auto PR origin" for what
 // should read "Pushed joran/x to origin".
-function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
+function AssistantTraceBubble({
+  trace,
+  onOpenSession,
+}: {
+  trace: AssistantTrace;
+  // Jump to the session this note is about, when it's still around (auto-PR's
+  // `/pr` tab). Absent = it was closed and removed, so no link is offered.
+  onOpenSession?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const icon =
     trace.kind === "auto-pr"
@@ -270,10 +304,28 @@ function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
         <span
           className={`chat-assistant-trace-verdict${deliberated ? "" : " summary"}`}
         >
-          {deliberated ? TRACE_VERDICT[trace.outcome] : trace.summary}
+          {deliberated ? (
+            TRACE_VERDICT[trace.outcome]
+          ) : (
+            <Linked text={trace.summary} />
+          )}
         </span>
         {trace.reason && (
-          <span className="chat-assistant-trace-reason">{trace.reason}</span>
+          <span className="chat-assistant-trace-reason">
+            <Linked text={trace.reason} />
+          </span>
+        )}
+        {onOpenSession && (
+          <button
+            type="button"
+            className="chat-assistant-trace-link"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenSession();
+            }}
+          >
+            open session ↗
+          </button>
         )}
         {/* Notes are expandable now too (a failed step's full stderr), so the
             line has to advertise it — tapping was previously discoverable only
@@ -289,7 +341,9 @@ function AssistantTraceBubble({ trace }: { trace: AssistantTrace }) {
           {trace.detail && (
             <div className="chat-assistant-trace-section">
               <div className="chat-assistant-trace-label">Details</div>
-              <pre>{trace.detail}</pre>
+              <pre>
+                <Linked text={trace.detail} />
+              </pre>
             </div>
           )}
           {trace.prompt && (
@@ -891,11 +945,18 @@ export function ChatView({
   canResume,
   onResume,
   keyboardOpen,
+  knownSessions,
+  onOpenSession,
 }: {
   client: Client;
   sessionId: string;
   active: boolean;
   exited: boolean;
+  // Every session id currently mounted, and the jump-to-tab action. An AI-mode
+  // note can name another session (auto-PR's `/pr` tab); the set is what decides
+  // whether that link is still live, since a closed+removed session has no tab.
+  knownSessions: ReadonlySet<string>;
+  onOpenSession: (id: string) => void;
   // Whether the folder has closed sessions to resume, and the opener for the
   // resume picker. `/resume` is a client-only entry in the slash-command menu
   // (not a harness command), so it lives alongside the real commands here.
@@ -1185,11 +1246,22 @@ export function ChatView({
 
   // AI-mode trace bubbles render inline right after the assistant turn they
   // explain (anchorMessageId), so the deliberation sits beside its tool call.
+  // A note's linked session is offered only while its tab exists — auto-PR stops
+  // the `/pr` session on success (the exited tab stays until closed), but a
+  // removed one has nothing to jump to.
+  const traceLink = (t: AssistantTrace) =>
+    t.sessionId && t.sessionId !== sessionId && knownSessions.has(t.sessionId)
+      ? () => onOpenSession(t.sessionId!)
+      : undefined;
   const tracesFor = (messageId: string) =>
     state.assistantTraces
       .filter((t) => t.anchorMessageId === messageId)
       .map((t, i) => (
-        <AssistantTraceBubble key={`trace-${t.requestId}-${t.at}-${i}`} trace={t} />
+        <AssistantTraceBubble
+          key={`trace-${t.requestId}-${t.at}-${i}`}
+          trace={t}
+          onOpenSession={traceLink(t)}
+        />
       ));
   // An unanchored trace predates every message (posted into an empty
   // transcript), so it leads. Nothing renders *after* the messages: a trace
@@ -1441,7 +1513,11 @@ export function ChatView({
           </div>
         )}
         {leadingTraces.map((t, i) => (
-          <AssistantTraceBubble key={`trace-${t.requestId}-${t.at}-${i}`} trace={t} />
+          <AssistantTraceBubble
+            key={`trace-${t.requestId}-${t.at}-${i}`}
+            trace={t}
+            onOpenSession={traceLink(t)}
+          />
         ))}
         {state.messages.map((m) => (
           <Fragment key={m.id}>
