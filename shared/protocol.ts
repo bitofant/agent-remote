@@ -454,6 +454,10 @@ export interface AssistantTrace {
    * self-contained sentence — the reason is only ever a trailing detail. */
   summary: string;
   at: number;
+  /** Another session this note is about (auto-PR's spawned `/pr` session), so
+   * the bubble can offer a jump to its tab. Just a link target: the session may
+   * since have been closed and removed, which the UI checks before offering it. */
+  sessionId?: string;
   /** Id of the assistant message this deliberation belongs to (the turn whose
    * tool call the card was about), so the UI can render it inline right after
    * that turn instead of pinned at the bottom. Assigned by the reducer when the

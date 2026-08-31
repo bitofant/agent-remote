@@ -545,6 +545,23 @@ function Workspace({
   const activeSessionObj = sessionsInFolder.find((s) => s.id === activeSessionId);
   const activeExited = activeSessionObj?.status === "exited";
 
+  // Jumping to a session named by an AI-mode note (auto-PR's `/pr` tab). Its own
+  // launch folder is authoritative — the note's origin is normally in the same
+  // one, but pinning a tab under the wrong folder key would hide it.
+  const sessionIds = useMemo(
+    () => new Set(sessions.map((s) => s.id)),
+    [sessions],
+  );
+  const openSession = useCallback(
+    (id: string) => {
+      const target = sessions.find((s) => s.id === id);
+      if (!target) return;
+      setActiveFolder(target.folder);
+      setActiveSession((prev) => ({ ...prev, [target.folder]: id }));
+    },
+    [sessions],
+  );
+
   // Persist the view for the *next* page load (any device). Debounced, and never
   // before the restore, or the initial default would overwrite what we stored.
   useEffect(() => {
@@ -1135,6 +1152,8 @@ function Workspace({
                         }
                         onResume={() => setResumeDialogOpen(true)}
                         keyboardOpen={keyboard.open}
+                        knownSessions={sessionIds}
+                        onOpenSession={openSession}
                       />
                     ))}
                 </Suspense>
