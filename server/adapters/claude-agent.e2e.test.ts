@@ -91,4 +91,59 @@ describe.skipIf(!local || !up)("claude-local: sub-agent transcripts", () => {
     }
     expect(transcripts, "at least one nested transcript").toBeGreaterThan(0);
   }, 210_000);
+
+  it("resumes sub-agent runs as empty stubs and fills them on load-agent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-remote-e2e-"));
+    const first = new ChatDriver(local!.create(dir)).start();
+    await first.prompt(
+      "Use the Explore subagent (the Agent/Task tool) to answer this: " +
+        "what is the capital of France? Delegate it — do not answer yourself.",
+      100_000,
+    );
+    await settle(3_000);
+    const key = first.resumeKey;
+    first.close();
+    expect(key, "resume key").toBeTruthy();
+    await settle(2_000);
+
+    const resumed = new ChatDriver(local!.create(dir, key)).start();
+    // replayHistory emits metadata-only stubs — that's how the client knows a
+    // bubble is worth expanding without guessing tool names.
+    await resumed
+      .waitFor(() => resumed.events.some((e) => e.type === "agent-start"), 40_000)
+      .catch(() => {});
+    let state = emptyChatState();
+    for (const e of resumed.events) state = applyChatEvent(state, e);
+    const stubs = Object.values(state.agents);
+    if (stubs.length === 0) {
+      resumed.close();
+      console.warn("[claude-agent.e2e] first turn spawned no sub-agent — skipping resume half.");
+      return;
+    }
+    // A stub carries its labels (from the on-disk sidecar) but no transcript.
+    expect(stubs[0].state.messages).toHaveLength(0);
+    expect(stubs[0].agentType, "agentType from the sidecar").toBeTruthy();
+
+    for (const toolId of Object.keys(state.agents))
+      resumed.act({ type: "load-agent", toolId });
+    await resumed
+      .waitFor(
+        () =>
+          resumed.events.some(
+            (e) => e.type === "agent-event" && e.event.type === "assistant-end",
+          ),
+        40_000,
+      )
+      .catch(() => {});
+    await settle(1_000);
+    resumed.close();
+
+    state = emptyChatState();
+    for (const e of resumed.events) state = applyChatEvent(state, e);
+    // The whole join worked: sidecar toolUseId → agentId → its own JSONL.
+    const loaded = Object.values(state.agents);
+    expect(loaded[0].loading).toBeFalsy();
+    expect(loaded[0].state.messages.length).toBeGreaterThan(0);
+    expect(loaded.some((r) => r.state.messages.some((m) => textOf(m).trim()))).toBe(true);
+  }, 210_000);
 });

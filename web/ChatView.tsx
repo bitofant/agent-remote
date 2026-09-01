@@ -21,7 +21,13 @@ import type {
   ChatUsage,
   RewindPreview,
 } from "../shared/protocol";
-import { groupParts, renderMarkdown, toolGlyph, toolView } from "../shared/render";
+import {
+  agentPrompt,
+  groupParts,
+  renderMarkdown,
+  toolGlyph,
+  toolView,
+} from "../shared/render";
 import type { ToolBody } from "../shared/render";
 import type { Client } from "./client";
 import { linkRuns } from "./linkify";
@@ -85,7 +91,17 @@ const AgentsContext = createContext<{
 
 /** The sub-agent's own chat session: the same bubbles as the main transcript, in
  * a box capped at half the viewport with its own scroll. */
-function AgentPanel({ run, live }: { run: AgentRun; live: boolean }) {
+function AgentPanel({
+  run,
+  live,
+  prompt,
+}: {
+  run: AgentRun;
+  live: boolean;
+  /** The task it was given — neither the stream nor the on-disk transcript
+   * carries the sub-agent's opening message (see render.ts's agentPrompt). */
+  prompt: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const count = run.state.messages.length;
   // Follow a running sub-agent, independently of the outer transcript.
@@ -97,6 +113,11 @@ function AgentPanel({ run, live }: { run: AgentRun; live: boolean }) {
   if (count === 0) return <div className="chat-agent empty">Loading transcript…</div>;
   return (
     <div className="chat-agent" ref={ref}>
+      {prompt && (
+        <div className="chat-turn user">
+          <div className="chat-bubble user">{prompt}</div>
+        </div>
+      )}
       {run.state.messages.map((m) => (
         <Bubble key={m.id} message={m} />
       ))}
@@ -140,7 +161,11 @@ function ToolPart({
       {/* A sub-agent's transcript replaces the args dump and the <pre> report —
           the report is already its last bubble (see the reducer's agent-done). */}
       {nested ? (
-        <AgentPanel run={run} live={part.status !== "done" && part.status !== "error"} />
+        <AgentPanel
+          run={run}
+          live={part.status !== "done" && part.status !== "error"}
+          prompt={agentPrompt(part)}
+        />
       ) : (
         <>
           <ToolBodyView body={view.body} />

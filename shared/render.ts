@@ -415,7 +415,7 @@ export function renderPart(
       const run = agents?.[part.toolId];
       const nested = run && (run.loading || run.state.messages.length > 0);
       const inner = nested
-        ? renderAgentPanel(run, agents ?? {})
+        ? renderAgentPanel(run, agents ?? {}, agentPrompt(part))
         : renderToolBody(view.body) +
           (part.output
             ? `<pre class="chat-tool-output">${escapeHtml(part.output)}</pre>`
@@ -433,14 +433,28 @@ export function renderPart(
 /** Render a whole message the way ChatView's Bubble does. User bubbles show the
  * joined text of their text parts as plain (escaped) text; assistant bubbles
  * render each part. */
-/** The sub-agent's transcript as a scrollable panel of full turns. Recursion
- * carries the flat root map through, so an agent inside an agent nests again. */
+/** The task a sub-agent was given, from the spawning tool's own args. Neither
+ * the live stream nor `getSubagentMessages` carries the sub-agent's opening user
+ * message (it's the sidechain root), so the panel would otherwise start
+ * mid-conversation — we already hold the prompt right here. */
+export function agentPrompt(part: Extract<ChatPart, { type: "tool" }>): string {
+  const prompt = (part.args as { prompt?: unknown } | undefined)?.prompt;
+  return typeof prompt === "string" ? prompt : "";
+}
+
+/** The sub-agent's transcript as a scrollable panel of full turns, opening with
+ * the task it was given. Recursion carries the flat root map through, so an
+ * agent inside an agent nests again. */
 function renderAgentPanel(
   run: AgentRun,
   agents: Record<string, AgentRun>,
+  prompt = "",
 ): string {
   if (run.state.messages.length === 0)
     return `<div class="chat-agent empty">Loading transcript…</div>`;
+  const opening = prompt
+    ? `<div class="chat-turn user"><div class="chat-bubble user">${escapeHtml(prompt)}</div></div>`
+    : "";
   const turns = run.state.messages
     .map((m) => {
       const rendered = renderMessage(m, agents);
@@ -449,7 +463,7 @@ function renderAgentPanel(
         : `<div class="chat-turn assistant">${rendered.html}</div>`;
     })
     .join("");
-  return `<div class="chat-agent">${turns}</div>`;
+  return `<div class="chat-agent">${opening}${turns}</div>`;
 }
 
 export function renderMessage(
