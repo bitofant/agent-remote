@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import {
@@ -346,11 +346,14 @@ class ClaudeChatSession implements ChatSession {
    * per-thread — concurrent sub-agents would otherwise clobber each other and
    * the main turn. */
   private streams = new Map<string, StreamCtx>();
-  /** Tool calls known to have spawned a sub-agent, so their tool_result can also
-   * close the nested transcript with the final report. */
-  private agentToolIds = new Set<string>();
+  /** Sub-agent runs announced so far, with the labels last broadcast for each —
+   * so a repeat announcement is only sent when something actually changed. */
+  private agentToolIds = new Map<
+    string,
+    { agentType?: string; description?: string }
+  >();
   /** tool-call id → on-disk sub-agent id for a resumed session; built once. */
-  private subagents?: Record<string, string>;
+  private subagents?: Record<string, SubagentEntry>;
   /** Pending permission decisions keyed by ChatUiRequest id. */
   private permResolvers = new Map<
     string,
@@ -766,8 +769,8 @@ class ClaudeChatSession implements ChatSession {
     if (!sessionId) return;
     this.emit({ type: "agent-start", toolId, loading: true });
     try {
-      const agentId = (await this.subagentIndex())[toolId];
-      if (!agentId) return void this.emit({ type: "agent-done", toolId });
+      const agentId = (await this.subagentIndex())[toolId]?.agentId;
+      if (!agentId) return;
       const messages = await getSubagentMessages(sessionId, agentId, {
         dir: this.opts.cwd,
       });
@@ -793,18 +796,20 @@ class ClaudeChatSession implements ChatSession {
     }
   }
 
-  /** tool-call id → sub-agent id, from the sidecar meta files the CLI writes
-   * beside each transcript. The SDK exposes the ids but not the tool call they
-   * belong to, and that mapping is the whole join. Cached per session. */
-  private async subagentIndex(): Promise<Record<string, string>> {
+  /** tool-call id → {sub-agent id, labels}, from the sidecar meta files the CLI
+   * writes beside each transcript. The SDK lists sub-agent ids but never says
+   * which tool call they came from, and that join is the whole point. Cached per
+   * session (a rewind forks to a new id and clears it). */
+  private async subagentIndex(): Promise<Record<string, SubagentEntry>> {
     if (this.subagents) return this.subagents;
-    const index: Record<string, string> = {};
+    const index: Record<string, SubagentEntry> = {};
     const sessionId = this.sessionId;
     if (!sessionId) return index;
-    const ids = await listSubagents(sessionId, { dir: this.opts.cwd });
-    for (const agentId of ids) {
-      const meta = await readAgentMeta(this.opts.cwd, sessionId, agentId);
-      if (meta?.toolUseId) index[meta.toolUseId] = agentId;
+    const dir = await subagentDir(this.opts.cwd, sessionId);
+    if (!dir) return (this.subagents = index);
+    for (const agentId of await listSubagents(sessionId, { dir: this.opts.cwd })) {
+      const meta = await readAgentMeta(dir, agentId);
+      if (meta?.toolUseId) index[meta.toolUseId] = { agentId, meta };
     }
     return (this.subagents = index);
   }
@@ -871,9 +876,19 @@ class ClaudeChatSession implements ChatSession {
     toolId: string,
     meta: { agentType?: string; description?: string } = {},
   ): void {
-    if (this.agentToolIds.has(toolId) && !meta.agentType && !meta.description)
+    // Every forwarded sub-agent message repeats its labels; only broadcast when
+    // something is actually new, or a long run re-emits per message.
+    const known = this.agentToolIds.get(toolId);
+    if (
+      known &&
+      (!meta.agentType || meta.agentType === known.agentType) &&
+      (!meta.description || meta.description === known.description)
+    )
       return;
-    this.agentToolIds.add(toolId);
+    this.agentToolIds.set(toolId, {
+      agentType: meta.agentType ?? known?.agentType,
+      description: meta.description ?? known?.description,
+    });
     this.emit({ type: "agent-start", toolId, ...meta });
   }
 
@@ -991,6 +1006,9 @@ class ClaudeChatSession implements ChatSession {
     this.teardown();
     this.busy = false;
     this.streams.clear();
+    // forkSession gives the relaunch a new session id, so the on-disk sub-agent
+    // index cached against the old one is stale.
+    this.subagents = undefined;
     const idx = this.promptIds.indexOf(messageId);
     if (idx !== -1) this.promptIds = this.promptIds.slice(0, idx);
     this.promptUuids.clear(); // forkSession remapped every uuid
@@ -1178,12 +1196,11 @@ class ClaudeChatSession implements ChatSession {
     // expanding, and the transcript itself loads on that expand.
     try {
       const index = await this.subagentIndex();
-      for (const toolId of Object.keys(index)) {
+      for (const [toolId, entry] of Object.entries(index)) {
         if (this.closed) return;
-        const meta = await readAgentMeta(this.opts.cwd, sessionId, index[toolId]);
         this.noteAgent(toolId, {
-          agentType: meta?.agentType,
-          description: meta?.description,
+          agentType: entry.meta.agentType,
+          description: entry.meta.description,
         });
       }
     } catch {
@@ -1457,36 +1474,45 @@ export function parseAgentMeta(raw: string): AgentMeta | null {
   }
 }
 
+/** One sub-agent transcript on disk: its id plus the labels from its sidecar. */
+interface SubagentEntry {
+  agentId: string;
+  meta: AgentMeta;
+}
+
 /** Sub-agent transcripts live at
  * `~/.claude/projects/<projectKey>/<sessionId>/subagents/agent-<agentId>.jsonl`
  * (documented by the SDK). The project key is a mangled cwd, so rather than
- * reproduce that mangling we scan the project dirs for the one holding this
- * session. Resolved once per lookup batch by the caller's cache. */
-async function readAgentMeta(
+ * reproduce that mangling we find the project dir holding this session — trying
+ * the obvious key first, then scanning. */
+async function subagentDir(
   cwd: string | undefined,
   sessionId: string,
-  agentId: string,
-): Promise<AgentMeta | null> {
+): Promise<string | null> {
   const projects = join(homedir(), ".claude", "projects");
-  const { readdir } = await import("node:fs/promises");
-  let keys: string[];
-  try {
-    keys = await readdir(projects);
-  } catch {
-    return null;
-  }
-  // Prefer the project whose key looks like this cwd, so the common case is one
-  // hit rather than a full scan.
+  const at = (key: string) => join(projects, key, sessionId, "subagents");
   const hint = cwd ? cwd.replace(/[^a-zA-Z0-9]/g, "-") : "";
-  for (const key of keys.sort((a, b) => (a === hint ? -1 : b === hint ? 1 : 0))) {
-    const path = join(projects, key, sessionId, "subagents", `agent-${agentId}.meta.json`);
-    try {
-      return parseAgentMeta(await readFile(path, "utf8"));
-    } catch {
-      // Not this project — keep looking.
-    }
+  if (hint && existsSync(at(hint))) return at(hint);
+  try {
+    for (const key of await readdir(projects))
+      if (existsSync(at(key))) return at(key);
+  } catch {
+    // No projects dir (or unreadable) — nothing to restore.
   }
   return null;
+}
+
+async function readAgentMeta(
+  dir: string,
+  agentId: string,
+): Promise<AgentMeta | null> {
+  try {
+    return parseAgentMeta(
+      await readFile(join(dir, `agent-${agentId}.meta.json`), "utf8"),
+    );
+  } catch {
+    return null; // Best-effort: a missing sidecar just means no join.
+  }
 }
 
 /** Which sub-agent an SDK message belongs to, or null for the main thread.

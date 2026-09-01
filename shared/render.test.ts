@@ -306,6 +306,12 @@ describe("renderPart sub-agent panels", () => {
     expect(rendered.html).toContain('<div class="chat-agent">');
     expect(rendered.html).toContain('<div class="chat-turn user">');
     expect(rendered.html).toContain("the final report");
+    // Opens with the task it was given — neither the stream nor the on-disk
+    // transcript carries the sub-agent's own first message.
+    expect(rendered.html.indexOf("long…")).toBeGreaterThan(-1);
+    expect(rendered.html.indexOf("long…")).toBeLessThan(
+      rendered.html.indexOf("the final report"),
+    );
     expect(rendered.html).not.toContain("chat-tool-output");
     expect(rendered.html).not.toContain("chat-tool-args");
     // The collapsed summary line is untouched.
