@@ -458,6 +458,7 @@ function renderAgentPanel(
   const turns = run.state.messages
     .map((m) => {
       const rendered = renderMessage(m, agents);
+      if (m.role === "system") return rendered.html; // already a standalone line
       return m.role === "user"
         ? `<div class="chat-turn user"><div class="chat-bubble user">${rendered.html}</div></div>`
         : `<div class="chat-turn assistant">${rendered.html}</div>`;
@@ -470,6 +471,24 @@ export function renderMessage(
   message: ChatMessage,
   agents?: Record<string, AgentRun>,
 ): RenderedMessage {
+  // Neither party authored this one (a background-task notification, a peer
+  // message). Muted single line in transcript order — it explains the reply that
+  // follows without ever looking like something the user typed.
+  if (message.role === "system") {
+    const text = message.parts
+      .map((p) => (p.type === "text" ? p.text : ""))
+      .join("");
+    const html = `<div class="chat-system">${escapeHtml(text)}</div>`;
+    return {
+      id: message.id,
+      role: "system",
+      bubbleClassName: "chat-system",
+      parts: [
+        { type: "text", component: "SystemPart", className: "chat-system", html },
+      ],
+      html,
+    };
+  }
   if (message.role === "user") {
     const text = message.parts
       .map((p) => (p.type === "text" ? p.text : ""))

@@ -571,6 +571,39 @@ describe("applyChatEvent rewind", () => {
   });
 });
 
+describe("applyChatEvent system turns", () => {
+  const systemTurn = (text: string): ChatEvent => ({
+    type: "user-message",
+    message: { id: `s-${text}`, role: "system", parts: [{ type: "text", text }], createdAt: 0 },
+  });
+
+  it("appends to the transcript like any other turn", () => {
+    const state = reduce([systemTurn("background task finished")]);
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].role).toBe("system");
+  });
+
+  it("does not consume an armed auto-prompt or clear suggestions", () => {
+    // A notification arriving mid-countdown is not the developer replying: it
+    // must not cancel Continuity Mode's armed prompt.
+    const before = reduce([
+      { type: "prompt-suggestion", suggestions: ["carry on?"] },
+      { type: "auto-prompt", prompt: { id: "p1", text: "next", delayMs: 8000, at: 0 } },
+    ]);
+    const after = applyChatEvent(before, systemTurn("task done"));
+    expect(after.autoPrompt).toMatchObject({ id: "p1" });
+    expect(after.promptSuggestions).toEqual(["carry on?"]);
+
+    // A real prompt still spends both.
+    const sent = applyChatEvent(before, {
+      type: "user-message",
+      message: { id: "u1", role: "user", parts: [{ type: "text", text: "go" }], createdAt: 0 },
+    });
+    expect(sent.autoPrompt).toBeNull();
+    expect(sent.promptSuggestions).toEqual([]);
+  });
+});
+
 describe("applyChatEvent sub-agents", () => {
   // A main turn that calls the Agent tool with id `t`.
   const spawn = (t: string): ChatEvent[] => [

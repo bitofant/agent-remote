@@ -117,15 +117,21 @@ export function emptyChatState(): ChatState {
  * are ignored rather than thrown: the stream comes from an external process. */
 export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
   switch (event.type) {
-    case "user-message":
+    case "user-message": {
+      const messages = capMessages([...state.messages, event.message]);
+      // A system turn (a notification the conversation received) is transcript
+      // only: it isn't a prompt, so it must not consume the armed auto-prompt or
+      // invalidate the suggestions the last real turn produced.
+      if (event.message.role === "system") return { ...state, messages };
       return {
         ...state,
-        messages: capMessages([...state.messages, event.message]),
+        messages,
         // A new prompt makes the prior turn's suggestions stale — drop them.
         promptSuggestions: [],
         // A prompt sent is an armed auto-prompt spent, whoever sent it.
         autoPrompt: null,
       };
+    }
 
     case "busy": {
       if (event.busy) return { ...state, busy: true };

@@ -186,6 +186,14 @@ function Bubble({
   /** Present on user bubbles the session can rewind to (see ChatState.capabilities). */
   onRewind?: () => void;
 }) {
+  // A turn neither party authored (background-task notification, peer message):
+  // a muted line in transcript order, never a bubble attributed to the user.
+  if (message.role === "system")
+    return (
+      <div className="chat-system">
+        {message.parts.map((p) => (p.type === "text" ? p.text : "")).join("")}
+      </div>
+    );
   if (message.role === "user") {
     const text = message.parts
       .map((p) => (p.type === "text" ? p.text : ""))
