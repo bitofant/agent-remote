@@ -345,3 +345,26 @@ describe("renderPart sub-agent panels", () => {
     expect(html).toContain("deep");
   });
 });
+
+describe("renderMessage system turns", () => {
+  const sys = (text: string): ChatMessage => ({
+    id: "s1",
+    role: "system",
+    parts: [{ type: "text", text }],
+    createdAt: 0,
+  });
+
+  it("renders a muted line, never a user bubble", () => {
+    const r = renderMessage(sys("Background command finished"));
+    expect(r.bubbleClassName).toBe("chat-system");
+    expect(r.parts[0].component).toBe("SystemPart");
+    expect(r.html).toBe('<div class="chat-system">Background command finished</div>');
+    expect(r.html).not.toContain("chat-bubble");
+  });
+
+  it("escapes the machine-formatted text it carries", () => {
+    expect(renderMessage(sys("<task-notification>x</task-notification>")).html).toContain(
+      "&lt;task-notification&gt;",
+    );
+  });
+});

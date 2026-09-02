@@ -21,6 +21,15 @@ const MAX_TRANSCRIPT_CHARS = 4_000;
 /** How many trailing messages to consider. */
 const MAX_TRANSCRIPT_MESSAGES = 10;
 
+// How each role is named to the LLM. `system` is a turn the conversation
+// received but neither party authored (a background-task notification) — it must
+// not be labelled Assistant, or the model reads machine output as its own words.
+const TRANSCRIPT_SPEAKER: Record<ChatMessage["role"], string> = {
+  user: "User",
+  assistant: "Assistant",
+  system: "System",
+};
+
 /** Flatten a message's visible text (text parts; a terse marker for tool calls).
  * Thinking is omitted — it's not what the developer reacts to. Shared with
  * autopr.ts's turn digest so both read a message the same way. */
@@ -49,7 +58,7 @@ export function buildSuggestionTranscript(
   for (const msg of recent) {
     const text = messageText(msg);
     if (!text) continue;
-    lines.push(`${msg.role === "user" ? "User" : "Assistant"}: ${text}`);
+    lines.push(`${TRANSCRIPT_SPEAKER[msg.role]}: ${text}`);
   }
   const transcript = lines.join("\n\n");
   return transcript.length > maxChars

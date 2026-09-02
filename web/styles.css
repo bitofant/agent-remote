@@ -2442,6 +2442,19 @@ button.auto-press::after {
   font-size: 12.5px;
   text-align: center;
 }
+
+/* A turn the conversation received but neither party authored (background-task
+   notification, peer message). Same muted centered idiom as a notice, but it
+   sits in transcript order — it's what the next reply is answering. */
+.chat-system {
+  align-self: center;
+  max-width: 85%;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .chat-notice.warning {
   color: var(--warning);
 }

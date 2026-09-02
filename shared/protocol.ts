@@ -243,7 +243,11 @@ export interface ChatImageRef {
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant";
+  /** `system` is a turn the conversation received but neither party authored —
+   * a background-task notification, a peer/channel message. It's part of the
+   * transcript (it's what the agent replied to) but must never be attributed to
+   * the user: rendered as a muted inline line, and never a rewind target. */
+  role: "user" | "assistant" | "system";
   parts: ChatPart[];
   createdAt: number;
 }
@@ -567,6 +571,9 @@ export interface ChatState {
 
 /** Normalized streaming events a chat adapter emits. */
 export type ChatEvent =
+  /** A turn from outside the agent: the user's prompt, or (role `system`) a
+   * notification the conversation received. Only the `user` form clears the
+   * armed auto-prompt and stale suggestions — a notification isn't a prompt. */
   | { type: "user-message"; message: ChatMessage }
   | { type: "busy"; busy: boolean }
   | { type: "assistant-start"; messageId: string }

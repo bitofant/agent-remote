@@ -339,6 +339,9 @@ class ClaudeChatSession implements ChatSession {
    * rewind relaunch: forkSession remaps every uuid, so the cache goes stale and
    * later rewinds fall back to positional lookup. */
   private promptUuids = new Map<string, string>();
+  /** messageId → the exact text we sent, so the CLI's echo can be matched by
+   * content rather than by order (see pairPromptUuid). */
+  private promptText = new Map<string, string>();
   /** Turn in progress (drives the busy indicator). */
   private busy = false;
   /** Streaming state per conversation thread: `""` is the main one, a sub-agent
@@ -354,6 +357,10 @@ class ClaudeChatSession implements ChatSession {
   >();
   /** tool-call id → on-disk sub-agent id for a resumed session; built once. */
   private subagents?: Record<string, SubagentEntry>;
+  /** uuid → provenance for the resumed transcript (see parseOrigins): the one
+   * field getSessionMessages drops, and the only way to tell a replayed prompt
+   * from an injected notification. */
+  private origins = new Map<string, TurnOrigin>();
   /** Pending permission decisions keyed by ChatUiRequest id. */
   private permResolvers = new Map<
     string,
@@ -687,6 +694,9 @@ class ClaudeChatSession implements ChatSession {
         });
         const id = randomUUID();
         this.promptIds.push(id);
+        // Remember what we sent so its CLI echo can be matched by text, not by
+        // arrival order (see pairPromptUuid).
+        this.promptText.set(id, action.text.trim());
         this.emit({
           type: "user-message",
           message: {
@@ -898,6 +908,17 @@ class ClaudeChatSession implements ChatSession {
     return getSessionMessages(this.sessionId, { dir: this.opts.cwd });
   }
 
+  /** Load the provenance getSessionMessages drops, so replayed turns can be told
+   * apart. Best-effort: on any failure everything stays human (prior behaviour). */
+  private async loadOrigins(sessionId: string): Promise<void> {
+    try {
+      const file = await sessionFile(this.opts.cwd, sessionId);
+      if (file) this.origins = parseOrigins(await readFile(file, "utf8"));
+    } catch {
+      // Unreadable transcript — no provenance, no reclassification.
+    }
+  }
+
   /** Find the transcript uuid of one of our user-message ids. Prefer the uuid
    * captured from the CLI's echo; otherwise fall back to position among the
    * transcript's prose user entries (which is how rewinds after a fork resolve,
@@ -907,9 +928,16 @@ class ClaudeChatSession implements ChatSession {
     if (exact) return exact;
     const idx = this.promptIds.indexOf(messageId);
     if (idx === -1) return undefined;
+    // Refresh provenance: notifications land in the file while the session runs,
+    // and counting one as a prompt shifts every position below.
+    if (this.sessionId) await this.loadOrigins(this.sessionId);
+    // MUST use the same predicate replayUserMessage does, or the two lists drift
+    // and a rewind forks the session at the wrong entry: a session with
+    // background-task notifications has prose user entries that are not prompts.
     const prompts = (await this.transcript()).filter(
       (m) =>
         m.type === "user" &&
+        isHumanTurn({ origin: this.origins.get(m.uuid) }) &&
         userText((m.message as { content?: unknown } | undefined)?.content),
     );
     return prompts[idx]?.uuid;
@@ -1006,9 +1034,10 @@ class ClaudeChatSession implements ChatSession {
     this.teardown();
     this.busy = false;
     this.streams.clear();
-    // forkSession gives the relaunch a new session id, so the on-disk sub-agent
-    // index cached against the old one is stale.
+    // forkSession gives the relaunch a new session id and remaps every uuid, so
+    // both caches keyed against the old one are stale.
     this.subagents = undefined;
+    this.origins = new Map();
     const idx = this.promptIds.indexOf(messageId);
     if (idx !== -1) this.promptIds = this.promptIds.slice(0, idx);
     this.promptUuids.clear(); // forkSession remapped every uuid
@@ -1103,8 +1132,12 @@ class ClaudeChatSession implements ChatSession {
               description: task.description,
             });
         } else if (msg.subtype === "task_notification") {
-          // A backgrounded sub-agent finished: its tool_result was only the
-          // "launched" stub, so the real answer arrives here.
+          // A background task finished. For a sub-agent that's its report, which
+          // belongs in the nested transcript; for anything else (a backgrounded
+          // shell command) it's a turn the conversation received, so it shows as
+          // a system line. This is the LIVE source for both: the injected user
+          // turn the CLI writes carries no `origin` over the wire — only on disk,
+          // which is what the resume path reads (see parseOrigins).
           const task = msg as unknown as TaskMessage;
           if (task.tool_use_id && this.agentToolIds.has(task.tool_use_id))
             this.emit({
@@ -1112,16 +1145,17 @@ class ClaudeChatSession implements ChatSession {
               toolId: task.tool_use_id,
               report: task.summary,
             });
+          else this.systemMessage(taskLine(task));
         }
         break;
       case "user": {
         const content = (msg.message as { content?: unknown } | undefined)
           ?.content;
         this.handleToolResults(content, parent);
-        // A sub-agent's own prompt IS shown (it opens its nested transcript);
-        // on the main thread the live echo is skipped, since the prompt bubble
-        // was already emitted by the `prompt` action.
         if (parent) {
+          // A sub-agent's own prompt IS shown (it opens its nested transcript);
+          // on the main thread the live echo is skipped, since the prompt bubble
+          // was already emitted by the `prompt` action.
           this.replayUserMessage(content, undefined, parent);
         } else if ("isReplay" in msg && msg.isReplay) {
           // Vestigial safety net — the SDK doesn't emit isReplay on resume.
@@ -1129,8 +1163,9 @@ class ClaudeChatSession implements ChatSession {
         } else if (msg.uuid && userText(content)) {
           // The CLI's echo of a prompt we sent — the only place its transcript
           // uuid surfaces, and what a rewind needs to slice the session at.
-          // Prose distinguishes it from tool_result-only user messages.
-          this.pairPromptUuid(msg.uuid);
+          // Matched by text: injected turns (task notifications) look identical
+          // here, since the live message carries no `origin`.
+          this.pairPromptUuid(msg.uuid, userText(content));
         }
         break;
       }
@@ -1169,6 +1204,7 @@ class ClaudeChatSession implements ChatSession {
    * live stream doesn't replay it), folding whole messages through the same
    * helpers the live path uses so history bubbles match freshly-streamed ones. */
   private async replayHistory(sessionId: string): Promise<void> {
+    await this.loadOrigins(sessionId);
     let messages;
     try {
       messages = await getSessionMessages(sessionId, { dir: this.opts.cwd });
@@ -1180,32 +1216,58 @@ class ClaudeChatSession implements ChatSession {
       });
       return;
     }
+    // Announce the sub-agent runs that have a transcript on disk BEFORE walking
+    // the messages: the stub is what tells the client a bubble is worth
+    // expanding, and the loop below needs agentToolIds to know which
+    // notifications already belong to a run.
+    try {
+      const index = await this.subagentIndex();
+      for (const [toolId, entry] of Object.entries(index))
+        this.noteAgent(toolId, {
+          agentType: entry.meta.agentType,
+          description: entry.meta.description,
+        });
+    } catch {
+      // Best-effort: no stubs just means those bubbles keep the plain output.
+    }
     for (const m of messages) {
       if (this.closed) return;
       const content = (m.message as { content?: unknown } | undefined)?.content;
       if (m.type === "assistant") {
         this.replayAssistantMessage(content, m.uuid);
       } else if (m.type === "user") {
-        // May carry tool_result blocks and/or genuine prose — emit both.
+        // May carry tool_result blocks and/or genuine prose — emit both. A turn
+        // the human didn't author replays as a system line, never a user bubble
+        // (and never becomes a rewind target) — same rule as the live path.
         this.handleToolResults(content);
-        this.replayUserMessage(content, m.uuid);
+        const entry = { origin: this.origins.get(m.uuid), message: m.message };
+        if (isHumanTurn(entry)) {
+          this.replayUserMessage(content, m.uuid);
+        } else {
+          // A sub-agent's notification is its run's report — it belongs to the
+          // nested transcript (where the live path put it), not out here.
+          const owner = notificationToolId(userText(content));
+          if (!owner || !this.agentToolIds.has(owner))
+            this.systemMessage(systemTurnText(entry));
+        }
       }
     }
-    // Mark which replayed tool calls have a sub-agent transcript on disk. The
-    // stub is empty on purpose — it's how the client knows the bubble is worth
-    // expanding, and the transcript itself loads on that expand.
-    try {
-      const index = await this.subagentIndex();
-      for (const [toolId, entry] of Object.entries(index)) {
-        if (this.closed) return;
-        this.noteAgent(toolId, {
-          agentType: entry.meta.agentType,
-          description: entry.meta.description,
-        });
-      }
-    } catch {
-      // Best-effort: no stubs just means those bubbles keep the plain output.
-    }
+  }
+
+  /** Emit a turn nobody in the conversation authored as a `system` message.
+   * Deliberately NOT pushed to promptIds/promptUuids — it isn't a rewind target,
+   * and counting it would shift every positional lookup. */
+  private systemMessage(text: string, parent: string | null = null): void {
+    if (!text) return;
+    this.emitFor(parent, {
+      type: "user-message",
+      message: {
+        id: randomUUID(),
+        role: "system",
+        parts: [{ type: "text", text }],
+        createdAt: Date.now(),
+      },
+    });
   }
 
   /** Rebuild a replayed user prompt into a bubble (only genuine user text).
@@ -1235,11 +1297,17 @@ class ClaudeChatSession implements ChatSession {
     });
   }
 
-  /** Attach a transcript uuid to the oldest prompt still missing one (prompts
-   * and their echoes arrive in the same order). */
-  private pairPromptUuid(uuid: string): void {
+  /** Attach a transcript uuid to the prompt this echo belongs to.
+   *
+   * Matched by TEXT, not by arrival order: the CLI injects other prose user
+   * turns into the conversation (a background task reporting completion), and
+   * the live SDK message carries no `origin` to tell them apart — see
+   * isHumanTurn. Pairing blind would hand a notification's uuid to a real
+   * prompt, and a rewind would then fork the session at the wrong turn.
+   * No match → no pairing, and promptUuid falls back to position. */
+  private pairPromptUuid(uuid: string, echo: string): void {
     for (const id of this.promptIds) {
-      if (!this.promptUuids.has(id)) {
+      if (!this.promptUuids.has(id) && this.promptText.get(id) === echo) {
         this.promptUuids.set(id, uuid);
         return;
       }
@@ -1489,8 +1557,29 @@ async function subagentDir(
   cwd: string | undefined,
   sessionId: string,
 ): Promise<string | null> {
+  return projectPath(cwd, (key) =>
+    join(key, sessionId, "subagents"),
+  );
+}
+
+/** The session's own transcript file, for the fields `getSessionMessages`
+ * drops (see loadOrigins). */
+async function sessionFile(
+  cwd: string | undefined,
+  sessionId: string,
+): Promise<string | null> {
+  return projectPath(cwd, (key) => join(key, `${sessionId}.jsonl`));
+}
+
+/** Resolve a path under the project dir holding this session, trying the key the
+ * cwd mangles to before scanning. Keeps the CLI's cwd-mangling out of our code:
+ * we probe rather than reproduce it. */
+async function projectPath(
+  cwd: string | undefined,
+  rel: (projectKey: string) => string,
+): Promise<string | null> {
   const projects = join(homedir(), ".claude", "projects");
-  const at = (key: string) => join(projects, key, sessionId, "subagents");
+  const at = (key: string) => join(projects, rel(key));
   const hint = cwd ? cwd.replace(/[^a-zA-Z0-9]/g, "-") : "";
   if (hint && existsSync(at(hint))) return at(hint);
   try {
@@ -1513,6 +1602,94 @@ async function readAgentMeta(
   } catch {
     return null; // Best-effort: a missing sidecar just means no join.
   }
+}
+
+/** uuid → provenance, scraped from a session's own JSONL.
+ *
+ * `getSessionMessages` returns a `SessionMessage` that DROPS `origin`, so on the
+ * resume path the SDK gives us no way to tell a prompt from an injected
+ * background-task notification — which is exactly where the misattribution shows
+ * (live, the SDK message still carries it). The CLI writes the field to disk, so
+ * we read it back ourselves rather than guess from the message text.
+ *
+ * Best-effort by design: an unreadable/absent file yields an empty map and every
+ * turn stays human, i.e. today's behaviour. */
+export function parseOrigins(jsonl: string): Map<string, TurnOrigin> {
+  const origins = new Map<string, TurnOrigin>();
+  for (const line of jsonl.split("\n")) {
+    if (!line.startsWith("{") || !line.includes('"origin"')) continue;
+    try {
+      const entry = JSON.parse(line) as { uuid?: unknown; origin?: TurnOrigin };
+      if (typeof entry.uuid === "string" && entry.origin?.kind)
+        origins.set(entry.uuid, entry.origin);
+    } catch {
+      // Truncated/!JSON line (the file is appended to live) — skip it.
+    }
+  }
+  return origins;
+}
+
+/** Provenance stamp the CLI puts on a conversation turn (SDKMessageOrigin). */
+interface TurnOrigin {
+  kind?: unknown;
+  body?: unknown;
+}
+
+/** One line for a finished background task. `summary` is the CLI's own
+ * human-readable sentence; the status is only worth saying when it isn't a
+ * plain completion. */
+export function taskLine(task: {
+  summary?: string;
+  status?: string;
+  description?: string;
+}): string {
+  const text = (task.summary ?? task.description ?? "").trim();
+  if (!text) return task.status ? `Background task ${task.status}.` : "";
+  return task.status && task.status !== "completed"
+    ? `${text} (${task.status})`
+    : text;
+}
+
+/** The tool call a notification envelope refers to, when it names one. Lets the
+ * resume path skip a sub-agent's notification — live it went into the nested
+ * transcript as that run's report, so replaying it as a system line too would
+ * make a resumed session disagree with the one it's restoring. */
+export function notificationToolId(text: string): string | undefined {
+  return /<tool-use-id>([\s\S]*?)<\/tool-use-id>/.exec(text)?.[1]?.trim();
+}
+
+/** Did the human author this user turn?
+ *
+ * The CLI injects other things into the conversation as `user` entries — a
+ * background task reporting completion, a peer/channel message — and marks them
+ * with a non-`human` `origin.kind`. They look exactly like prompts otherwise
+ * (prose content, their own uuid), so without this they render as bubbles the
+ * user never sent AND, worse, count as rewind targets: `promptIds` and
+ * `promptUuid`'s positional fallback would disagree and a rewind would fork the
+ * session at the wrong turn.
+ *
+ * Absent origin means human: genuine prompts on the SDK path carry no origin at
+ * all (verified against a real transcript), so only an explicit non-human
+ * provenance is ever excluded. */
+export function isHumanTurn(msg: unknown): boolean {
+  const kind = (msg as { origin?: { kind?: unknown } } | null)?.origin?.kind;
+  return kind === undefined || kind === null || kind === "human";
+}
+
+/** The readable line for a turn the human didn't author. Prefers what the SDK
+ * already decoded (`origin.body`, the peer envelope stripped), then a
+ * notification's own `<summary>`, and only then the raw text — these arrive as
+ * machine-formatted blocks that would otherwise dump XML into the transcript. */
+export function systemTurnText(msg: unknown): string {
+  const m = msg as
+    | { origin?: { body?: unknown }; message?: { content?: unknown } }
+    | null
+    | undefined;
+  const body = m?.origin?.body;
+  if (typeof body === "string" && body.trim()) return body.trim();
+  const raw = userText(m?.message?.content);
+  const summary = /<summary>([\s\S]*?)<\/summary>/.exec(raw)?.[1]?.trim();
+  return summary || raw;
 }
 
 /** Which sub-agent an SDK message belongs to, or null for the main thread.
