@@ -1828,6 +1828,14 @@ body {
 .chat-thinking summary {
   cursor: pointer;
 }
+/* How much reasoning you're opting out of, appended to the collapsed label —
+   muted and tabular so a climbing count while thinking doesn't reflow. */
+.chat-thinking-count {
+  margin-left: 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
 .chat-thinking > div {
   white-space: pre-wrap;
   margin-top: 4px;
@@ -1957,9 +1965,39 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Red/green line diff for Edit calls. Each line is its own block (no newline
-   separators), so a blank line needs a min-height to stay visible. */
-.chat-tool-diff span {
+/* The "+N −M" tally, on a diff header and on a collapsed tool row alike. */
+.diff-add {
+  color: var(--success);
+}
+.diff-del {
+  color: var(--danger);
+}
+/* Path + tally row above an expanded diff — a PR's per-file header. */
+.chat-diff-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.chat-diff-path {
+  /* The flex child that must give: a long path ellipsises, the tally never
+     gets pushed out. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-diff-stats,
+.chat-tool-stats {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Red/green line diff for Edit calls. Each row is its own block (no newline
+   separators), so a blank line needs a min-height to stay visible. Direct
+   children only — the word marks inside a row stay inline. */
+.chat-tool-diff > span {
   display: block;
   min-height: 1.2em;
 }
@@ -1973,6 +2011,27 @@ body {
 }
 .chat-tool-diff .diff-ctx {
   color: var(--muted);
+}
+/* The +/- gutter: its own span so selecting a line copies the code, not the
+   sign, and a fixed width that keeps every row's text aligned. */
+.diff-mark {
+  display: inline-block;
+  width: 1.2em;
+  user-select: none;
+  opacity: 0.7;
+}
+/* Intra-line change, on top of the row's own bar — GitHub's second tier. */
+.diff-word {
+  border-radius: 2px;
+  background: color-mix(in srgb, currentColor 30%, transparent);
+}
+/* Elided unchanged context. Muted + centered like GitHub's, and deliberately
+   with no red/green bar so it can't be read as a changed line. */
+.diff-fold {
+  color: var(--muted);
+  text-align: center;
+  font-style: italic;
+  user-select: none;
 }
 
 /* A sub-agent's own chat session, inside the tool bubble that spawned it.
