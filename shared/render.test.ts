@@ -1,12 +1,21 @@
 import { describe, it, expect } from "vitest";
 import {
+  DIFF_CONTEXT,
+  diffFoldLabel,
+  diffRows,
+  diffStats,
   groupParts,
   lineDiff,
+  markWordDiff,
   renderMessage,
   renderPart,
   shortenPath,
+  thoughtAmount,
+  thinkingSummary,
   toolView,
+  wordDiff,
 } from "./render.js";
+import type { DiffLine } from "./render.js";
 import type { ChatMessage, ChatPart } from "./protocol.js";
 import { emptyChatState } from "./chat.js";
 
@@ -40,14 +49,92 @@ describe("toolView", () => {
       toolPart({ file_path: "/repo/src/app.ts", old_string: "a", new_string: "b" }),
     );
     expect(view.primary).toBe("…/src/app.ts");
+    expect(view.stat).toEqual({ added: 1, removed: 1 });
     expect(view.body.kind).toBe("diff");
     if (view.body.kind === "diff") {
       expect(view.body.path).toBe("/repo/src/app.ts");
-      expect(view.body.lines).toEqual([
-        { sign: "-", text: "a" },
-        { sign: "+", text: "b" },
+      expect(view.body.added).toBe(1);
+      expect(view.body.removed).toBe(1);
+      expect(view.body.rows.map((r) => (r.kind === "line" ? r.line.text : "…"))).toEqual([
+        "a",
+        "b",
       ]);
     }
+  });
+
+  // pi's edit takes camelCase text in an `edits[]` array instead of claude's
+  // top-level old/new_string; both must land in the same diff view.
+  it("renders pi's camelCase edits[] as a diff too", () => {
+    const view = toolView(
+      toolPart({ path: "shared/render.ts", edits: [{ oldText: "foo", newText: "bar" }] }),
+    );
+    expect(view.primary).toBe("shared/render.ts");
+    expect(view.body.kind).toBe("diff");
+    if (view.body.kind === "diff")
+      expect(
+        view.body.rows.filter((r) => r.kind === "line").map((r) => r.line.text),
+      ).toEqual(["foo", "bar"]);
+  });
+
+  it("shows a multi-edit call as one diff with a hunk break between edits", () => {
+    const view = toolView(
+      toolPart({
+        path: "a.ts",
+        edits: [
+          { oldText: "one", newText: "ONE" },
+          { oldText: "two", newText: "TWO" },
+        ],
+      }),
+    );
+    expect(view.secondary).toBe("2 edits");
+    expect(view.stat).toEqual({ added: 2, removed: 2 });
+    if (view.body.kind === "diff")
+      expect(
+        view.body.rows.map((r) => (r.kind === "fold" ? "fold" : r.line.sign)),
+      ).toEqual(["-", "+", "fold", "-", "+"]);
+  });
+
+  it("never stacks a hunk break on a fold that already marks the gap", () => {
+    // Second edit sits far down a long fragment, so its own elided lead *is* the
+    // break between the two hunks.
+    const long = Array.from({ length: 30 }, (_, i) => `l${i}`).join("\n");
+    const view = toolView(
+      toolPart({
+        path: "a.ts",
+        edits: [
+          { oldText: "one", newText: "ONE" },
+          { oldText: long, newText: long.replace("l15", "L15") },
+        ],
+      }),
+    );
+    if (view.body.kind === "diff") {
+      const kinds = view.body.rows.map((r) => r.kind);
+      expect(kinds.some((k, i) => k === "fold" && kinds[i - 1] === "fold")).toBe(false);
+    } else {
+      throw new Error("expected a diff body");
+    }
+  });
+
+  it("never stacks a hunk break on a fold left over from the previous hunk", () => {
+    const long = Array.from({ length: 30 }, (_, i) => `l${i}`).join("\n");
+    const view = toolView(
+      toolPart({
+        path: "a.ts",
+        edits: [
+          { oldText: long, newText: long.replace("l15", "L15") },
+          { oldText: "one", newText: "ONE" },
+        ],
+      }),
+    );
+    if (view.body.kind !== "diff") throw new Error("expected a diff body");
+    const kinds = view.body.rows.map((r) => r.kind);
+    expect(kinds.some((k, i) => k === "fold" && kinds[i - 1] === "fold")).toBe(false);
+  });
+
+  it("treats an empty oldText as an insertion, not a missing edit", () => {
+    const view = toolView(toolPart({ path: "new.ts", oldText: "", newText: "hi" }));
+    expect(view.body.kind).toBe("diff");
+    expect(view.stat).toEqual({ added: 1, removed: 0 });
   });
 
   it("renders a write (content) as a code block labelled with the path", () => {
@@ -137,6 +224,104 @@ describe("toolView", () => {
   });
 });
 
+describe("wordDiff", () => {
+  it("marks only the words that differ", () => {
+    const d = wordDiff("const a = 1;", "const a = 2;")!;
+    expect(d.old.filter((w) => w.changed).map((w) => w.text)).toEqual(["1;"]);
+    expect(d.new.filter((w) => w.changed).map((w) => w.text)).toEqual(["2;"]);
+    // Reassembling either side gives the original line back.
+    expect(d.old.map((w) => w.text).join("")).toBe("const a = 1;");
+    expect(d.new.map((w) => w.text).join("")).toBe("const a = 2;");
+  });
+
+  it("keeps the whitespace between words out of the highlight", () => {
+    const d = wordDiff("a b   c", "a bb   c")!;
+    // The changed run is the word, never the spaces around it.
+    expect(d.new.find((w) => w.changed)?.text).toBe("bb");
+  });
+});
+
+describe("markWordDiff", () => {
+  it("pairs an adjacent removed/added line but not a lone one", () => {
+    const marked = markWordDiff(lineDiff("a x\nkeep", "a y\nkeep"));
+    expect(marked[0].words).toBeDefined();
+    expect(marked[1].words).toBeDefined();
+    expect(marked[2].words).toBeUndefined(); // context line
+    expect(markWordDiff(lineDiff("a\nb", "a")).every((l) => l.words === undefined)).toBe(
+      true,
+    );
+  });
+});
+
+describe("diffRows", () => {
+  const run = (sign: " " | "+" | "-", count: number) =>
+    Array.from({ length: count }, (_x, i): DiffLine => ({ sign, text: `${sign}${i}` }));
+
+  it("folds a long unchanged run, keeping context either side", () => {
+    const rows = diffRows([...run(" ", 20), ...run("+", 1), ...run(" ", 20)]);
+    const folds = rows.filter((r) => r.kind === "fold");
+    expect(folds).toHaveLength(2);
+    if (folds[0].kind === "fold") expect(folds[0].count).toBe(20 - DIFF_CONTEXT);
+    expect(rows.filter((r) => r.kind === "line" && r.line.sign === "+")).toHaveLength(1);
+  });
+
+  it("never folds short runs — a short diff stays fully readable", () => {
+    const rows = diffRows([...run(" ", 6), ...run("-", 1), ...run(" ", 6)]);
+    expect(rows.every((r) => r.kind === "line")).toBe(true);
+  });
+
+  it("shows every line when nothing is changed", () => {
+    expect(diffRows(run(" ", 30)).every((r) => r.kind === "line")).toBe(true);
+  });
+
+  it("names the hidden lines, and says nothing for a hunk break", () => {
+    expect(diffFoldLabel(2)).toBe("⋯ 2 unchanged lines");
+    expect(diffFoldLabel(1)).toBe("⋯ 1 unchanged line");
+    expect(diffFoldLabel()).toBe("⋯");
+  });
+});
+
+describe("diffStats", () => {
+  it("tallies added and removed lines, ignoring context", () => {
+    expect(diffStats(lineDiff("a\nb\nc\nd", "a\nc\nX\nd"))).toEqual({
+      added: 1,
+      removed: 1,
+    });
+  });
+});
+
+describe("thinking summary", () => {
+  const words = (n: number) => Array.from({ length: n }, (_x, i) => `w${i}`).join(" ");
+
+  it("counts words below the page threshold", () => {
+    expect(thoughtAmount(words(3))).toBe("3 words");
+    expect(thoughtAmount("one two")).toBe("2 words");
+    expect(thoughtAmount("one")).toBe("1 word");
+  });
+
+  it("switches to pages once the thought is past ~1.2 pages", () => {
+    expect(thoughtAmount(words(599))).toBe("599 words");
+    expect(thoughtAmount(words(600))).toBe("1.2 pages");
+    expect(thoughtAmount(words(6_190))).toBe("12 pages");
+  });
+
+  it("says nothing about text that isn't there", () => {
+    expect(thoughtAmount("")).toBe("");
+    expect(thoughtAmount("   \n ")).toBe("");
+  });
+
+  it("reads as live while reasoning, past-tense once settled", () => {
+    expect(thinkingSummary(words(12), true)).toEqual({
+      label: "Thinking…",
+      amount: "12 words",
+    });
+    expect(thinkingSummary(words(12))).toEqual({
+      label: "Thought for",
+      amount: "12 words",
+    });
+  });
+});
+
 describe("renderPart", () => {
   it("renders assistant text through markdown", () => {
     const part = renderPart({ type: "text", text: "**bold**" });
@@ -148,6 +333,46 @@ describe("renderPart", () => {
     const part = renderPart({ type: "thinking", text: "   " });
     expect(part.className).toBe("chat-thinking-label");
     expect(part.html).toContain("Thinking…");
+  });
+
+  it("collapses a thought to its label plus how much of it there is", () => {
+    const part = renderPart({
+      type: "thinking",
+      text: Array.from({ length: 610 }, (_x, i) => `w${i}`).join(" "),
+    });
+    expect(part.className).toBe("chat-thinking");
+    expect(part.html).toContain("Thought for");
+    expect(part.html).toContain('<span class="chat-thinking-count">1.2 pages</span>');
+    // The thought itself stays in the DOM behind the disclosure, escaped.
+    expect(part.html).toContain("w609");
+  });
+
+  it("renders a diff body with a path/stats header, gutters and folds", () => {
+    const part = renderPart(
+      toolPart({
+        file_path: "/repo/a.ts",
+        old_string: "keep\nold value",
+        new_string: "keep\nnew value",
+      }),
+    );
+    expect(part.html).toContain('<span class="chat-diff-path">/repo/a.ts</span>');
+    expect(part.html).toContain('<span class="diff-add">+1</span>');
+    expect(part.html).toContain('<span class="diff-del">−1</span>');
+    expect(part.html).toContain('<span class="diff-mark">-</span>');
+    // Only the word that differs is marked, not the whole line — "value" is
+    // common to both sides and stays plain.
+    expect(part.html).toContain('<span class="diff-word">old</span> value');
+    expect(part.html).toContain('<span class="diff-word">new</span> value');
+  });
+
+  it("tallies +N −M on the collapsed summary too, not just the body", () => {
+    const part = renderPart(
+      toolPart({ path: "a.ts", edits: [{ oldText: "x", newText: "y" }] }),
+    );
+    const summary = part.html.slice(0, part.html.indexOf("</summary>"));
+    expect(summary).toContain('<span class="chat-tool-stats">');
+    expect(summary).toContain('<span class="diff-add">+1</span>');
+    expect(summary).toContain('<span class="diff-del">−1</span>');
   });
 
   it("escapes raw HTML inside thinking text", () => {

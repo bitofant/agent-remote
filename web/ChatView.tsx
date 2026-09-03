@@ -23,12 +23,14 @@ import type {
 } from "../shared/protocol";
 import {
   agentPrompt,
+  diffFoldLabel,
   groupParts,
   renderMarkdown,
+  thinkingSummary,
   toolGlyph,
   toolView,
 } from "../shared/render";
-import type { ToolBody } from "../shared/render";
+import type { DiffLine, ToolBody } from "../shared/render";
 import type { Client } from "./client";
 import { linkRuns } from "./linkify";
 import { relativeTime } from "./time";
@@ -63,18 +65,24 @@ function ToolBodyView({ body }: { body: ToolBody }) {
     case "diff":
       return (
         <div className="chat-tool-body">
-          {body.path && <div className="chat-tool-path">{body.path}</div>}
+          {/* Path + "+N −M" header, the way a PR lists each changed file. */}
+          <div className="chat-tool-path chat-diff-head">
+            <span className="chat-diff-path">{body.path ?? "edit"}</span>
+            <span className="chat-diff-stats">
+              <span className="diff-add">+{body.added}</span>
+              <span className="diff-del">−{body.removed}</span>
+            </span>
+          </div>
           <pre className="chat-tool-diff">
-            {body.lines.map((l, i) => (
-              <span
-                key={i}
-                className={
-                  l.sign === "+" ? "diff-add" : l.sign === "-" ? "diff-del" : "diff-ctx"
-                }
-              >
-                {`${l.sign} ${l.text}`}
-              </span>
-            ))}
+            {body.rows.map((row, i) =>
+              row.kind === "fold" ? (
+                <span key={i} className="diff-fold">
+                  {diffFoldLabel(row.count)}
+                </span>
+              ) : (
+                <DiffRow key={i} line={row.line} />
+              ),
+            )}
           </pre>
         </div>
       );
@@ -157,6 +165,14 @@ function ToolPart({
         <span className="chat-tool-name">{part.name}</span>
         {view.primary && <span className="chat-tool-preview">{view.primary}</span>}
         {view.secondary && <span className="chat-tool-desc">{view.secondary}</span>}
+        {/* The +N −M tally on the collapsed row too — "what did this edit do" is
+        usually all you want before opening it. */}
+        {view.stat && (
+          <span className="chat-tool-stats">
+            <span className="diff-add">+{view.stat.added}</span>
+            <span className="diff-del">−{view.stat.removed}</span>
+          </span>
+        )}
       </summary>
       {/* A sub-agent's transcript replaces the args dump and the <pre> report —
           the report is already its last bubble (see the reducer's agent-done). */}
@@ -243,13 +259,21 @@ function Bubble({
   // is almost always all one or all the other (see groupParts).
   return (
     <div className={`chat-turn assistant${streaming ? " streaming" : ""}`}>
-      {groupParts(message.parts).map((group) =>
+      {groupParts(message.parts).map((group, gi, all) =>
         group.kind === "tool" ? (
           <ToolPart key={group.key} part={group.part} standalone />
         ) : (
           <div key={group.key} className="chat-bubble assistant">
             {group.parts.map((part, i) => (
-              <ProsePart key={i} part={part} />
+              <ProsePart
+                key={i}
+                part={part}
+                // Only the part actually being written climbs its count — every
+                // earlier thought is finished prose and must read as such.
+                live={
+                  streaming && gi === all.length - 1 && i === group.parts.length - 1
+                }
+              />
             ))}
           </div>
         ),
@@ -263,22 +287,60 @@ function Bubble({
   );
 }
 
-function ProsePart({ part }: { part: ChatPart }) {
+/** One diff row: a `+`/`−`/space gutter in its own span (so selecting the text
+ * doesn't drag the sign into the copy), then the line with its changed words
+ * marked. Mirrors shared/render.ts's `renderDiffLine`, whose HTML the render log
+ * captures — same classes, same structure. */
+function DiffRow({ line }: { line: DiffLine }) {
+  const cls =
+    line.sign === "+"
+      ? "diff-add"
+      : line.sign === "-"
+        ? "diff-del"
+        : "diff-ctx";
+  return (
+    <span className={cls}>
+      <span className="diff-mark">{line.sign}</span>
+      {line.words
+        ? line.words.map((w, i) =>
+            w.changed ? (
+              <span key={i} className="diff-word">
+                {w.text}
+              </span>
+            ) : (
+              <Fragment key={i}>{w.text}</Fragment>
+            ),
+          )
+        : line.text}
+    </span>
+  );
+}
+
+function ProsePart({ part, live = false }: { part: ChatPart; live?: boolean }) {
   switch (part.type) {
     case "text":
       return <Markdown text={part.text} />;
-    case "thinking":
+    case "thinking": {
       // No reasoning text (claude never streams it) → a plain live "Thinking…"
-      // label; the reducer strips this part once the next part starts. With
-      // text (pi) → the collapsible transcript.
-      return part.text.trim() === "" ? (
-        <div className="chat-thinking-label">Thinking…</div>
-      ) : (
+      // label; the reducer strips this part once the next part starts. With text
+      // (pi) → the collapsible transcript, whose summary says how much reading
+      // you're opting out of (`live` while the model is still reasoning, so the
+      // count climbs as it types).
+      if (part.text.trim() === "")
+        return <div className="chat-thinking-label">Thinking…</div>;
+      const s = thinkingSummary(part.text, live);
+      return (
         <details className="chat-thinking">
-          <summary>Thinking…</summary>
+          <summary>
+            {s.label}
+            {s.amount && (
+              <span className="chat-thinking-count">{s.amount}</span>
+            )}
+          </summary>
           <div>{part.text}</div>
         </details>
       );
+    }
     default:
       return null;
   }
