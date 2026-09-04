@@ -1142,6 +1142,15 @@ body {
   background: var(--bg);
 }
 
+/* Wrapper so the folder subtree can be display:none'd (not unmounted) while
+   the system page is up. Reproduces the flex context its children rely on. */
+.main-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .session-content {
   flex: 1;
   min-height: 0;
@@ -3334,4 +3343,210 @@ button.auto-press::after {
   width: 10px;
   height: 10px;
   border-radius: 2px;
+}
+
+/* --- system state page ---------------------------------------------------- */
+
+.system-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.system-status {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.system-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  /* Cards size to their content instead of stretching to the tallest in the
+     row — the GPU card carries the most gauges and would otherwise pad every
+     neighbour with dead space. */
+  align-items: start;
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+  /* One column on a phone; a second only once a full 320px card fits beside
+     the first, i.e. just past the app's 640px breakpoint — so this needs no
+     media query of its own. min() keeps a <320px viewport from overflowing. */
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  /* Caps the row at 3: a fourth column would need 4x320 + 3x12 = 1316px. */
+  max-width: 1188px;
+  margin-inline: auto;
+  width: 100%;
+}
+
+.system-card {
+  background: var(--panel);
+  border-radius: var(--r-lg);
+  padding: 12px;
+  min-width: 0;
+}
+
+.system-card .field-label {
+  margin-bottom: 10px;
+}
+
+.system-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.system-row-label {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.system-row-value {
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  flex: none;
+}
+
+.system-row-value code {
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.system-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 2px 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-meter {
+  margin-bottom: 8px;
+}
+
+/* Track rises off the card (--panel -> --raised); a --bg fill here would be
+   the sunken-well look the design deliberately avoids. */
+.system-bar {
+  height: 6px;
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  overflow: hidden;
+}
+
+.system-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-sm);
+  transition: width 0.3s ease;
+}
+
+.system-bar-fill.warn {
+  background: var(--warning);
+}
+
+.system-bar-fill.hot {
+  background: var(--danger);
+}
+
+/* Per-core strip: one thin column per logical CPU. */
+.system-cores {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 28px;
+  margin: 6px 0 10px;
+}
+
+.system-core {
+  flex: 1;
+  min-width: 2px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  background: var(--raised);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.system-core-fill {
+  width: 100%;
+  background: var(--accent);
+  transition: height 0.3s ease;
+}
+
+.system-core-fill.warn {
+  background: var(--warning);
+}
+
+.system-core-fill.hot {
+  background: var(--danger);
+}
+
+.system-group {
+  margin-top: 12px;
+}
+
+.system-group-title {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+/* Every row is its own raised chip, separated by a gap of the card's own
+   --panel showing through. An alternating fill read as "half the rows lost
+   their styling" rather than as a zebra table; the gap is the separator, so
+   there's still no divider line anywhere. */
+.system-item {
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  min-width: 0;
+}
+
+.system-item + .system-item {
+  margin-top: 4px;
+}
+
+/* A bar inside a row can't use the row's own fill as its track — it would be
+   invisible. Rise off --raised with the same tint chat tool bodies use. */
+.system-item .system-bar {
+  background: color-mix(in srgb, var(--text) 12%, var(--raised));
+}
+
+/* The chip's own padding is the bottom spacing now. */
+.system-item .system-sub {
+  margin: 3px 0 0;
+}
+
+.system-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  margin-bottom: 8px;
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  font-size: 11px;
+}
+
+.system-badge.ok-badge {
+  color: var(--success);
+}
+
+.system-badge.muted-badge {
+  color: var(--muted);
+}
+
+.system-card p.muted {
+  font-size: 12px;
+  margin: 4px 0;
 }
