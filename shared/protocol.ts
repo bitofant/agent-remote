@@ -119,6 +119,202 @@ export interface BrowseListing {
 }
 
 // ---------------------------------------------------------------------------
+// Host telemetry for the System state page (`GET /api/system`). Every section
+// is independently nullable: a box with no GPU / no docker / no engine renders
+// the page fine. Reasons ride in `errors`, keyed by section — nothing throws.
+// REST-only (no WS/reducer involvement), and read-only.
+// ---------------------------------------------------------------------------
+
+export type SystemSectionKey =
+  | "cpu"
+  | "memory"
+  | "disks"
+  | "network"
+  | "gpu"
+  | "engine"
+  | "containers";
+
+export interface SystemSnapshot {
+  /** ms epoch of the sample these numbers came from (0 = never sampled). */
+  at: number;
+  host: SystemHost;
+  cpu: CpuStats | null;
+  memory: MemoryStats | null;
+  disks: DiskSection | null;
+  network: NetworkSection | null;
+  gpu: GpuSection | null;
+  engine: EngineSection | null;
+  containers: ContainerSection | null;
+  /** Why a null section is null, in one readable line. A keyed map rather than
+   * a field per section: an absent section has no object to hang it on. */
+  errors: { [K in SystemSectionKey]?: string };
+}
+
+export interface SystemHost {
+  hostname: string;
+  platform: string;
+  release: string;
+  uptimeSec: number;
+  loadAvg: [number, number, number];
+  cpuModel: string | null;
+  /** Logical CPUs. */
+  cpuCount: number;
+}
+
+/** Percentages are 0–100 over the last sampling window. `null` = no delta yet
+ * (first sample) or the counter went backwards (reboot/reset) — never 0, so
+ * "we don't know" can't be mistaken for "idle". */
+export interface CpuStats {
+  usagePct: number | null;
+  /** Empty until the second sample. */
+  perCorePct: number[];
+  userPct: number | null;
+  systemPct: number | null;
+  iowaitPct: number | null;
+  /** hwmon, null when no sensor matched. */
+  tempC: number | null;
+  /** The sensor's own throttle point, when it publishes one. A temperature is
+   * only drawn as a gauge where a real limit exists — inventing a ceiling
+   * would make the bar's warn/danger colours meaningless. */
+  tempLimitC: number | null;
+}
+
+export interface MemoryStats {
+  totalKb: number;
+  /** MemAvailable — not os.freemem(), which counts reclaimable differently
+   * from what users expect. */
+  availableKb: number;
+  freeKb: number;
+  buffersKb: number;
+  cachedKb: number;
+  swapTotalKb: number;
+  swapFreeKb: number;
+  usedPct: number;
+}
+
+export interface DiskSection {
+  mounts: DiskMount[];
+  io: DiskIo[];
+}
+
+export interface DiskMount {
+  mount: string;
+  device: string;
+  totalBytes: number;
+  freeBytes: number;
+  usedPct: number;
+}
+
+export interface DiskIo {
+  device: string;
+  readBps: number | null;
+  writeBps: number | null;
+  utilPct: number | null;
+  tempC: number | null;
+  tempLimitC: number | null;
+}
+
+export interface NetworkSection {
+  interfaces: NetInterface[];
+}
+
+export interface NetInterface {
+  name: string;
+  rxBytes: number;
+  txBytes: number;
+  rxBps: number | null;
+  txBps: number | null;
+}
+
+export interface GpuSection {
+  gpus: GpuDevice[];
+  processes: GpuProcess[];
+  driverVersion: string | null;
+}
+
+export interface GpuDevice {
+  index: number;
+  name: string;
+  utilizationPct: number | null;
+  memoryUtilPct: number | null;
+  memoryUsedMb: number | null;
+  memoryTotalMb: number | null;
+  tempC: number | null;
+  /** Absolute max operating temperature, derived from nvidia-smi's
+   * `temperature.gpu.tlimit`, which is a *margin* (headroom in °C), not an
+   * absolute — so this is `tempC + tlimit`. Null on drivers that omit it. */
+  tempLimitC: number | null;
+  powerWatts: number | null;
+  powerLimitWatts: number | null;
+  fanPct: number | null;
+  clockSmMhz: number | null;
+  clockMemMhz: number | null;
+  clockSmMaxMhz: number | null;
+  clockMemMaxMhz: number | null;
+}
+
+/** `pid` is a HOST pid even for a containerized process; `container` is
+ * resolved from /proc/<pid>/cgroup, so no `docker exec` is needed. */
+export interface GpuProcess {
+  pid: number;
+  name: string;
+  usedMemoryMb: number | null;
+  container: string | null;
+}
+
+/** How the configured LLM endpoint was found, and what it's doing. Discovery
+ * follows config.llm.baseUrl: local → probe it (and match a docker container
+ * on that port); remote → assume no local engine. */
+export interface EngineSection {
+  detection: "local-metrics" | "local-health" | "remote" | "none";
+  flavour: "vllm" | "llamacpp" | "unknown";
+  baseUrl: string;
+  reachable: boolean;
+  /** Why nothing was detected, when `reachable` is false. Lives here rather
+   * than in `errors` because the section is still useful (which endpoint was
+   * probed, which container publishes it) — `errors` means "no section". */
+  detail: string | null;
+  model: string | null;
+  maxModelLen: number | null;
+  /** Container publishing that port, when docker is usable. */
+  container: string | null;
+  requestsRunning: number | null;
+  requestsWaiting: number | null;
+  kvCacheUsedPct: number | null;
+  prefixCacheHitPct: number | null;
+  preemptionsTotal: number | null;
+  promptTokensTotal: number | null;
+  generationTokensTotal: number | null;
+  /** Deltas of the *_total counters over the window — those counters are
+   * monotonic, so a rate can only be derived, never read. */
+  promptTokensPerSec: number | null;
+  generationTokensPerSec: number | null;
+  /** Mean over the window, from the histogram's _sum/_count deltas. */
+  timeToFirstTokenMs: number | null;
+}
+
+export interface ContainerSection {
+  containers: ContainerInfo[];
+  /** When the (expensive) `docker stats` pass last ran — the cpu/mem fields are
+   * as old as this, so the UI can grey them when stale. null = never. */
+  statsAt: number | null;
+}
+
+export interface ContainerInfo {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  ports: string[];
+  cpuPct: number | null;
+  memUsedBytes: number | null;
+  memLimitBytes: number | null;
+  netRxBytes: number | null;
+  netTxBytes: number | null;
+}
+
+// ---------------------------------------------------------------------------
 // Optional LLM assist (best-effort). An OpenAI-compatible endpoint (default
 // local vLLM) can judge permission prompts / answer questions on the user's
 // behalf. Entirely additive: any failure degrades to the normal manual UI.

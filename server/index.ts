@@ -43,6 +43,11 @@ import {
 import { authedUser, handleAuthRoute } from "./auth.js";
 import { normalizeFolder } from "./paths.js";
 import { startLlmPolling, llmStatus } from "./llm.js";
+import {
+  noteSystemWatcher,
+  startSystemSampling,
+  systemSnapshot,
+} from "./system/sampler.js";
 import { attachAssistant } from "./assistant.js";
 import { attachSuggestions } from "./suggestions.js";
 import { attachTurnRouter } from "./turnRouter.js";
@@ -67,6 +72,11 @@ const PORT = config.server?.port ?? 4000;
 // Best-effort LLM assist: poll the configured endpoint's health in the
 // background. Never blocks startup; unavailable is fine.
 startLlmPolling(config.llm);
+
+// System state page: seed one cheap /proc sample so the first GET isn't empty.
+// Sampling itself only runs while a browser is actually watching — see
+// noteSystemWatcher in server/system/sampler.ts.
+startSystemSampling(config);
 
 // Backend AI-assistant mode: a server-global decider that auto-answers chat
 // permission/question cards for sessions that enabled it — runs regardless of
@@ -284,6 +294,16 @@ function routeAfterAuth(req: IncomingMessage, res: ServerResponse): void {
   if (req.method === "GET" && url === "/api/llm-status") {
     if (!authedUser(req, config)) return sendUnauthorized(res);
     return sendJson(res, llmStatus());
+  }
+  // Host/GPU/engine/docker telemetry for the System state page. Cheap by
+  // construction: reads a snapshot a background sampler refreshes, and the GET
+  // itself is the "a browser is watching" heartbeat keeping that sampler alive
+  // (it stops a few seconds after the page closes). Auth-gated like every
+  // sibling — the snapshot names host processes and containers.
+  if (req.method === "GET" && url === "/api/system") {
+    if (!authedUser(req, config)) return sendUnauthorized(res);
+    noteSystemWatcher();
+    return sendJson(res, systemSnapshot());
   }
   // File editor: list/read/write under a known folder root (files.ts confines
   // every path to it).

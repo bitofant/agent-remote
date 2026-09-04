@@ -36,6 +36,9 @@ const ChatView = lazy(() =>
 );
 // Dev colour-scheme tool; lazy so it costs nothing unless #theme is in the URL.
 const ThemeEditor = lazy(() => import("./ThemeEditor"));
+// Host telemetry page; lazy since it's a side trip, and unmounting it is what
+// stops its poll (and so the server's sampler).
+const SystemState = lazy(() => import("./SystemState"));
 import { useThemeEditorOpen } from "./theme";
 import { CommandBuilder } from "./CommandBuilder";
 import { FolderPicker } from "./FolderPicker";
@@ -303,6 +306,12 @@ function Workspace({
   );
   // Off-canvas sidebar drawer (mobile only; ignored on desktop via CSS).
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // System state page. Hash-gated like the theme editor (this app has no
+  // router), so a reload keeps it — deliberately NOT in the server-persisted
+  // ViewState, which would hide the folder you were working in on other devices.
+  const [systemOpen, setSystemOpen] = useState(
+    () => window.location.hash === "#system"
+  );
   const keyboard = useKeyboard();
   const [ctrlMode, setCtrlMode] = useState<CtrlMode>("off");
   const [keyGroup, setKeyGroup] = useState<KeyGroup>("keys");
@@ -487,12 +496,24 @@ function Workspace({
     return () => mq.removeEventListener("change", on);
   }, []);
 
+  // Keep the URL in step so a reload lands back where you were. replaceState
+  // (not pushState): the page is a toggle, not a history entry, and it must not
+  // fire hashchange back at useThemeEditorOpen.
+  useEffect(() => {
+    const want = systemOpen ? "#system" : "";
+    if (window.location.hash === "#theme") return; // theme editor owns the hash
+    if (window.location.hash === want) return;
+    window.history.replaceState(null, "", want || window.location.pathname);
+  }, [systemOpen]);
+
   const openFolder = (path: string) => {
     // Viewing doesn't reorder the list — recency is driven by input activity
     // (server bumps the folder on keystrokes).
     setActiveFolder(path);
     setSelectorOpen(false);
     setSidebarOpen(false);
+    // Picking a folder leaves the system page: one way in, one way out.
+    setSystemOpen(false);
   };
 
   const submitNewFolder = (path: string) => {
@@ -840,6 +861,23 @@ function Workspace({
           </button>
         </div>
 
+        {/* Above Folders: it's about the box, not about any one project. */}
+        <nav className="sidebar-nav">
+          <div className={`folder-item ${systemOpen ? "active" : ""}`}>
+            <button
+              className="folder-item-open"
+              onClick={() => {
+                setSystemOpen(true);
+                // As openFolder: on mobile the drawer covers what we opened.
+                setSidebarOpen(false);
+              }}
+            >
+              <span className="folder-name">System state</span>
+              <span className="folder-path">CPU · GPU · LLM · Docker</span>
+            </button>
+          </div>
+        </nav>
+
         <section className="folder-list">
           <div className="folder-list-head">
             <label className="field-label">Folders</label>
@@ -856,7 +894,13 @@ function Workspace({
           {folders.map((f) => (
             <div
               key={f.path}
-              className={`folder-item ${f.path === activeFolder ? "active" : ""}`}
+              // `activeFolder` deliberately survives opening the system page
+              // (its subtree stays mounted so scrollback/unsaved edits live),
+              // so the highlight has to exclude it explicitly — otherwise the
+              // sidebar shows two active rows at once.
+              className={`folder-item ${
+                f.path === activeFolder && !systemOpen ? "active" : ""
+              }`}
             >
               <button
                 className="folder-item-open"
@@ -880,6 +924,13 @@ function Workspace({
       </aside>
 
       <main className="main">
+        {/* Hidden, never unmounted, while the system page is up: xterm
+            scrollback, chat scroll position and unsaved editor buffers all
+            live in these components. */}
+        <div
+          className="main-view"
+          style={systemOpen ? { display: "none" } : undefined}
+        >
         {activeFolder === null ? (
           <div className="empty-state">
             Add or select a folder to get started.
@@ -1470,6 +1521,12 @@ function Workspace({
               </div>
             )}
           </>
+        )}
+        </div>
+        {systemOpen && (
+          <Suspense fallback={<div className="empty-state">Loading…</div>}>
+            <SystemState />
+          </Suspense>
         )}
       </main>
       {/* App-level, not inside <main>: adding a folder must work with none open. */}
