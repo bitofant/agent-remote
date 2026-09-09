@@ -132,9 +132,6 @@ const PI_ICON = "M4 5h16v3H4zM6.5 8h3v11h-3zM14.5 8h3v11h-3z";
 const ROBOT_ICON =
   "M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z";
 
-// Material `chevron_right` — the app's disclosure glyph (rotated 90° when open).
-const CHEVRON_ICON = "M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z";
-
 // Material `desktop_windows` (monitor + stand) — for the local agent harness.
 const COMPUTER_ICON =
   "M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h5v2H7v2h10v-2h-2v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11z";
@@ -287,14 +284,6 @@ function Workspace({
   const [assistantDialogOpen, setAssistantDialogOpen] = useState(false);
   const [assistantDraft, setAssistantDraft] =
     useState<AssistantSettings>(DEFAULT_ASSISTANT);
-  // Which checklist sections are expanded (UI-only). All open by default —
-  // the settings should be readable without hunting for a chevron.
-  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({
-    permissions: true,
-    questions: true,
-    autoPr: true,
-    continuity: true,
-  });
   // Pending debounced push of the instruction textareas (see pushAssistant).
   const assistantPush = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
@@ -669,15 +658,8 @@ function Workspace({
   const onAssistantButton = () => {
     if (activeSessionId === null) return;
     const cur = activeAssistant ?? DEFAULT_ASSISTANT;
-    // Opening must never change a setting — seed the draft verbatim; every
-    // section starts expanded so all options are visible at a glance.
+    // Opening must never change a setting — seed the draft verbatim.
     setAssistantDraft(cur);
-    setOpenSections({
-      permissions: true,
-      questions: true,
-      autoPr: true,
-      continuity: true,
-    });
     setAssistantDialogOpen(true);
   };
 
@@ -696,40 +678,20 @@ function Workspace({
     pushAssistant(next, debounce);
   }
 
-  /** Ticking a box also reveals its settings; unticking leaves it expanded
-   * (sections default to open, so collapsing on untick would hide them). */
-  const setSectionEnabled = (key: SectionKey, enabled: boolean) => {
-    patchSection(key, { enabled });
-    if (enabled) setOpenSections((o) => ({ ...o, [key]: true }));
-  };
-
   const assistantSection = (key: SectionKey, label: string, body: ReactNode) => {
     const on = assistantDraft[key].enabled;
-    const open = openSections[key];
     return (
-      <div className="assistant-section" data-on={on} data-open={open}>
-        <div className="assistant-section-head">
-          {/* Bare box, deliberately NOT wrapped in a <label>: the text beside it
-              expands the section, it must never flip the switch. */}
+      <div className="assistant-section" data-on={on}>
+        {/* Sections never collapse — the head is a plain label for its box. */}
+        <label className="assistant-section-head">
           <input
             type="checkbox"
             checked={on}
-            aria-label={label}
-            onChange={(e) => setSectionEnabled(key, e.target.checked)}
+            onChange={(e) => patchSection(key, { enabled: e.target.checked })}
           />
-          <button
-            type="button"
-            className="assistant-section-toggle"
-            aria-expanded={open}
-            onClick={() => setOpenSections((o) => ({ ...o, [key]: !o[key] }))}
-          >
-            <span className="assistant-section-chevron">
-              <Icon path={CHEVRON_ICON} />
-            </span>
-            {label}
-          </button>
-        </div>
-        {open && <div className="assistant-section-body">{body}</div>}
+          <span className="assistant-section-label">{label}</span>
+        </label>
+        <div className="assistant-section-body">{body}</div>
       </div>
     );
   };
