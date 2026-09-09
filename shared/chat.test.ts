@@ -21,8 +21,8 @@ describe("applyChatEvent", () => {
     const state = reduce([
       { type: "assistant-start", messageId: "m1" },
       { type: "part-start", kind: "text" },
-      { type: "part-delta", delta: "Hello" },
-      { type: "part-delta", delta: ", world" },
+      { type: "part-delta", kind: "text", delta: "Hello" },
+      { type: "part-delta", kind: "text", delta: ", world" },
       { type: "assistant-end" },
     ]);
     expect(state.streaming).toBeNull();
@@ -58,7 +58,7 @@ describe("applyChatEvent", () => {
       { type: "assistant-start", messageId: "m1" },
       { type: "part-start", kind: "thinking" }, // never gets a delta
       { type: "part-start", kind: "text" },
-      { type: "part-delta", delta: "answer" },
+      { type: "part-delta", kind: "text", delta: "answer" },
       { type: "assistant-end" },
     ]);
     expect(state.messages[0].parts).toEqual([{ type: "text", text: "answer" }]);
@@ -79,7 +79,7 @@ describe("applyChatEvent", () => {
     const state = reduce([
       { type: "assistant-start", messageId: "m1" },
       { type: "part-start", kind: "text" },
-      { type: "part-delta", delta: "   " },
+      { type: "part-delta", kind: "text", delta: "   " },
       { type: "assistant-end" },
     ]);
     expect(state.messages).toEqual([]);
@@ -90,7 +90,7 @@ describe("applyChatEvent", () => {
       { type: "assistant-start", messageId: "m1" },
       { type: "part-start", kind: "thinking" }, // empty, dropped
       { type: "part-start", kind: "text" },
-      { type: "part-delta", delta: "hi" },
+      { type: "part-delta", kind: "text", delta: "hi" },
       { type: "assistant-end" },
     ]);
     expect(state.messages[0].parts).toEqual([{ type: "text", text: "hi" }]);
@@ -110,11 +110,45 @@ describe("applyChatEvent", () => {
     const state = reduce([
       { type: "assistant-start", messageId: "m1" },
       { type: "part-start", kind: "thinking" },
-      { type: "part-delta", delta: "let me think" },
+      { type: "part-delta", kind: "thinking", delta: "let me think" },
       { type: "assistant-end" },
     ]);
     expect(state.messages[0].parts).toEqual([
       { type: "thinking", text: "let me think" },
+    ]);
+  });
+
+  it("routes a late thinking delta to the thinking part, not the open text part", () => {
+    // Regression: a provider chunk that straddles </think> arrives carrying
+    // both fields at once — {reasoning: ".\n", content: "\n\nPR"} — and pi
+    // reads `content` first, so the thinking delta lands *after* text_start.
+    // Appending by position spliced the reasoning tail into the answer and
+    // rendered "PR.\n is mergeable" instead of "PR is mergeable".
+    const state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "part-start", kind: "thinking" },
+      { type: "part-delta", kind: "thinking", delta: "merge it anyway" },
+      { type: "part-start", kind: "text" },
+      { type: "part-delta", kind: "text", delta: "\n\nPR" },
+      { type: "part-delta", kind: "thinking", delta: ".\n" },
+      { type: "part-delta", kind: "text", delta: " is mergeable and clean." },
+      { type: "assistant-end" },
+    ]);
+    expect(state.messages[0].parts).toEqual([
+      { type: "thinking", text: "merge it anyway.\n" },
+      { type: "text", text: "\n\nPR is mergeable and clean." },
+    ]);
+  });
+
+  it("starts a part for a delta whose kind was never opened", () => {
+    // Defensive: a harness that skips part-start must not lose the text.
+    const state = reduce([
+      { type: "assistant-start", messageId: "m1" },
+      { type: "part-delta", kind: "text", delta: "no start event" },
+      { type: "assistant-end" },
+    ]);
+    expect(state.messages[0].parts).toEqual([
+      { type: "text", text: "no start event" },
     ]);
   });
 
@@ -123,7 +157,7 @@ describe("applyChatEvent", () => {
     const state = reduce([
       { type: "assistant-start", messageId: "m1" },
       { type: "part-start", kind: "text" },
-      { type: "part-delta", delta: "partial" },
+      { type: "part-delta", kind: "text", delta: "partial" },
       { type: "busy", busy: false },
     ]);
     expect(state.streaming).toBeNull();
@@ -373,7 +407,7 @@ describe("applyChatEvent", () => {
     // part-delta / tool-call before assistant-start are no-ops, not throws.
     const before = emptyChatState();
     const after = reduce([
-      { type: "part-delta", delta: "orphan" },
+      { type: "part-delta", kind: "text", delta: "orphan" },
       { type: "tool-call", toolId: "t1", name: "X" },
     ]);
     expect(after).toEqual(before);
@@ -447,7 +481,7 @@ describe("applyChatEvent rewind", () => {
   const turn = (id: string, text: string): ChatEvent[] => [
     { type: "assistant-start", messageId: id },
     { type: "part-start", kind: "text" },
-    { type: "part-delta", delta: text },
+    { type: "part-delta", kind: "text", delta: text },
     { type: "assistant-end" },
   ];
   // Two full exchanges: u1/a1 then u2/a2.
@@ -467,7 +501,7 @@ describe("applyChatEvent rewind", () => {
         { type: "busy", busy: true },
         { type: "assistant-start", messageId: "a2" },
         { type: "part-start", kind: "text" },
-        { type: "part-delta", delta: "half…" },
+        { type: "part-delta", kind: "text", delta: "half…" },
         { type: "queue", queued: ["later"] },
         {
           type: "ui-request",
@@ -616,7 +650,7 @@ describe("applyChatEvent sub-agents", () => {
     [
       { type: "assistant-start", messageId: id },
       { type: "part-start", kind: "text" },
-      { type: "part-delta", delta: text },
+      { type: "part-delta", kind: "text", delta: text },
       { type: "assistant-end" },
     ].map((event) => ({ type: "agent-event", toolId: t, event }) as ChatEvent);
 
@@ -910,7 +944,7 @@ describe("assistant settings", () => {
     const state = reduce([
       { type: "assistant-start", messageId: "m1" },
       { type: "part-start", kind: "text" },
-      { type: "part-delta", delta: "done" },
+      { type: "part-delta", kind: "text", delta: "done" },
       { type: "assistant-end" },
       {
         type: "assistant-trace",
@@ -938,7 +972,7 @@ describe("assistant settings", () => {
     const state = reduce([
       { type: "assistant-start", messageId: "m1" },
       { type: "part-start", kind: "text" },
-      { type: "part-delta", delta: "done" },
+      { type: "part-delta", kind: "text", delta: "done" },
       { type: "assistant-end" },
       {
         type: "user-message",

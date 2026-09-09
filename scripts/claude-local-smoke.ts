@@ -17,7 +17,7 @@ let sawText = "";
 
 session.start({
   onEvent(e) {
-    if (e.type === "part-delta") sawText += e.delta;
+    if (e.type === "part-delta" && e.kind === "text") sawText += e.delta;
     else if (e.type === "busy" && !e.busy) {
       // Turn finished — a persistent chat session won't self-exit, so close it.
       console.log("\n[turn complete] assistant:", JSON.stringify(sawText.trim()));

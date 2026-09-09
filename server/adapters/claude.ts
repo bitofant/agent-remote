@@ -1325,13 +1325,21 @@ class ClaudeChatSession implements ChatSession {
     for (const block of content as ContentBlock[]) {
       if (block?.type === "text" && typeof block.text === "string") {
         this.emitFor(parent, { type: "part-start", kind: "text" });
-        this.emitFor(parent, { type: "part-delta", delta: block.text });
+        this.emitFor(parent, {
+          type: "part-delta",
+          kind: "text",
+          delta: block.text,
+        });
       } else if (
         block?.type === "thinking" &&
         typeof block.thinking === "string"
       ) {
         this.emitFor(parent, { type: "part-start", kind: "thinking" });
-        this.emitFor(parent, { type: "part-delta", delta: block.thinking });
+        this.emitFor(parent, {
+          type: "part-delta",
+          kind: "thinking",
+          delta: block.thinking,
+        });
       } else if (block?.type === "tool_use" && block.id) {
         this.emitFor(parent, {
           type: "tool-call",
@@ -1380,9 +1388,17 @@ class ClaudeChatSession implements ChatSession {
       case "content_block_delta": {
         const delta = event.delta;
         if (delta?.type === "text_delta" && delta.text)
-          this.emitFor(parent, { type: "part-delta", delta: delta.text });
+          this.emitFor(parent, {
+            type: "part-delta",
+            kind: "text",
+            delta: delta.text,
+          });
         else if (delta?.type === "thinking_delta" && delta.thinking)
-          this.emitFor(parent, { type: "part-delta", delta: delta.thinking });
+          this.emitFor(parent, {
+            type: "part-delta",
+            kind: "thinking",
+            delta: delta.thinking,
+          });
         else if (
           delta?.type === "input_json_delta" &&
           typeof event.index === "number"

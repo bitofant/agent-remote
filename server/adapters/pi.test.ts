@@ -85,3 +85,44 @@ describe("pi retry / settle events", () => {
     expect(data).not.toContain("streamingBehavior");
   });
 });
+
+describe("pi text/thinking deltas", () => {
+  /** Open an assistant message so message_update events are accepted. */
+  function streaming(): ChatTranslator {
+    const t = translator();
+    feed(t, { type: "message_start", message: { role: "assistant" } });
+    return t;
+  }
+
+  const update = (event: unknown) => ({
+    type: "message_update",
+    assistantMessageEvent: event,
+  });
+
+  it("tags a text delta with its kind", () => {
+    const t = streaming();
+    expect(feed(t, update({ type: "text_delta", delta: "hi" }))).toEqual([
+      { type: "part-delta", kind: "text", delta: "hi" },
+    ]);
+  });
+
+  it("tags a thinking delta with its kind", () => {
+    const t = streaming();
+    expect(feed(t, update({ type: "thinking_delta", delta: "hmm" }))).toEqual([
+      { type: "part-delta", kind: "thinking", delta: "hmm" },
+    ]);
+  });
+
+  it("keeps the kind on a thinking delta that trails the text part", () => {
+    // pi reads a chunk's `content` before its `reasoning*` fields, so a chunk
+    // straddling </think> emits text_start/text_delta and only then the
+    // thinking_delta carrying the reasoning tail. The kind is what lets the
+    // reducer put that tail back in the thinking part.
+    const t = streaming();
+    feed(t, update({ type: "text_start" }));
+    feed(t, update({ type: "text_delta", delta: "\n\nPR" }));
+    expect(feed(t, update({ type: "thinking_delta", delta: ".\n" }))).toEqual([
+      { type: "part-delta", kind: "thinking", delta: ".\n" },
+    ]);
+  });
+});
