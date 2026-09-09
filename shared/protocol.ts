@@ -774,8 +774,13 @@ export type ChatEvent =
   | { type: "busy"; busy: boolean }
   | { type: "assistant-start"; messageId: string }
   | { type: "part-start"; kind: "text" | "thinking" }
-  /** Appends to the last open text/thinking part of the streaming message. */
-  | { type: "part-delta"; delta: string }
+  /** Appends to the last part of `kind` in the streaming message — NOT simply
+   * the last part. The kind is load-bearing: providers may report a chunk that
+   * straddles the reasoning/answer boundary as a single delta carrying both
+   * fields, and the harness then emits the two sides in whichever order it
+   * reads them. Routing by position alone splices the reasoning tail into the
+   * answer bubble (e.g. "PR is mergeable" → "PR.\n is mergeable"). */
+  | { type: "part-delta"; kind: "text" | "thinking"; delta: string }
   | { type: "tool-call"; toolId: string; name: string; args?: unknown }
   | { type: "assistant-end" }
   /** Cumulative output replace; also marks the tool as running. */

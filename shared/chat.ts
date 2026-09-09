@@ -178,11 +178,29 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
     case "part-delta": {
       const msg = state.streaming;
       if (!msg) return state;
-      const last = msg.parts[msg.parts.length - 1];
-      if (!last || (last.type !== "text" && last.type !== "thinking"))
-        return state;
-      const parts = msg.parts.slice(0, -1);
-      parts.push({ ...last, text: last.text + event.delta });
+      // Route to the last part of the delta's own kind, not to whatever part
+      // happens to be last. A harness that reads a mixed reasoning+content
+      // chunk field-by-field can emit a thinking delta *after* the text part
+      // has opened; appending by position would splice reasoning into the
+      // answer. Every kind's deltas still land in that kind's newest part, so
+      // interleaved thinking/text blocks stay in their own bubbles.
+      let idx = -1;
+      for (let i = msg.parts.length - 1; i >= 0; i--) {
+        if (msg.parts[i].type === event.kind) {
+          idx = i;
+          break;
+        }
+      }
+      const parts = msg.parts.slice();
+      if (idx === -1) {
+        // No part of this kind open yet (the harness skipped part-start).
+        // Start one rather than dropping the text on the floor.
+        parts.push({ type: event.kind, text: event.delta });
+      } else {
+        const target = parts[idx];
+        if (target.type !== "text" && target.type !== "thinking") return state;
+        parts[idx] = { ...target, text: target.text + event.delta };
+      }
       return { ...state, streaming: { ...msg, parts } };
     }
 

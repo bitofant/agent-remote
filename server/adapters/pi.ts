@@ -224,10 +224,19 @@ class PiRpcTranslator implements ChatTranslator {
             return [{ type: "part-start", kind: "text" }];
           case "thinking_start":
             return [{ type: "part-start", kind: "thinking" }];
+          // The kind must be carried through: pi reads a chunk's `content`
+          // before its `reasoning*` fields, so a chunk straddling </think>
+          // (common with speculative decoding, where one chunk spans several
+          // tokens) yields text_start + text_delta and only *then* the
+          // thinking_delta holding the reasoning tail. Routing that by arrival
+          // order lands it in the answer bubble.
           case "text_delta":
+            return delta.delta
+              ? [{ type: "part-delta", kind: "text", delta: delta.delta }]
+              : [];
           case "thinking_delta":
             return delta.delta
-              ? [{ type: "part-delta", delta: delta.delta }]
+              ? [{ type: "part-delta", kind: "thinking", delta: delta.delta }]
               : [];
           case "toolcall_end": {
             const call = delta.toolCall;
@@ -528,10 +537,14 @@ function readPiSessionHistory(cwd: string, sessionId: string): ChatEvent[] {
       for (const block of content) {
         if (block.type === "text" && block.text) {
           events.push({ type: "part-start", kind: "text" });
-          events.push({ type: "part-delta", delta: block.text });
+          events.push({ type: "part-delta", kind: "text", delta: block.text });
         } else if (block.type === "thinking" && block.thinking) {
           events.push({ type: "part-start", kind: "thinking" });
-          events.push({ type: "part-delta", delta: block.thinking });
+          events.push({
+            type: "part-delta",
+            kind: "thinking",
+            delta: block.thinking,
+          });
         } else if (block.type === "toolCall" && block.id) {
           events.push({
             type: "tool-call",

@@ -72,6 +72,7 @@ function fakeAdapter(usage: ChatUsage): Map<string, HarnessAdapter> {
       emit({ type: "part-start", kind: "text" });
       emit({
         type: "part-delta",
+        kind: "text",
         delta: "Done — added the scope line. Want me to add a Decisions section next?",
       });
       emit({ type: "assistant-end" });
