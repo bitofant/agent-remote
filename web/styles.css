@@ -2626,6 +2626,17 @@ button.auto-press::after {
 .chat-assistant-trace-details {
   margin-top: 2px;
 }
+/* A note hosting a whole spawned session (auto-PR's `/pr` tab) needs the full
+   width — 90% is for a one-line diagnostic, not a transcript. */
+.chat-assistant-trace.with-session {
+  max-width: 100%;
+  align-self: stretch;
+}
+/* The panel's own padding is for sitting inside a tool bubble; here the note
+   already provides the inset. */
+.chat-assistant-trace .chat-agent {
+  padding: 6px 0 0;
+}
 .chat-assistant-trace-section {
   margin-top: 6px;
 }

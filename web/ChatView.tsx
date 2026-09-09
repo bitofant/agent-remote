@@ -97,28 +97,38 @@ const AgentsContext = createContext<{
   onLoad: (toolId: string) => void;
 }>({ agents: {}, onLoad: () => {} });
 
-/** The sub-agent's own chat session: the same bubbles as the main transcript, in
- * a box capped at half the viewport with its own scroll. */
+/** A nested chat session rendered inline: the same bubbles as the main
+ * transcript, in a box capped at half the viewport with its own scroll. Takes a
+ * plain ChatState, so it serves both a sub-agent run (`AgentRun.state`, folded
+ * from agent-event envelopes) and a *peer session* the client already holds
+ * (auto-PR's `/pr` tab — see usePeerChat). Read-only: bubbles only, no composer,
+ * no cards, no controls. */
 function AgentPanel({
-  run,
+  state,
   live,
   prompt,
+  empty,
 }: {
-  run: AgentRun;
+  state: ChatState;
   live: boolean;
-  /** The task it was given — neither the stream nor the on-disk transcript
-   * carries the sub-agent's opening message (see render.ts's agentPrompt). */
+  /** An opening message the transcript itself doesn't carry — a sub-agent's
+   * task (see render.ts's agentPrompt). Empty when the session has its own. */
   prompt: string;
+  /** Placeholder for a transcript with nothing in it yet. */
+  empty?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const count = run.state.messages.length;
-  // Follow a running sub-agent, independently of the outer transcript.
+  const count = state.messages.length;
+  // Streaming parts too, or a live panel wouldn't follow within a turn.
+  const streamed = state.streaming?.parts.length ?? -1;
+  // Follow a running session, independently of the outer transcript.
   useEffect(() => {
     if (live && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [count, live]);
-  // Only reached while loading — an otherwise-empty run falls back to the
-  // ordinary tool view in ToolPart.
-  if (count === 0) return <div className="chat-agent empty">Loading transcript…</div>;
+  }, [count, streamed, live]);
+  // For a sub-agent this is only reached while loading — an otherwise-empty run
+  // falls back to the ordinary tool view in ToolPart.
+  if (count === 0 && !state.streaming)
+    return <div className="chat-agent empty">{empty ?? "Loading transcript…"}</div>;
   return (
     <div className="chat-agent" ref={ref}>
       {prompt && (
@@ -126,11 +136,30 @@ function AgentPanel({
           <div className="chat-bubble user">{prompt}</div>
         </div>
       )}
-      {run.state.messages.map((m) => (
+      {state.messages.map((m) => (
         <Bubble key={m.id} message={m} />
       ))}
+      {state.streaming && <Bubble message={state.streaming} streaming />}
     </div>
   );
+}
+
+/** Live transcript of *another* session, or null when there's nothing to show.
+ * No mirroring is needed: the client already holds every chat session's state
+ * (one snapshot on connect, then live events), so an AI-mode note can render the
+ * session it spawned inline exactly as a sub-agent run renders. */
+function usePeerChat(client: Client, sessionId?: string): ChatState | null {
+  const [state, setState] = useState<ChatState | null>(null);
+  useEffect(() => {
+    if (!sessionId) {
+      setState(null);
+      return;
+    }
+    const { initial, unsubscribe } = client.subscribeChat(sessionId, setState);
+    setState(initial);
+    return unsubscribe;
+  }, [client, sessionId]);
+  return state;
 }
 
 function ToolPart({
@@ -178,7 +207,7 @@ function ToolPart({
           the report is already its last bubble (see the reducer's agent-done). */}
       {nested ? (
         <AgentPanel
-          run={run}
+          state={run.state}
           live={part.status !== "done" && part.status !== "error"}
           prompt={agentPrompt(part)}
         />
@@ -402,14 +431,30 @@ const TRACE_VERDICT: Record<AssistantTrace["outcome"], string> = {
 // should read "Pushed joran/x to origin".
 function AssistantTraceBubble({
   trace,
+  client,
+  inlineSession,
   onOpenSession,
 }: {
   trace: AssistantTrace;
+  client: Client;
+  // The session whose transcript this note shows inline (auto-PR's `/pr` tab).
+  // Only one note per session gets it — see inlineTraceSession in ChatView.
+  inlineSession?: string;
   // Jump to the session this note is about, when it's still around (auto-PR's
   // `/pr` tab). Absent = it was closed and removed, so no link is offered.
   onOpenSession?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const peer = usePeerChat(client, inlineSession);
+  // Expand once when the spawned session actually starts working, so the run is
+  // watched as it happens. Keyed on `busy`, not on having messages: a reload of
+  // an old transcript would otherwise pop open every historical PR note.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (autoOpened.current || !peer?.busy) return;
+    autoOpened.current = true;
+    setOpen(true);
+  }, [peer?.busy]);
   const icon =
     trace.kind === "auto-pr"
       ? MERGE_ICON
@@ -420,7 +465,8 @@ function AssistantTraceBubble({
     trace.prompt ||
     trace.thoughts ||
     trace.response ||
-    trace.detail
+    trace.detail ||
+    peer
   );
   const toggle = hasDetails
     ? {
@@ -437,7 +483,10 @@ function AssistantTraceBubble({
       }
     : {};
   return (
-    <div className="chat-assistant-trace" data-outcome={trace.outcome}>
+    <div
+      className={`chat-assistant-trace${peer ? " with-session" : ""}`}
+      data-outcome={trace.outcome}
+    >
       <div className="chat-assistant-trace-head" {...toggle}>
         <svg
           className="chat-assistant-trace-icon"
@@ -483,6 +532,16 @@ function AssistantTraceBubble({
       </div>
       {open && (
         <div className="chat-assistant-trace-details">
+          {/* The spawned session's own conversation, read straight off the
+              client's state for it — the same panel a sub-agent run renders. */}
+          {peer && (
+            <AgentPanel
+              state={peer}
+              live={peer.busy}
+              prompt=""
+              empty="Starting session…"
+            />
+          )}
           {trace.detail && (
             <div className="chat-assistant-trace-section">
               <div className="chat-assistant-trace-label">Details</div>
@@ -1398,16 +1457,28 @@ export function ChatView({
     t.sessionId && t.sessionId !== sessionId && knownSessions.has(t.sessionId)
       ? () => onOpenSession(t.sessionId!)
       : undefined;
+  // A run posts several notes naming the same session (it starts one, then may
+  // report a failure about it); they'd all show the identical live transcript,
+  // so only the first — the note that announced it — hosts the inline panel.
+  // Render-time, like groupParts: nothing about this belongs in the reducer.
+  const inlineTraceSession = (t: AssistantTrace) =>
+    traceLink(t) &&
+    state.assistantTraces.find((o) => o.sessionId === t.sessionId) === t
+      ? t.sessionId
+      : undefined;
+  const traceBubble = (t: AssistantTrace, key: string) => (
+    <AssistantTraceBubble
+      key={key}
+      trace={t}
+      client={client}
+      inlineSession={inlineTraceSession(t)}
+      onOpenSession={traceLink(t)}
+    />
+  );
   const tracesFor = (messageId: string) =>
     state.assistantTraces
       .filter((t) => t.anchorMessageId === messageId)
-      .map((t, i) => (
-        <AssistantTraceBubble
-          key={`trace-${t.requestId}-${t.at}-${i}`}
-          trace={t}
-          onOpenSession={traceLink(t)}
-        />
-      ));
+      .map((t, i) => traceBubble(t, `trace-${t.requestId}-${t.at}-${i}`));
   // An unanchored trace predates every message (posted into an empty
   // transcript), so it leads. Nothing renders *after* the messages: a trace
   // parked at the end would stay there while every later message slid in above
@@ -1668,13 +1739,9 @@ export function ChatView({
             {exited ? "Session ended." : "Send a prompt to get started."}
           </div>
         )}
-        {leadingTraces.map((t, i) => (
-          <AssistantTraceBubble
-            key={`trace-${t.requestId}-${t.at}-${i}`}
-            trace={t}
-            onOpenSession={traceLink(t)}
-          />
-        ))}
+        {leadingTraces.map((t, i) =>
+          traceBubble(t, `trace-${t.requestId}-${t.at}-${i}`),
+        )}
         {state.messages.map((m) => (
           <Fragment key={m.id}>
             <Bubble
