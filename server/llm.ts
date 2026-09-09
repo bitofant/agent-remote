@@ -153,48 +153,70 @@ const SUGGESTION_SYSTEM = [
   'Reply with ONLY JSON: {"suggestions": ["<next prompt>", ...]}.',
 ].join(" ");
 
-const BRANCH_SYSTEM = [
-  "You name git branches for a developer's AI coding agent. Given a diff,",
-  "produce a short kebab-case slug describing the change: 2 to 4 words,",
-  "lowercase, ASCII letters/digits/dashes ONLY. No username or team prefix, no",
-  "slashes, no ticket ids, no quotes, no explanation.",
+/** A system prompt that accepts user instructions, kept split from its trailing
+ * JSON directive so the instructions can be spliced in BEFORE it — the reply
+ * format must be the last thing the model reads, or free text ending in prose
+ * pulls it off JSON. Pairing them here stops a call site mismatching the two. */
+interface SystemPrompt {
+  body: string;
+  json: string;
+}
+const sys = (body: string[], json: string): SystemPrompt => ({
+  body: body.join(" "),
+  json,
+});
+
+const BRANCH_SYSTEM = sys(
+  [
+    "You name git branches for a developer's AI coding agent. Given a diff,",
+    "produce a short kebab-case slug describing the change: 2 to 4 words,",
+    "lowercase, ASCII letters/digits/dashes ONLY. No username or team prefix, no",
+    "slashes, no ticket ids, no quotes, no explanation.",
+  ],
   'Reply with ONLY JSON: {"branch": "<slug>"}.',
-].join(" ");
+);
 
 // Adapted from `suggest_commit_message` in ~/scripts/git-helper.sh so the web
 // flow writes messages in the same house style as the user's own CLI helper.
-const COMMIT_SYSTEM = [
-  "You are a commit message generator.",
-  "OUTPUT FORMAT: Single line only, max 72 characters, imperative mood.",
-  "CONTENT: Describe WHAT changed. Be concise and technical.",
-  "GOOD EXAMPLES: add config to disable in prod; refactor exception handling;",
-  "fix rate limiting; add CHIRP endpoint, refactor error handling.",
-  "No trailing period, no scope prefix, no body, no quotes.",
+const COMMIT_SYSTEM = sys(
+  [
+    "You are a commit message generator.",
+    "OUTPUT FORMAT: Single line only, max 72 characters, imperative mood.",
+    "CONTENT: Describe WHAT changed. Be concise and technical.",
+    "GOOD EXAMPLES: add config to disable in prod; refactor exception handling;",
+    "fix rate limiting; add CHIRP endpoint, refactor error handling.",
+    "No trailing period, no scope prefix, no body, no quotes.",
+  ],
   'Reply with ONLY JSON: {"message": "<commit message>"}.',
-].join(" ");
+);
 
-const PR_SUPERVISOR_SYSTEM = [
-  "You supervise a headless AI coding agent that was asked to open a GitHub pull",
-  "request. You are shown the conversation so far and must either reply to the",
-  "agent on the developer's behalf or declare the job done.",
-  "Declare done ONLY once the transcript shows the pull request was actually",
-  "created — normally a GitHub PR URL like",
-  "https://github.com/<owner>/<repo>/pull/<number>. Then return its number and",
-  "URL.",
-  "Otherwise return a short reply that moves the agent forward: review a drafted",
-  "description it is asking about, answer its question, or tell it to proceed and",
-  "create the PR. Never ask the developer anything; never invent a PR number.",
-  "DESCRIPTION STANDARD — when the agent shows you a drafted PR description, do",
-  "not rubber-stamp it. Request concrete changes (quoting what to cut) if it has",
-  "more bullet points than the change warrants (2-5, at the low end for a small",
-  "PR), if any bullet runs to 20 words or more, or if it states the obvious or",
-  "spells out implementation details a reader would get from the diff. Only",
-  "approve once it is terse and every line earns its place.",
-  "If the agent reports a blocking error it cannot recover from, set done to true",
-  'with a null number and explain in "reply".',
-  'Reply with ONLY JSON: {"done": boolean, "prNumber": number|null,',
-  '"prUrl": string|null, "reply": "<message to the agent, or the reason>"}.',
-].join(" ");
+const PR_SUPERVISOR_SYSTEM = sys(
+  [
+    "You supervise a headless AI coding agent that was asked to open a GitHub",
+    "pull request. You are shown the conversation so far and must either reply to",
+    "the agent on the developer's behalf or declare the job done.",
+    "Declare done ONLY once the transcript shows the pull request was actually",
+    "created — normally a GitHub PR URL like",
+    "https://github.com/<owner>/<repo>/pull/<number>. Then return its number and",
+    "URL.",
+    "Otherwise return a short reply that moves the agent forward: review a drafted",
+    "description it is asking about, answer its question, or tell it to proceed",
+    "and create the PR. Never ask the developer anything; never invent a PR",
+    "number.",
+    "DESCRIPTION STANDARD — when the agent shows you a drafted PR description,",
+    "approve it if it is genuinely good: terse, a handful of bullets (fewer for a",
+    "small PR), nothing that merely restates the diff. Never invent an objection",
+    "to a description that already reads well.",
+    "When it does fall short, send one short generic instruction and let the agent",
+    'decide what to cut, e.g. "please be more concise", "cut one bullet point from',
+    'each section", "shorten the bullet points, use half sentences". Approve the',
+    "next draft unless it is still clearly too long.",
+    "If the agent reports a blocking error it cannot recover from, set done to",
+    'true with a null number and explain in "reply".',
+  ],
+  'Reply with ONLY JSON: {"done": boolean, "prNumber": number|null,' +
+    ' "prUrl": string|null, "reply": "<message to the agent, or the reason>"}.',
+);
 
 const TURN_ROUTE_SYSTEM = [
   "You route the turn that just ended in a developer's AI coding agent session,",
@@ -225,16 +247,18 @@ const TURN_ROUTE_SYSTEM = [
   "The reason is required and must be terse; it is shown to the developer.",
 ].join(" ");
 
-const TASK_COMPLETE_SYSTEM = [
-  "You decide whether a developer's AI coding agent session has finished the",
-  "task it was working on, so its context can be cleared and the next piece of",
-  "work started in a fresh session. You are shown the recent conversation.",
-  "Answer true only when the work under discussion is done and nothing in the",
-  "transcript is still open — no unanswered question, no failing step, no",
-  "announced-but-undone follow-up. When in doubt answer false: keeping the",
-  "context costs nothing, losing it mid-task is expensive.",
+const TASK_COMPLETE_SYSTEM = sys(
+  [
+    "You decide whether a developer's AI coding agent session has finished the",
+    "task it was working on, so its context can be cleared and the next piece of",
+    "work started in a fresh session. You are shown the recent conversation.",
+    "Answer true only when the work under discussion is done and nothing in the",
+    "transcript is still open — no unanswered question, no failing step, no",
+    "announced-but-undone follow-up. When in doubt answer false: keeping the",
+    "context costs nothing, losing it mid-task is expensive.",
+  ],
   'Reply with ONLY JSON: {"complete": boolean, "reason": "<terse, <=12 words>"}.',
-].join(" ");
+);
 
 // Shared base so the continue/fresh variants can't drift apart.
 const CONTINUITY_BASE = [
@@ -246,27 +270,40 @@ const CONTINUITY_BASE = [
 ];
 const CONTINUITY_JSON = 'Reply with ONLY JSON: {"prompt": "<message>"}.';
 
-const CONTINUITY_SYSTEM = [
-  ...CONTINUITY_BASE,
-  "You are shown the conversation so far. Answer whatever the agent last asked,",
-  "decide whatever it asked you to decide, or tell it the next step. Never ask",
-  "the agent what you should do — you are the one deciding.",
+const CONTINUITY_SYSTEM = sys(
+  [
+    ...CONTINUITY_BASE,
+    "You are shown the conversation so far. Answer whatever the agent last asked,",
+    "decide whatever it asked you to decide, or tell it the next step. Never ask",
+    "the agent what you should do — you are the one deciding.",
+  ],
   CONTINUITY_JSON,
-].join(" ");
+);
 
-const CONTINUITY_FRESH_SYSTEM = [
-  ...CONTINUITY_BASE,
-  "The conversation you are shown is FINISHED work, and the agent reading your",
-  "message is a NEW session with no memory of it. So write a self-contained",
-  "message that starts the next piece of work: say what to do, not what was",
-  "just done, and don't refer back to the old conversation.",
+const CONTINUITY_FRESH_SYSTEM = sys(
+  [
+    ...CONTINUITY_BASE,
+    "The conversation you are shown is FINISHED work, and the agent reading your",
+    "message is a NEW session with no memory of it. So write a self-contained",
+    "message that starts the next piece of work: say what to do, not what was",
+    "just done, and don't refer back to the old conversation.",
+  ],
   CONTINUITY_JSON,
-].join(" ");
+);
 
-/** Append the user's free-text auto-PR instructions to a generator prompt. */
-function withInstructions(base: string, instructions?: string): string {
+/** Splice the user's free-text instructions into a generator prompt, between
+ * the body and the JSON directive (see `SystemPrompt`). */
+function withInstructions(base: SystemPrompt, instructions?: string): string {
   const extra = (instructions ?? "").trim();
-  return extra ? `${base} Additional user instructions: ${extra}` : base;
+  const parts = [base.body];
+  // Terminate the free text: it's mid-prompt now, so an unpunctuated ending
+  // would run into the JSON directive as one sentence.
+  if (extra) {
+    const end = /[.!?:;]$/.test(extra) ? "" : ".";
+    parts.push(`Additional user instructions: ${extra}${end}`);
+  }
+  parts.push(base.json);
+  return parts.join(" ");
 }
 
 // Shared base so the two strictness variants can't drift apart.
