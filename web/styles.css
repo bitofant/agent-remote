@@ -1784,6 +1784,7 @@ body {
 .chat-md ul,
 .chat-md ol,
 .chat-md pre,
+.chat-md table,
 .chat-md blockquote,
 .chat-md h1,
 .chat-md h2,
@@ -1826,6 +1827,38 @@ body {
   border-left: 3px solid var(--muted);
   padding-left: 10px;
   color: var(--muted);
+}
+/* marked emits a bare <table>, which is intrinsically sized: it does NOT shrink
+   to its container and so paints outside the bubble (no overflow there to clip
+   it). display:block gives it the same scroll box <pre> has — rows keep table
+   layout via anonymous boxes — so cells wrap first and pan only when even
+   min-content doesn't fit. */
+.chat-md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-spacing: 2px;
+  font-size: 13px;
+}
+/* Cells are --raised chips separated by the border-spacing gap, so the header
+   and columns read without a single divider line (same idiom as .system-item). */
+.chat-md th,
+.chat-md td {
+  background: var(--raised);
+  border-radius: var(--r-sm);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  /* Undo .chat-bubble's pre-wrap: cell prose must wrap and collapse normally. */
+  white-space: normal;
+}
+.chat-md th {
+  font-weight: 600;
+}
+/* A code chip can't use its own cell's fill as its background. */
+.chat-md th code,
+.chat-md td code {
+  background: color-mix(in srgb, var(--text) 10%, var(--raised));
 }
 
 /* Collapsed reasoning block inside an assistant bubble. */
@@ -2065,6 +2098,16 @@ body {
 .chat-agent .chat-tool.standalone,
 .chat-agent .chat-bubble.assistant {
   background: var(--raised);
+}
+/* Same reason the nested code chip re-tints: a table cell can't use its own
+   bubble's fill as its chip colour. */
+.chat-agent .chat-md th,
+.chat-agent .chat-md td {
+  background: color-mix(in srgb, var(--text) 8%, var(--raised));
+}
+.chat-agent .chat-md th code,
+.chat-agent .chat-md td code {
+  background: color-mix(in srgb, var(--text) 18%, var(--raised));
 }
 /* The panel is the width budget now — nested turns use all of it. */
 .chat-agent .chat-turn {
