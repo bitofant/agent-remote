@@ -437,6 +437,7 @@ function AssistantTraceBubble({
   client,
   inlineSession,
   onOpenSession,
+  onRunAutoPr,
 }: {
   trace: AssistantTrace;
   client: Client;
@@ -446,8 +447,12 @@ function AssistantTraceBubble({
   // Jump to the session this note is about, when it's still around (auto-PR's
   // `/pr` tab). Absent = it was closed and removed, so no link is offered.
   onOpenSession?: () => void;
+  // "Run anyways" on a router-declined auto-PR note.
+  onRunAutoPr?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // One click per note; the backend's single-flight catches any other double run.
+  const [ran, setRan] = useState(false);
   const peer = usePeerChat(client, inlineSession);
   // Expand once when the spawned session actually starts working, so the run is
   // watched as it happens. Keyed on `busy`, not on having messages: a reload of
@@ -522,6 +527,20 @@ function AssistantTraceBubble({
             }}
           >
             open session ↗
+          </button>
+        )}
+        {onRunAutoPr && (
+          <button
+            type="button"
+            className="chat-assistant-trace-link"
+            disabled={ran}
+            onClick={(e) => {
+              e.stopPropagation();
+              setRan(true);
+              onRunAutoPr();
+            }}
+          >
+            {ran ? "running…" : "Run anyways"}
           </button>
         )}
         {/* Notes are expandable now too (a failed step's full stderr), so the
@@ -1493,6 +1512,11 @@ export function ChatView({
       client={client}
       inlineSession={inlineTraceSession(t)}
       onOpenSession={traceLink(t)}
+      onRunAutoPr={
+        t.offerAutoPr
+          ? () => client.chatAction(sessionId, { type: "run-auto-pr" })
+          : undefined
+      }
     />
   );
   const tracesFor = (messageId: string) =>
