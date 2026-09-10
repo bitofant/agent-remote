@@ -30,6 +30,10 @@ export interface SessionInfo {
    * rather than the harness dying on its own — so the UI can say "closed"
    * instead of reporting SIGTERM's non-zero exit code as a failure. */
   stopped?: boolean;
+  /** Spawned by a backend flow (the auto-PR agent), not by the user — so the UI
+   * must not steal focus for it: it's watched inline in the AI-mode note, and
+   * reached via that note's "open session" chip. */
+  background?: boolean;
   createdAt: number;
   /** Command line currently executing in the session, or null when idle at the
    * prompt. Kept live by shell integration; always null for harnesses without

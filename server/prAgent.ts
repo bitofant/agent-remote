@@ -68,7 +68,8 @@ export async function runPrSession(
 
   let sessionId: string;
   try {
-    sessionId = manager.start(harnessId, { cwd: folder }).id;
+    // Background: watched inline in the origin's note, never focus-stealing.
+    sessionId = manager.start(harnessId, { cwd: folder, background: true }).id;
   } catch (err) {
     report(`Could not start the ${harnessId} session`, (err as Error).message);
     return null;
