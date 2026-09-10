@@ -1627,6 +1627,8 @@ body {
      of it double-stated the same thing. */
   background: color-mix(in srgb, var(--accent) 18%, var(--panel));
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  /* Markdown handles its own whitespace. */
+  white-space: normal;
 }
 
 /* Row wrapping a user bubble so the rewind button can sit to its left; takes
@@ -1859,6 +1861,19 @@ body {
 .chat-md th code,
 .chat-md td code {
   background: color-mix(in srgb, var(--text) 10%, var(--raised));
+}
+
+/* A user bubble is an accent-tinted fill, not --panel, so --raised is no longer
+   a step *up* from it — nested blocks tint off the bubble's own fill instead
+   (same idiom as .chat-tool-output). */
+.chat-bubble.user .chat-md code,
+.chat-bubble.user .chat-md pre,
+.chat-bubble.user .chat-md th,
+.chat-bubble.user .chat-md td {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+.chat-bubble.user .chat-md pre code {
+  background: none;
 }
 
 /* Collapsed reasoning block inside an assistant bubble. */

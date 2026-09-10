@@ -711,7 +711,7 @@ function renderAgentPanel(
   if (run.state.messages.length === 0)
     return `<div class="chat-agent empty">Loading transcript…</div>`;
   const opening = prompt
-    ? `<div class="chat-turn user"><div class="chat-bubble user">${escapeHtml(prompt)}</div></div>`
+    ? `<div class="chat-turn user"><div class="chat-bubble user"><div class="chat-md">${renderMarkdown(prompt)}</div></div></div>`
     : "";
   const turns = run.state.messages
     .map((m) => {
@@ -754,7 +754,9 @@ export function renderMessage(
     const images = message.parts.filter(
       (p): p is Extract<ChatPart, { type: "image" }> => p.type === "image",
     );
-    const textHtml = text ? escapeHtml(text) : "";
+    // Markdown, same as an assistant bubble: prompts routinely carry lists,
+    // code spans and paths, and raw HTML is escaped by the shared renderer.
+    const textHtml = text ? `<div class="chat-md">${renderMarkdown(text)}</div>` : "";
     const imageHtml = images.map((p) => renderPart(p).html).join("");
     const html = textHtml + imageHtml;
     return {

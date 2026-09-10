@@ -403,7 +403,7 @@ describe("renderPart", () => {
 });
 
 describe("renderMessage", () => {
-  it("renders a user bubble as escaped plain text (no markdown)", () => {
+  it("renders a user bubble as markdown, with raw HTML still escaped", () => {
     const msg: ChatMessage = {
       id: "u1",
       role: "user",
@@ -412,7 +412,10 @@ describe("renderMessage", () => {
     };
     const rendered = renderMessage(msg);
     expect(rendered.bubbleClassName).toBe("chat-bubble user");
-    expect(rendered.html).toBe("a &lt;b&gt; &amp; **c**");
+    expect(rendered.html).toContain('<div class="chat-md">');
+    expect(rendered.html).toContain("<strong>c</strong>");
+    expect(rendered.html).toContain("a &lt;b&gt; &amp;");
+    expect(rendered.html).not.toContain("<b>");
   });
 
   it("renders attached images in a user bubble alongside text", () => {

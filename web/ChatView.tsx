@@ -134,7 +134,9 @@ function AgentPanel({
     <div className="chat-agent" ref={ref}>
       {prompt && (
         <div className="chat-turn user">
-          <div className="chat-bubble user">{prompt}</div>
+          <div className="chat-bubble user">
+            <Markdown text={prompt} />
+          </div>
         </div>
       )}
       {state.messages.map((m) => (
@@ -258,7 +260,7 @@ function Bubble({
           </button>
         )}
         <div className="chat-bubble user">
-          {text}
+          {text && <Markdown text={text} />}
           {images.length > 0 && (
             <div className="chat-bubble-images">
               {images.map((p, i) =>
@@ -1772,7 +1774,7 @@ export function ChatView({
         )}
         {state.queued.map((text, i) => (
           <div key={`q-${i}`} className="chat-bubble user queued">
-            {text}
+            <Markdown text={text} />
           </div>
         ))}
         {state.pendingRequests.map((req) => (
