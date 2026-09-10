@@ -646,7 +646,7 @@ wss.on("connection", (ws: WebSocket, user: string) => {
   }
 
   const unsubscribe = manager.subscribe({
-    onStarted: (session) => send({ type: "started", session }),
+    onStarted: (session, replaces) => send({ type: "started", session, replaces }),
     onOutput: (sessionId, data) => send({ type: "output", sessionId, data }),
     onExit: (sessionId, exitCode) =>
       send({
@@ -676,7 +676,11 @@ wss.on("connection", (ws: WebSocket, user: string) => {
       switch (msg.type) {
         case "start": {
           const cwd = normalizeFolder(msg.cwd || process.cwd());
-          manager.start(msg.harnessId, { cwd, resume: msg.resume });
+          manager.start(msg.harnessId, {
+            cwd,
+            resume: msg.resume,
+            replaces: typeof msg.replaces === "string" ? msg.replaces : undefined,
+          });
           // Launching registers/bumps its folder for everyone.
           lastActiveFolder = cwd;
           upsertFolder(cwd);

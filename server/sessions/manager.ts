@@ -26,6 +26,7 @@ import {
   applyChatEvent,
   deriveAssistantEnabled,
   emptyChatState,
+  isEmptyChat,
 } from "../../shared/chat.js";
 import { normalizeFolder } from "../paths.js";
 
@@ -33,6 +34,8 @@ import { normalizeFolder } from "../paths.js";
 export interface StartOptions extends SessionOptions {
   /** Owning session id for a nested session (auto-PR); → `SessionInfo.parentId`. */
   parent?: string;
+  /** Session this one supersedes (resume from a tab): closed iff it's an empty chat. */
+  replaces?: string;
 }
 
 // Per-session scrollback retained for replay on (re)connect; bounded for memory.
@@ -65,7 +68,8 @@ interface Session {
 /** Notified of session lifecycle and output. One listener per WS connection,
  * plus server-global listeners (e.g. the command recorder). */
 export interface SessionListener {
-  onStarted(info: SessionInfo): void;
+  /** `replaced`: the session this one took the slot of; its onRemoved follows. */
+  onStarted(info: SessionInfo, replaced?: string): void;
   onOutput(sessionId: string, data: string): void;
   onExit(sessionId: string, exitCode: number | null): void;
   /** A session was removed from the manager entirely (e.g. user closed an
@@ -172,9 +176,29 @@ export class SessionManager {
       : adapter.createChatTranslator
         ? this.startChat(adapter, opts, info)
         : this.startTerminal(adapter, opts, info);
-    this.sessions.set(info.id, session);
 
-    for (const l of this.listeners) l.onStarted(info);
+    // Only an empty chat is replaced — a live conversation is never torn down as a
+    // side effect of opening another one.
+    const old = opts.replaces ? this.sessions.get(opts.replaces) : undefined;
+    const replaced =
+      old?.chat &&
+      isEmptyChat(old.chat) &&
+      old.info.folder === info.folder &&
+      !old.info.parentId
+        ? old.info.id
+        : undefined;
+    if (replaced) {
+      // Take the old slot, so a reconnect snapshot keeps the tab order too.
+      const next = new Map<string, Session>();
+      for (const [id, s] of this.sessions) {
+        if (id === replaced) next.set(info.id, session);
+        next.set(id, s);
+      }
+      this.sessions = next;
+    } else this.sessions.set(info.id, session);
+
+    for (const l of this.listeners) l.onStarted(info, replaced);
+    if (replaced) this.remove(replaced);
     // Fan out a synchronously-minted resume key (translator chat harnesses, e.g.
     // pi) only now that the session is registered — listeners (e.g. the DB
     // persister) resolve session info/folder by id. Session-based chat harnesses

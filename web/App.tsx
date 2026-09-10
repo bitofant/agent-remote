@@ -1303,6 +1303,8 @@ function Workspace({
                                 r.harnessId,
                                 activeFolder,
                                 r.resumeKey,
+                                // Server closes it only if still empty.
+                                activeSessionId ?? undefined,
                               );
                               setResumeDialogOpen(false);
                             }}

@@ -98,7 +98,14 @@ export class Client {
         break;
       case "started":
         if (!this.sessions.some((s) => s.id === msg.session.id)) {
-          this.sessions = [...this.sessions, msg.session];
+          const slot = msg.replaces
+            ? this.sessions.findIndex((s) => s.id === msg.replaces)
+            : -1;
+          // In place of the replaced tab; its `removed` follows and cleans up.
+          this.sessions =
+            slot < 0
+              ? [...this.sessions, msg.session]
+              : this.sessions.map((s, i) => (i === slot ? msg.session : s));
           this.emitSessions();
         }
         break;
@@ -185,8 +192,8 @@ export class Client {
     }
   }
 
-  start(harnessId: string, cwd?: string, resume?: string): void {
-    this.send({ type: "start", harnessId, cwd, resume });
+  start(harnessId: string, cwd?: string, resume?: string, replaces?: string): void {
+    this.send({ type: "start", harnessId, cwd, resume, replaces });
   }
   input(sessionId: string, data: string): void {
     if (this.ctrlMode !== "off") {

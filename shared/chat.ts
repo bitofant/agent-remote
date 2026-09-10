@@ -68,6 +68,19 @@ export function assistantNeedsLlm(s: AssistantSettings): boolean {
   return s.permissions.enabled && !isAllowEverything(s.permissions.instructions);
 }
 
+/** Nothing said, nothing running, nothing waiting — safe to close as a side
+ * effect (resume replacing the tab it was launched from). Draft/notices don't
+ * count: the draft is usually just the `/resume` that launched it. */
+export function isEmptyChat(s: ChatState): boolean {
+  return (
+    s.messages.length === 0 &&
+    !s.streaming &&
+    !s.busy &&
+    s.pendingRequests.length === 0 &&
+    s.queued.length === 0
+  );
+}
+
 /** Bounds to keep memory in check on long-running sessions. */
 const MAX_MESSAGES = 200;
 const MAX_TOOL_OUTPUT = 20_000;
