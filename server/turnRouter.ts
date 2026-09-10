@@ -89,6 +89,8 @@ export type Note = (
     /** Another session the note is about (not the origin it's posted to), for
      * the bubble's jump-to-tab link — e.g. auto-PR's spawned `/pr` session. */
     session?: string;
+    /** Offer a "Run anyways" auto-PR override on the bubble. */
+    offerAutoPr?: boolean;
   },
 ) => void;
 
@@ -148,6 +150,7 @@ export function attachTurnRouter(
         summary,
         detail: extra?.detail,
         sessionId: extra?.session,
+        offerAutoPr: extra?.offerAutoPr,
         at: Date.now(),
         anchorMessageId: anchors.get(sessionId),
         ...extra?.trace,
@@ -210,6 +213,7 @@ export function attachTurnRouter(
         "deny",
         "Nothing to act on",
         "the agent never replied to the last prompt",
+        { offerAutoPr: canPr },
       );
       return;
     }
@@ -252,7 +256,8 @@ export function attachTurnRouter(
           ? "Turn needs a reply — continuing"
           : "Leaving this turn alone",
       reason,
-      { trace },
+      // Declined by the router, not by the developer: let them overrule it.
+      { trace, offerAutoPr: canPr && chosen === "none" },
     );
     if (chosen === "auto-pr") await runAutoPr(ctx, config);
     else if (chosen === "continuity") await runContinuity(ctx, { afterPr: false });
