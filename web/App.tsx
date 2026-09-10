@@ -254,7 +254,10 @@ function Workspace({
   const themeEditorOpen = useThemeEditorOpen();
   const client = useMemo(() => new Client(), []);
   const [harnesses, setHarnesses] = useState<HarnessInfo[]>([]);
+  // Listed sessions only; hidden (soft-removed nested) ones are in `heldIds`.
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  // Every session the client still holds, incl. hidden — for inline views.
+  const [heldIds, setHeldIds] = useState<ReadonlySet<string>>(() => new Set());
   // Client-only file-editor tabs (see EditorTab).
   const [editors, setEditors] = useState<EditorTab[]>([]);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
@@ -326,7 +329,8 @@ function Workspace({
     // against an empty folder list, i.e. never.
     let replaying = true;
     const offSessions = client.onSessions((next) => {
-      setSessions(next);
+      setSessions(next.filter((s) => !s.hidden));
+      setHeldIds(new Set(next.map((s) => s.id)));
       if (!replaying) setSnapshotSeen(true);
     });
     fetch("/api/view")
@@ -373,13 +377,13 @@ function Workspace({
   }, []);
 
   // Auto-select newly created sessions: focus their folder and make them active.
-  // Background sessions (auto-PR agent) are skipped: watched inline, opened on demand.
+  // Nested sessions (auto-PR agent) are skipped: watched inline, opened on demand.
   useEffect(() => {
     let created: SessionInfo | null = null;
     for (const s of sessions) {
       if (!knownIds.current.has(s.id)) {
         knownIds.current.add(s.id);
-        if (!s.background) created = s;
+        if (!s.parentId) created = s;
       }
     }
     if (created) {
@@ -1167,6 +1171,7 @@ function Workspace({
                         onResume={() => setResumeDialogOpen(true)}
                         keyboardOpen={keyboard.open}
                         knownSessions={sessionIds}
+                        heldSessions={heldIds}
                         onOpenSession={openSession}
                       />
                     ))}

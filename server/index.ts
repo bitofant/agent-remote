@@ -658,6 +658,7 @@ wss.on("connection", (ws: WebSocket, user: string) => {
         stopped: manager.sessionInfo(sessionId)?.stopped,
       }),
     onRemoved: (sessionId) => send({ type: "removed", sessionId }),
+    onHidden: (sessionId) => send({ type: "hidden", sessionId }),
     onEvent: (sessionId, event) =>
       send({ type: "sessionEvent", sessionId, event }),
     onChatEvent: (sessionId, event) =>

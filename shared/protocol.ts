@@ -30,10 +30,13 @@ export interface SessionInfo {
    * rather than the harness dying on its own — so the UI can say "closed"
    * instead of reporting SIGTERM's non-zero exit code as a failure. */
   stopped?: boolean;
-  /** Spawned by a backend flow (the auto-PR agent), not by the user — so the UI
-   * must not steal focus for it: it's watched inline in the AI-mode note, and
-   * reached via that note's "open session" chip. */
-  background?: boolean;
+  /** Nested session: spawned by a backend flow (auto-PR's `/pr` agent) on behalf
+   * of this session, and watched inline in its AI-mode note. Never focused on
+   * spawn; closing it only hides it (see `hidden`); removing the parent removes it. */
+  parentId?: string;
+  /** Soft-removed: closed from the session list, but kept (state and all) for
+   * the parent's inline view until the parent itself is removed. */
+  hidden?: boolean;
   createdAt: number;
   /** Command line currently executing in the session, or null when idle at the
    * prompt. Kept live by shell integration; always null for harnesses without
@@ -937,6 +940,8 @@ export type ServerMessage =
       stopped?: boolean;
     }
   | { type: "removed"; sessionId: string }
+  /** Soft-removed nested session: drop it from the list, keep its chat state. */
+  | { type: "hidden"; sessionId: string }
   | { type: "sessionEvent"; sessionId: string; event: SessionEvent }
   /** Full chat-state snapshot, sent on connect for each chat session (the
    * chat analogue of terminal scrollback replay). */

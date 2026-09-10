@@ -129,6 +129,13 @@ export class Client {
         this.chatStates.delete(msg.sessionId);
         this.emitSessions();
         break;
+      case "hidden":
+        // Chat state kept: the parent's inline view still renders it.
+        this.sessions = this.sessions.map((s) =>
+          s.id === msg.sessionId ? { ...s, hidden: true } : s,
+        );
+        this.emitSessions();
+        break;
       case "chatState":
         this.chatStates.set(msg.sessionId, msg.state);
         this.emitChat(msg.sessionId, msg.state);

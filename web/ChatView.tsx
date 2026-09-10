@@ -1163,16 +1163,20 @@ export function ChatView({
   onResume,
   keyboardOpen,
   knownSessions,
+  heldSessions,
   onOpenSession,
 }: {
   client: Client;
   sessionId: string;
   active: boolean;
   exited: boolean;
-  // Every session id currently mounted, and the jump-to-tab action. An AI-mode
+  // Every session id currently listed, and the jump-to-tab action. An AI-mode
   // note can name another session (auto-PR's `/pr` tab); the set is what decides
-  // whether that link is still live, since a closed+removed session has no tab.
+  // whether that link is still live, since a closed session has no tab.
   knownSessions: ReadonlySet<string>;
+  // Listed + hidden (closed-but-nested) ids: gates the inline panel, which
+  // outlives the tab until this (parent) session is removed.
+  heldSessions: ReadonlySet<string>;
   onOpenSession: (id: string) => void;
   // Whether the folder has closed sessions to resume, and the opener for the
   // resume picker. `/resume` is a client-only entry in the slash-command menu
@@ -1474,8 +1478,11 @@ export function ChatView({
   // report a failure about it); they'd all show the identical live transcript,
   // so only the first — the note that announced it — hosts the inline panel.
   // Render-time, like groupParts: nothing about this belongs in the reducer.
+  // Gated on held, not listed: a closed nested tab stays watchable inline.
   const inlineTraceSession = (t: AssistantTrace) =>
-    traceLink(t) &&
+    t.sessionId &&
+    t.sessionId !== sessionId &&
+    heldSessions.has(t.sessionId) &&
     state.assistantTraces.find((o) => o.sessionId === t.sessionId) === t
       ? t.sessionId
       : undefined;
