@@ -50,6 +50,7 @@ const window = (key: string, utilization: number): ChatUsageWindow => ({
   label: key,
   utilization,
   resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+  windowMs: 5 * 3_600_000,
 });
 
 /** A chat harness that reports the given usage and echoes prompts, nothing more. */

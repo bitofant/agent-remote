@@ -192,14 +192,18 @@ function parseQuestions(input: unknown): ChatQuestion[] {
     }));
 }
 
-// Ordered rate-limit window key → label map; also the display order. Windows
-// absent from the SDK response are skipped.
-const USAGE_WINDOWS: { key: string; label: string }[] = [
-  { key: "five_hour", label: "Current session (5h)" },
-  { key: "seven_day", label: "Week — all models" },
-  { key: "seven_day_opus", label: "Week — Opus" },
-  { key: "seven_day_sonnet", label: "Week — Sonnet" },
-  { key: "seven_day_oauth_apps", label: "Week — OAuth apps" },
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
+// Ordered rate-limit window key → label/duration map; also the display order.
+// Windows absent from the SDK response are skipped. `ms` is the window's length
+// (the key vocabulary is claude's, so it's decoded here, not in the client).
+const USAGE_WINDOWS: { key: string; label: string; ms: number }[] = [
+  { key: "five_hour", label: "Current session (5h)", ms: 5 * HOUR_MS },
+  { key: "seven_day", label: "Week — all models", ms: 7 * DAY_MS },
+  { key: "seven_day_opus", label: "Week — Opus", ms: 7 * DAY_MS },
+  { key: "seven_day_sonnet", label: "Week — Sonnet", ms: 7 * DAY_MS },
+  { key: "seven_day_oauth_apps", label: "Week — OAuth apps", ms: 7 * DAY_MS },
 ];
 
 interface UsageWindowRaw {
@@ -222,14 +226,22 @@ function normalizeUsage(data: unknown): ChatUsage {
   const available = d.rate_limits_available === true;
   const limits = d.rate_limits ?? {};
   const windows: ChatUsageWindow[] = available
-    ? USAGE_WINDOWS.flatMap(({ key, label }) => {
+    ? USAGE_WINDOWS.flatMap(({ key, label, ms }) => {
         const w = limits[key];
         if (!w) return [];
         const util =
           typeof w.utilization === "number"
             ? Math.max(0, Math.min(100, w.utilization))
             : null;
-        return [{ key, label, utilization: util, resetsAt: w.resets_at ?? null }];
+        return [
+          {
+            key,
+            label,
+            utilization: util,
+            resetsAt: w.resets_at ?? null,
+            windowMs: ms,
+          },
+        ];
       })
     : [];
   return {

@@ -33,7 +33,8 @@ import {
 import type { DiffLine, ToolBody } from "../shared/render";
 import type { Client } from "./client";
 import { linkRuns } from "./linkify";
-import { relativeTime } from "./time";
+import { displayLocale, relativeTime } from "./time";
+import { windowElapsedPct } from "./usage";
 
 // Chat-bubble view for chat sessions (ui: "chat"). Harness-agnostic: renders the
 // client's normalized ChatState, sends ChatActions back. Lazy-loaded so marked
@@ -955,9 +956,12 @@ function formatReset(iso: string | null): string | null {
   const now = Date.now();
   const diffMs = t.getTime() - now;
   if (diffMs <= 0) return "resetting now";
-  const day = t.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const time = t.toLocaleTimeString(undefined, {
-    hour: "numeric",
+  // Same locale for both halves, so date and time can't come out of different
+  // conventions (see displayLocale: the browser can't tell us the OS clock).
+  const loc = displayLocale();
+  const day = t.toLocaleDateString(loc, { month: "short", day: "numeric" });
+  const time = t.toLocaleTimeString(loc, {
+    hour: "2-digit",
     minute: "2-digit",
   });
   const hours = diffMs / 3_600_000;
@@ -975,6 +979,17 @@ function usageLevel(pct: number): string {
   return "ok";
 }
 
+// Hover text for the pace marker — the tick is a 2px mark, so the comparison it
+// encodes has to be sayable for anyone who can't eyeball it (or is on touch).
+function paceTitle(used: number | null, elapsed: number): string {
+  const where = `${Math.round(elapsed)}% of this window has elapsed`;
+  if (used === null) return where;
+  const drift = used - elapsed;
+  const verdict =
+    drift > 10 ? "over pace" : drift < -10 ? "under pace" : "on pace";
+  return `${where} — ${verdict}`;
+}
+
 // The usage/limits popover: a progress bar per rate-limit window plus session
 // cost. Reads the harness-agnostic ChatUsage snapshot; degrades gracefully when
 // the snapshot is absent (loading) or plan limits don't apply (API-key/local).
@@ -987,6 +1002,13 @@ function UsagePanel({
   onRefresh: () => void;
   onClose: () => void;
 }) {
+  // The snapshot is static but elapsed time isn't — re-render while open so the
+  // pace marker (and "resets in …") don't go stale under a long-open panel.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
   return (
     <div className="chat-usage-panel" role="dialog" aria-label="Usage and limits">
       <div className="chat-usage-head">
@@ -1018,6 +1040,7 @@ function UsagePanel({
           {usage.windows.map((w) => {
             const pct = w.utilization;
             const reset = formatReset(w.resetsAt);
+            const elapsed = windowElapsedPct(w, now);
             return (
               <div className="chat-usage-row" key={w.key}>
                 <div className="chat-usage-labels">
@@ -1031,11 +1054,23 @@ function UsagePanel({
                     className={`chat-usage-fill ${pct === null ? "ok" : usageLevel(pct)}`}
                     style={{ width: `${Math.max(0, Math.min(100, pct ?? 0))}%` }}
                   />
+                  {elapsed !== null && (
+                    <div
+                      className="chat-usage-pace"
+                      style={{ left: `${elapsed}%` }}
+                      title={paceTitle(pct, elapsed)}
+                    />
+                  )}
                 </div>
                 {reset && <div className="chat-usage-reset">{reset}</div>}
               </div>
             );
           })}
+          {usage.windows.some((w) => windowElapsedPct(w, now) !== null) && (
+            <div className="chat-usage-legend">
+              The tick marks how far through each window you are.
+            </div>
+          )}
         </div>
       )}
       {usage && usage.sessionCostUsd > 0 && (

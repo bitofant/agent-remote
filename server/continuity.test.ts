@@ -17,6 +17,7 @@ function usage(
       label: w.key,
       utilization: null,
       resetsAt: null,
+      windowMs: null,
       ...w,
     })),
     sessionCostUsd: 0,
