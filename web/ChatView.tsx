@@ -98,6 +98,36 @@ const AgentsContext = createContext<{
   onLoad: (toolId: string) => void;
 }>({ agents: {}, onLoad: () => {} });
 
+/** As the element grows, scroll its scroll container so its bottom edge stays
+ * where it was — but only if that edge was in view (never yank a reader who
+ * scrolled away), by at most the growth, and never past the element's top.
+ * Needed because a peer panel grows on *another* session's events, which the
+ * outer transcript's stick-to-bottom never sees. */
+function useKeepBottomInView(ref: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let prev: number | null = null;
+    const ro = new ResizeObserver(() => {
+      const h = el.offsetHeight;
+      const grew = prev === null ? 0 : h - prev;
+      prev = h;
+      if (grew <= 0) return;
+      const box = el.parentElement?.closest<HTMLElement>(".chat-agent, .chat-scroll");
+      if (!box) return;
+      const r = el.getBoundingClientRect();
+      const b = box.getBoundingClientRect();
+      // Measured from live geometry, so native scroll anchoring that already
+      // compensated leaves nothing (overflow ≤ 0) to double up on.
+      if (r.bottom - grew > b.bottom + 2) return;
+      const by = Math.min(grew, r.bottom - b.bottom, r.top - b.top);
+      if (by > 0) box.scrollTop += by;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+}
+
 /** A nested chat session rendered inline: the same bubbles as the main
  * transcript, in a box capped at half the viewport with its own scroll. Takes a
  * plain ChatState, so it serves both a sub-agent run (`AgentRun.state`, folded
@@ -126,10 +156,15 @@ function AgentPanel({
   useEffect(() => {
     if (live && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [count, streamed, live]);
+  useKeepBottomInView(ref);
   // For a sub-agent this is only reached while loading — an otherwise-empty run
   // falls back to the ordinary tool view in ToolPart.
   if (count === 0 && !state.streaming)
-    return <div className="chat-agent empty">{empty ?? "Loading transcript…"}</div>;
+    return (
+      <div className="chat-agent empty" ref={ref}>
+        {empty ?? "Loading transcript…"}
+      </div>
+    );
   return (
     <div className="chat-agent" ref={ref}>
       {prompt && (
