@@ -33,7 +33,7 @@ import {
 import type { DiffLine, ToolBody } from "../shared/render";
 import type { Client } from "./client";
 import { linkRuns } from "./linkify";
-import { displayLocale, relativeTime } from "./time";
+import { formatReset, relativeTime } from "./time";
 import { windowElapsedPct } from "./usage";
 
 // Chat-bubble view for chat sessions (ui: "chat"). Harness-agnostic: renders the
@@ -948,30 +948,6 @@ function UsageIcon() {
   );
 }
 
-// Format an ISO reset timestamp as a short, human "resets …" string.
-function formatReset(iso: string | null): string | null {
-  if (!iso) return null;
-  const t = new Date(iso);
-  if (Number.isNaN(t.getTime())) return null;
-  const now = Date.now();
-  const diffMs = t.getTime() - now;
-  if (diffMs <= 0) return "resetting now";
-  // Same locale for both halves, so date and time can't come out of different
-  // conventions (see displayLocale: the browser can't tell us the OS clock).
-  const loc = displayLocale();
-  const day = t.toLocaleDateString(loc, { month: "short", day: "numeric" });
-  const time = t.toLocaleTimeString(loc, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const hours = diffMs / 3_600_000;
-  const rel =
-    hours < 24
-      ? `in ${hours < 1 ? `${Math.round(hours * 60)}m` : `${Math.round(hours)}h`}`
-      : `${day}, ${time}`;
-  return `resets ${rel}`;
-}
-
 // Utilization → severity class (drives the bar color: calm → warn → hot).
 function usageLevel(pct: number): string {
   if (pct >= 90) return "hot";
@@ -1039,7 +1015,7 @@ function UsagePanel({
         <div className="chat-usage-bars">
           {usage.windows.map((w) => {
             const pct = w.utilization;
-            const reset = formatReset(w.resetsAt);
+            const reset = formatReset(w.resetsAt, now);
             const elapsed = windowElapsedPct(w, now);
             return (
               <div className="chat-usage-row" key={w.key}>
