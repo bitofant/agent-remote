@@ -29,6 +29,12 @@ import {
 } from "../../shared/chat.js";
 import { normalizeFolder } from "../paths.js";
 
+/** `start()` options: the adapter's own, plus manager-level flags adapters never see a use for. */
+export interface StartOptions extends SessionOptions {
+  /** Backend-spawned (auto-PR); surfaces as `SessionInfo.background`. */
+  background?: boolean;
+}
+
 // Per-session scrollback retained for replay on (re)connect; bounded for memory.
 const MAX_BUFFER = 200_000;
 
@@ -140,7 +146,7 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.chat;
   }
 
-  start(harnessId: string, opts: SessionOptions): SessionInfo {
+  start(harnessId: string, opts: StartOptions): SessionInfo {
     const adapter = this.adapters.get(harnessId);
     if (!adapter) throw new Error(`Unknown harness: ${harnessId}`);
 
@@ -156,6 +162,7 @@ export class SessionManager {
       exitCode: null,
       createdAt: Date.now(),
       currentCommand: null,
+      ...(opts.background ? { background: true } : {}),
     };
 
     const session = adapter.createChatSession

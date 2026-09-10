@@ -373,12 +373,13 @@ function Workspace({
   }, []);
 
   // Auto-select newly created sessions: focus their folder and make them active.
+  // Background sessions (auto-PR agent) are skipped: watched inline, opened on demand.
   useEffect(() => {
     let created: SessionInfo | null = null;
     for (const s of sessions) {
       if (!knownIds.current.has(s.id)) {
         knownIds.current.add(s.id);
-        created = s;
+        if (!s.background) created = s;
       }
     }
     if (created) {
