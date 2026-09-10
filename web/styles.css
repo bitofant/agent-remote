@@ -2976,7 +2976,8 @@ button.auto-press::after {
   font-variant-numeric: tabular-nums;
 }
 .chat-usage-track {
-  height: 7px;
+  position: relative;
+  height: 9px; /* tall enough for the pace marker to read */
   border-radius: 999px;
   background: var(--bg);
   overflow: hidden;
@@ -2985,6 +2986,27 @@ button.auto-press::after {
   height: 100%;
   border-radius: 999px;
   transition: width 0.3s ease;
+}
+/* Pace marker: how far through the window we are. Fill past the tick = burning
+   faster than the clock. Deliberately neutral — the fill owns severity color. */
+.chat-usage-pace {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-1px);
+  background: color-mix(in srgb, var(--text) 70%, transparent);
+}
+/* Widen the hover target so the marker's title is reachable off a 2px mark. */
+.chat-usage-pace::after {
+  content: "";
+  position: absolute;
+  inset: -3px -5px;
+}
+.chat-usage-legend {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
 }
 .chat-usage-fill.ok {
   background: var(--success);

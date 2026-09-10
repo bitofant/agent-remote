@@ -548,6 +548,11 @@ export interface ChatUsageWindow {
   utilization: number | null;
   /** ISO 8601 timestamp when the window resets, or null. */
   resetsAt: string | null;
+  /** How long the whole window is, in ms, or null if the harness doesn't say.
+   * With `resetsAt` this is what lets the UI show how far through the window we
+   * are (the pace marker) — the harness knows its own window vocabulary, so the
+   * duration is resolved here rather than by the client parsing `key`. */
+  windowMs: number | null;
 }
 
 /** Normalized `/usage` snapshot: plan rate-limit utilization plus session cost.
