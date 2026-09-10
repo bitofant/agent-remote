@@ -62,14 +62,17 @@ export async function runPrSession(
     /** The spawned session, as soon as it exists — so the caller's notes can
      * link to its tab (it's left open for a human on any failure). */
     onSession?: (sessionId: string) => void;
+    /** The session this run acts for; the PR session nests under it. */
+    parent?: string;
   },
 ): Promise<PrResult | null> {
-  const { folder, harnessId, command, instructions, report, onSession } = opts;
+  const { folder, harnessId, command, instructions, report, onSession, parent } =
+    opts;
 
   let sessionId: string;
   try {
-    // Background: watched inline in the origin's note, never focus-stealing.
-    sessionId = manager.start(harnessId, { cwd: folder, background: true }).id;
+    // Nested under the origin: watched inline in its note, lifecycle tied to it.
+    sessionId = manager.start(harnessId, { cwd: folder, parent }).id;
   } catch (err) {
     report(`Could not start the ${harnessId} session`, (err as Error).message);
     return null;

@@ -139,6 +139,7 @@ export async function runAutoPr(
     // LEAVES that session open for a human, who otherwise has to find it by eye.
     let prSession: string | undefined;
     const opened = await runPrSession(manager, {
+      parent: ctx.sessionId,
       folder,
       harnessId,
       command,

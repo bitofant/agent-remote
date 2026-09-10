@@ -31,8 +31,8 @@ import { normalizeFolder } from "../paths.js";
 
 /** `start()` options: the adapter's own, plus manager-level flags adapters never see a use for. */
 export interface StartOptions extends SessionOptions {
-  /** Backend-spawned (auto-PR); surfaces as `SessionInfo.background`. */
-  background?: boolean;
+  /** Owning session id for a nested session (auto-PR); → `SessionInfo.parentId`. */
+  parent?: string;
 }
 
 // Per-session scrollback retained for replay on (re)connect; bounded for memory.
@@ -71,6 +71,8 @@ export interface SessionListener {
   /** A session was removed from the manager entirely (e.g. user closed an
    * exited session); it should be dropped from the UI. */
   onRemoved?(sessionId: string): void;
+  /** A nested session was soft-removed (see `remove`): gone from the list, still held. */
+  onHidden?(sessionId: string): void;
   /** A structured event observed inside the session (shell integration only). */
   onEvent?(sessionId: string, event: SessionEvent): void;
   /** A normalized chat event from a chat session (ui: "chat" only). */
@@ -162,7 +164,7 @@ export class SessionManager {
       exitCode: null,
       createdAt: Date.now(),
       currentCommand: null,
-      ...(opts.background ? { background: true } : {}),
+      ...(opts.parent ? { parentId: opts.parent } : {}),
     };
 
     const session = adapter.createChatSession
@@ -486,13 +488,26 @@ export class SessionManager {
     this.kill(this.sessions.get(sessionId));
   }
 
-  /** Drop a session (killing it first if still running); releases its scrollback. */
+  /** Drop a session (killing it first if still running); releases its scrollback.
+   * A nested session whose parent is still around is only HIDDEN — left running,
+   * state kept — since the parent's inline view still shows it. Removing a parent
+   * hard-removes its nested sessions with it. */
   remove(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    const parent = session.info.parentId;
+    if (parent && this.sessions.has(parent)) {
+      if (session.info.hidden) return;
+      session.info.hidden = true;
+      for (const l of this.listeners) l.onHidden?.(sessionId);
+      return;
+    }
     if (session.info.status !== "exited") this.kill(session);
     this.sessions.delete(sessionId);
     for (const l of this.listeners) l.onRemoved?.(sessionId);
+    // Parent is gone now, so each child takes the hard path above.
+    for (const s of [...this.sessions.values()])
+      if (s.info.parentId === sessionId) this.remove(s.info.id);
   }
 
   /** Terminate a session's process. Flags it as OUR doing first: the exit that
