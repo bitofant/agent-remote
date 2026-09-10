@@ -6,6 +6,7 @@ import {
   deriveAssistantEnabled,
   emptyChatState,
   isAllowEverything,
+  isEmptyChat,
   promptParts,
 } from "./chat.js";
 import type { AssistantSettings, ChatEvent, ChatState } from "./protocol.js";
@@ -823,6 +824,27 @@ describe("applyChatEvent auto-prompt", () => {
       },
     ]);
     expect(state.autoPrompt).toBeNull();
+  });
+});
+
+describe("isEmptyChat", () => {
+  it("is empty on a fresh session, even with a draft or notices", () => {
+    const s = emptyChatState();
+    s.draft = "/resume";
+    s.notices = [{ level: "info", text: "hi", at: 0 }];
+    expect(isEmptyChat(s)).toBe(true);
+  });
+
+  it("is not empty once anything was said, runs or waits", () => {
+    const said = reduce([
+      {
+        type: "user-message",
+        message: { id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
+      },
+    ]);
+    expect(isEmptyChat(said)).toBe(false);
+    expect(isEmptyChat({ ...emptyChatState(), busy: true })).toBe(false);
+    expect(isEmptyChat({ ...emptyChatState(), queued: ["x"] })).toBe(false);
   });
 });
 

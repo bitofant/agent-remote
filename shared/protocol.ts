@@ -922,7 +922,8 @@ export type ChatAction =
 
 /** Messages the browser sends to the backend. */
 export type ClientMessage =
-  | { type: "start"; harnessId: string; cwd?: string; resume?: string }
+  /** `replaces`: session to swap out for this one, if it's an empty chat (resume). */
+  | { type: "start"; harnessId: string; cwd?: string; resume?: string; replaces?: string }
   | { type: "input"; sessionId: string; data: string }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
   | { type: "stop"; sessionId: string }
@@ -934,7 +935,8 @@ export type ClientMessage =
 /** Messages the backend sends to the browser. */
 export type ServerMessage =
   | { type: "sessions"; sessions: SessionInfo[] }
-  | { type: "started"; session: SessionInfo }
+  /** `replaces`: take that session's tab slot; a `removed` for it follows. */
+  | { type: "started"; session: SessionInfo; replaces?: string }
   | { type: "output"; sessionId: string; data: string }
   /** `stopped` mirrors `SessionInfo.stopped` (we killed it, it didn't die). */
   | {
