@@ -29,6 +29,15 @@ export interface AutoPrConfig {
   command?: string;
 }
 
+/** Lifetime token-usage state file written by an external sampler (e.g. a cron
+ * scraping vLLM /metrics), shown on the System state page. */
+export interface TokenUsageConfig {
+  /** Path to the JSON state file; `~` is expanded. */
+  file: string;
+  /** Cost-estimate pricing (USD per 1M tokens). Default: Claude Sonnet $3/$15. */
+  pricing?: { label: string; inputPerM: number; outputPerM: number } | null;
+}
+
 export interface Config {
   harnesses: {
     claude: HarnessConfig;
@@ -42,6 +51,7 @@ export interface Config {
   llm: LlmConfig;
   /** Optional overrides for the auto-PR capability (see AutoPrConfig). */
   autoPr?: AutoPrConfig;
+  tokenUsage?: TokenUsageConfig;
   /** Usernames allowed to log in. A registered account stays unusable until its
    * name appears here. */
   users: string[];

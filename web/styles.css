@@ -3595,6 +3595,10 @@ button.auto-press::after {
   margin: 3px 0 0;
 }
 
+.system-sub.system-footnote {
+  margin-top: 8px;
+}
+
 .system-badge {
   display: inline-block;
   padding: 2px 8px;
