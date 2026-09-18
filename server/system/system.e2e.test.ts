@@ -16,6 +16,7 @@ const SECTIONS: SystemSectionKey[] = [
   "gpu",
   "engine",
   "containers",
+  "tokenUsage",
 ];
 
 const sectionValue = (s: SystemSnapshot, k: SystemSectionKey): unknown =>
@@ -31,7 +32,9 @@ const sectionValue = (s: SystemSnapshot, k: SystemSectionKey): unknown =>
             ? s.gpu
             : k === "engine"
               ? s.engine
-              : s.containers;
+              : k === "containers"
+                ? s.containers
+                : s.tokenUsage;
 
 describe("system sampler (live host)", () => {
   it("always produces a snapshot, whatever the box is missing", async () => {

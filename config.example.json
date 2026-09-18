@@ -33,5 +33,13 @@
   },
   "server": {
     "port": 4000
+  },
+  "tokenUsage": {
+    "file": "~/scripts/vllm-token-usage.json",
+    "pricing": {
+      "label": "Claude Sonnet",
+      "inputPerM": 3,
+      "outputPerM": 15
+    }
   }
 }

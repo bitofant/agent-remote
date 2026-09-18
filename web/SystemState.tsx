@@ -9,6 +9,7 @@ import type {
   ContainerInfo,
   GpuSection,
   SystemSnapshot,
+  TokenTally,
 } from "../shared/protocol";
 
 /** Matches the server's sampling tick; the GET also keeps that sampler alive. */
@@ -43,6 +44,12 @@ const rate = (n: number | null | undefined) =>
 const count = (n: number | null | undefined) =>
   n == null ? DASH : n.toLocaleString();
 
+/** Age label: seconds under a minute, then the coarser duration. */
+function ago(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  return sec < 60 ? `${sec}s` : duration(sec);
+}
+
 function duration(sec: number): string {
   const d = Math.floor(sec / 86400);
   const h = Math.floor((sec % 86400) / 3600);
@@ -57,6 +64,18 @@ const tokens = (n: number | null | undefined) =>
 
 const temp = (n: number | null | undefined) =>
   n == null ? DASH : `${n.toFixed(0)}°C`;
+
+const compactFmt = new Intl.NumberFormat(undefined, {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const compact = (n: number) => compactFmt.format(n);
+
+const usd = (n: number) =>
+  `$${n.toLocaleString(undefined, {
+    minimumFractionDigits: n >= 100 ? 0 : 2,
+    maximumFractionDigits: n >= 100 ? 0 : 2,
+  })}`;
 
 // --- primitives -------------------------------------------------------------
 
@@ -175,10 +194,28 @@ function Card({
 
 // --- polling ----------------------------------------------------------------
 
+/** Server-minus-browser clock offset. Every timestamp in the snapshot is on the
+ * server's clock, so ages must be measured against it — a browser a few minutes
+ * behind would otherwise clamp every age to 0. */
+function useServerClockOffset() {
+  const offset = useRef<number | null>(null);
+  const observe = (res: Response) => {
+    const server = Date.parse(res.headers.get("date") ?? "");
+    if (Number.isNaN(server)) return;
+    // The Date header is truncated to the second, so each sample undershoots by
+    // <1s: the running max converges on the true offset. A big jump = clock change.
+    const sample = server - Date.now();
+    const cur = offset.current;
+    offset.current = cur == null || Math.abs(sample - cur) > 5000 ? sample : Math.max(cur, sample);
+  };
+  return { offset, observe };
+}
+
 function useSystemSnapshot() {
   const [snap, setSnap] = useState<SystemSnapshot | null>(null);
   const [stale, setStale] = useState(false);
   const cancelled = useRef(false);
+  const { offset, observe } = useServerClockOffset();
 
   useEffect(() => {
     cancelled.current = false;
@@ -187,7 +224,11 @@ function useSystemSnapshot() {
       // and the server stops its own sampler once the GETs stop.
       if (document.hidden) return;
       fetch("/api/system")
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((r) => {
+          if (!r.ok) throw new Error(String(r.status));
+          observe(r);
+          return r.json();
+        })
         .then((s: SystemSnapshot) => {
           if (cancelled.current) return;
           setSnap(s);
@@ -207,7 +248,7 @@ function useSystemSnapshot() {
     };
   }, []);
 
-  return { snap, stale };
+  return { snap, stale, clockOffset: offset };
 }
 
 // --- cards ------------------------------------------------------------------
@@ -436,6 +477,81 @@ function EngineCard({ snap }: { snap: SystemSnapshot }) {
   );
 }
 
+/** One tally chip: cost (or total tokens, unpriced) up top, prefill/decode below. */
+function TallyItem({
+  label,
+  title,
+  t,
+  note,
+}: {
+  label: string;
+  title?: string;
+  t: TokenTally;
+  note?: string;
+}) {
+  return (
+    <div className="system-item">
+      <Row
+        label={label}
+        value={t.costUsd == null ? `${compact(t.prompt + t.generation)} tok` : usd(t.costUsd)}
+        title={title ?? label}
+      />
+      <div
+        className="system-sub"
+        title={`${count(t.prompt)} prefill · ${count(t.generation)} decode`}
+      >
+        {note ? `${note} · ` : ""}prefill {compact(t.prompt)} · decode {compact(t.generation)}
+      </div>
+    </div>
+  );
+}
+
+/** Org prefix dropped for width; the full id stays in the title. */
+const shortModel = (m: string) => m.slice(m.lastIndexOf("/") + 1) || m;
+
+function TokenUsageCard({ snap, now }: { snap: SystemSnapshot; now: number }) {
+  const u = snap.tokenUsage;
+  const sampledAgo = u?.lastCheck != null ? ago(now - u.lastCheck) : null;
+  return (
+    <Card title="LLM tokens" error={u ? undefined : snap.errors.tokenUsage}>
+      {u && (
+        <>
+          <div className="system-sub" title={u.file}>
+            {sampledAgo ? `sampled ${sampledAgo} ago` : "never sampled"}
+            {u.unsampled && u.unsampled.prompt + u.unsampled.generation > 0
+              ? ` · +${compact(u.unsampled.prompt + u.unsampled.generation)} live`
+              : ""}
+          </div>
+          <TallyItem label="Today" t={u.today} />
+          {u.current && (
+            <TallyItem
+              label={shortModel(u.current.model)}
+              title={u.current.model}
+              t={u.current}
+              note="serving"
+            />
+          )}
+          <TallyItem label="All models" t={u.total} />
+          {u.models.length > 0 && (
+            <div className="system-group">
+              <div className="system-group-title">By model</div>
+              {u.models.map((m) => (
+                <TallyItem key={m.model} label={shortModel(m.model)} title={m.model} t={m} />
+              ))}
+            </div>
+          )}
+          {u.pricing && (
+            <div className="system-sub system-footnote">
+              Cost ≈ {u.pricing.label} at ${u.pricing.inputPerM}/M in, $
+              {u.pricing.outputPerM}/M out
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
 function ContainerRow({ c }: { c: ContainerInfo }) {
   const memPct =
     c.memUsedBytes != null && c.memLimitBytes
@@ -531,7 +647,7 @@ function NetworkCard({ snap }: { snap: SystemSnapshot }) {
 // --- page -------------------------------------------------------------------
 
 export default function SystemState() {
-  const { snap, stale } = useSystemSnapshot();
+  const { snap, stale, clockOffset } = useSystemSnapshot();
   const [now, setNow] = useState(Date.now());
 
   // Drives the "updated Ns ago" label between polls.
@@ -540,7 +656,9 @@ export default function SystemState() {
     return () => clearInterval(t);
   }, []);
 
-  const age = snap?.at ? Math.max(0, Math.round((now - snap.at) / 1000)) : null;
+  // "now" on the server's clock; snapshot timestamps are server-side.
+  const serverNow = now + (clockOffset.current ?? 0);
+  const age = snap?.at ? Math.max(0, Math.round((serverNow - snap.at) / 1000)) : null;
 
   return (
     <div className="system-view">
@@ -557,6 +675,7 @@ export default function SystemState() {
           <SystemCard snap={snap} />
           <GpuCard gpu={snap.gpu} error={snap.errors.gpu} />
           <EngineCard snap={snap} />
+          <TokenUsageCard snap={snap} now={serverNow} />
           <DockerCard snap={snap} />
           <DiskCard snap={snap} />
           <NetworkCard snap={snap} />

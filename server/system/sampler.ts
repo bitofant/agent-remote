@@ -9,7 +9,8 @@
 //    section to null with a reason instead of blanking the page or throwing.
 import { readFileSync } from "node:fs";
 import { cpus, hostname, release } from "node:os";
-import type { LlmConfig } from "../config.js";
+import type { LlmConfig, TokenUsageConfig } from "../config.js";
+import { expandHome } from "../paths.js";
 import type { ContainerInfo, SystemSnapshot } from "../../shared/protocol.js";
 import { cpuPercent, rateOf, type CpuTicks } from "./delta.js";
 import {
@@ -21,6 +22,7 @@ import {
 } from "./docker.js";
 import { probeEngine, type EngineCounters } from "./engine.js";
 import { probeGpu } from "./gpu.js";
+import { DEFAULT_PRICING, buildTokenUsage, readTokenUsageState } from "./tokenUsage.js";
 import {
   CPU_SENSORS,
   NVME_SENSORS,
@@ -101,11 +103,13 @@ const emptySnapshot = (): SystemSnapshot => ({
   gpu: null,
   engine: null,
   containers: null,
+  tokenUsage: null,
   errors: {},
 });
 
 let snapshot: SystemSnapshot = emptySnapshot();
 let llm: LlmConfig | null = null;
+let tokenUsage: TokenUsageConfig | null = null;
 
 let prev: Counters | null = null;
 let engineCounters: EngineCounters | null = null;
@@ -348,6 +352,32 @@ async function sampleEngine(
   }
 }
 
+function sampleTokenUsage(next: SystemSnapshot, errors: SystemSnapshot["errors"]): void {
+  if (!tokenUsage?.file) {
+    errors.tokenUsage = "No tokenUsage.file configured.";
+    return;
+  }
+  const file = expandHome(tokenUsage.file);
+  try {
+    const e = next.engine;
+    next.tokenUsage = buildTokenUsage(readTokenUsageState(file), {
+      file,
+      now: Date.now(),
+      live:
+        e?.reachable && e.detection === "local-metrics"
+          ? { model: e.model, prompt: e.promptTokensTotal, generation: e.generationTokensTotal }
+          : null,
+      // `null` in config disables the estimate; absent means the default.
+      pricing: tokenUsage.pricing === undefined ? DEFAULT_PRICING : tokenUsage.pricing,
+    });
+  } catch (err) {
+    errors.tokenUsage =
+      (err as NodeJS.ErrnoException).code === "ENOENT"
+        ? `No token usage file at ${file}.`
+        : firstLine(err);
+  }
+}
+
 // --- the tick ---------------------------------------------------------------
 
 async function tick(): Promise<void> {
@@ -366,6 +396,8 @@ async function tick(): Promise<void> {
     ]);
     // Engine detection reads psRows, so it runs after docker.
     await sampleEngine(next, errors);
+    // Folds in the engine's live counters, so it runs after the engine.
+    sampleTokenUsage(next, errors);
     next.at = Date.now();
     prev = counters;
     snapshot = next;
@@ -393,8 +425,12 @@ function stopTimers(): void {
 
 /** Wire at boot. Stores config and takes one cheap /proc sample so the first
  * GET is never empty; starts no timers until a browser actually looks. */
-export function startSystemSampling(config: { llm: LlmConfig }): void {
+export function startSystemSampling(config: {
+  llm: LlmConfig;
+  tokenUsage?: TokenUsageConfig;
+}): void {
   llm = config.llm;
+  tokenUsage = config.tokenUsage ?? null;
   try {
     const next = emptySnapshot();
     prev = sampleHost(next, next.errors);

@@ -139,7 +139,8 @@ export type SystemSectionKey =
   | "network"
   | "gpu"
   | "engine"
-  | "containers";
+  | "containers"
+  | "tokenUsage";
 
 export interface SystemSnapshot {
   /** ms epoch of the sample these numbers came from (0 = never sampled). */
@@ -152,6 +153,7 @@ export interface SystemSnapshot {
   gpu: GpuSection | null;
   engine: EngineSection | null;
   containers: ContainerSection | null;
+  tokenUsage: TokenUsageSection | null;
   /** Why a null section is null, in one readable line. A keyed map rather than
    * a field per section: an absent section has no object to hang it on. */
   errors: { [K in SystemSectionKey]?: string };
@@ -298,6 +300,43 @@ export interface EngineSection {
   generationTokensPerSec: number | null;
   /** Mean over the window, from the histogram's _sum/_count deltas. */
   timeToFirstTokenMs: number | null;
+}
+
+/** Hosted-API price used for the "what would this have cost" estimate. */
+export interface TokenPricing {
+  label: string;
+  inputPerM: number;
+  outputPerM: number;
+}
+
+/** prompt = prefill (input), generation = decode (output). */
+export interface TokenTally {
+  prompt: number;
+  generation: number;
+  /** null when no pricing is configured. */
+  costUsd: number | null;
+}
+
+export interface ModelTokenTally extends TokenTally {
+  model: string;
+}
+
+/** Lifetime token usage from an external sampler's JSON state file (cron). */
+export interface TokenUsageSection {
+  file: string;
+  /** ms epoch the file was last sampled; null if it never recorded one. */
+  lastCheck: number | null;
+  /** Live engine model when reachable, else the file's last sampled model. */
+  currentModel: string | null;
+  /** Served since lastCheck (live counters − file's), already folded into the
+   * tallies below so they don't lag the 10-min cron. null = no live counters. */
+  unsampled: { prompt: number; generation: number } | null;
+  today: TokenTally;
+  current: ModelTokenTally | null;
+  total: TokenTally;
+  /** Every model, most tokens first. */
+  models: ModelTokenTally[];
+  pricing: TokenPricing | null;
 }
 
 export interface ContainerSection {
