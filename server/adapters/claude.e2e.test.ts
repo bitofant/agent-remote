@@ -1,5 +1,5 @@
 // Live end-to-end test of the claude-local harness (Claude CLI/SDK pointed at a
-// local vLLM endpoint — see CLAUDE.md). It drives one real turn where the model
+// local vLLM endpoint — see AGENTS.md). It drives one real turn where the model
 // edits a file and asserts on the backend's observable behaviour:
 //   (a) an Edit triggers a permission `ui-request` (canUseTool fired), and
 //   (b) the streamed tool args are parsed correctly (input_json_delta fragments

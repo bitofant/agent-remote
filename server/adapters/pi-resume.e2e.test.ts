@@ -1,5 +1,5 @@
 // Live end-to-end test that resuming a pi chat session restores the PRIOR
-// conversation rather than starting fresh (see the resume notes in CLAUDE.md).
+// conversation rather than starting fresh (see the resume notes in AGENTS.md).
 // Drives the real `pi --mode rpc` subprocess through the production
 // SessionManager, with pi pointed at a local vLLM endpoint (zero tokens).
 //
