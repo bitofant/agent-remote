@@ -1,5 +1,5 @@
 // Live end-to-end test of the permission card's "Always allow" choice against
-// the claude-local harness (see CLAUDE.md). A Bash write-command prompts in the
+// the claude-local harness (see AGENTS.md). A Bash write-command prompts in the
 // default permission mode (read-only/safe ones are auto-allowed), and the SDK
 // hands canUseTool the scoped rule an "always" would install. This pins:
 //   (a) the option set / stable `value` decode keys / intents,

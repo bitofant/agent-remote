@@ -128,7 +128,7 @@ export function attachAssistant(manager: SessionManager): () => void {
         isAllowEverything(settings.permissions.instructions) && isPermission;
       if (!allowAll && !llmStatus().available) return;
 
-      // Plan acceptance stays human-driven (see CLAUDE.md); `input` too.
+      // Plan acceptance stays human-driven (see AGENTS.md); `input` too.
       const want =
         (isPermission && settings.permissions.enabled) ||
         (isQuestions && settings.questions.enabled);

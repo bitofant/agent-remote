@@ -1,5 +1,5 @@
 // Live end-to-end test that resuming a chat session restores the PRIOR
-// conversation rather than starting fresh (see the resume notes in CLAUDE.md).
+// conversation rather than starting fresh (see the resume notes in AGENTS.md).
 // Runs against claude-local (Claude SDK → local vLLM), so zero Claude tokens.
 //
 // Two independent proofs it isn't a fresh session:

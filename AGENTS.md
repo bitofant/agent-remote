@@ -1,8 +1,8 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents (Claude Code, pi, …) when working with code in this repository.
 
-**Everything in CLAUDE.md must be extremely terse: bulleted lists, not paragraphs, as concise and token-efficient as possible.**
+**Everything in AGENTS.md must be extremely terse: bulleted lists, not paragraphs, as concise and token-efficient as possible.**
 
 **Keep this file correct: update it when details change, and add genuinely important architectural decisions as they're made.**
 
