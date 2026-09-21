@@ -2533,11 +2533,16 @@ button.auto-press::after {
   color: var(--muted);
 }
 
+/* Out-of-band session line (compaction, errors). Renders in transcript order,
+   anchored to the turn it arrived during — same muted centered idiom as a
+   system turn, and it wraps for the same reason (harness errors are long). */
 .chat-notice {
   align-self: center;
+  max-width: 85%;
   color: var(--muted);
   font-size: 12.5px;
   text-align: center;
+  overflow-wrap: anywhere;
 }
 
 /* A turn the conversation received but neither party authored (background-task

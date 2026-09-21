@@ -737,6 +737,21 @@ export interface AssistantTrace {
   anchorMessageId?: string;
 }
 
+/** An out-of-band line the session reports (compaction boundary, harness error,
+ * rewind confirmation). Not a `ChatMessage` — it's diagnostic, so it skips the
+ * render log and isn't rebuilt on resume — but it IS part of the conversation's
+ * narrative, so it renders in transcript order like an `AssistantTrace`. */
+export interface ChatNotice {
+  level: "info" | "warning" | "error";
+  text: string;
+  at: number;
+  /** Message this notice follows — the turn in flight when it arrived, assigned
+   * by the reducer. Undefined means it predates every message (session start),
+   * so it leads. Never rendered after the last message: one parked at the end
+   * would stay there while every later turn slid in above it. */
+  anchorMessageId?: string;
+}
+
 /** Optional features a chat harness supports, reported once at session start.
  * Absent flags mean "unsupported" — the UI gates its affordances on these so a
  * harness without them (pi) never shows a control it can't honour. */
@@ -770,8 +785,8 @@ export interface ChatState {
   pendingRequests: ChatUiRequest[];
   /** Steering/follow-up text queued behind the current run. */
   queued: string[];
-  /** Transient notices (errors, retries); capped. */
-  notices: { level: "info" | "warning" | "error"; text: string; at: number }[];
+  /** Transient notices (compaction boundaries, errors, retries); capped. */
+  notices: ChatNotice[];
   /** Models the session can switch between (empty if the harness doesn't
    * report any). */
   models: ChatModel[];

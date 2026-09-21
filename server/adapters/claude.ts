@@ -1090,6 +1090,13 @@ class ClaudeChatSession implements ChatSession {
     }
   }
 
+  /** Flip the main thread busy (idempotent — a turn has several triggers). */
+  private markBusy(): void {
+    if (this.busy) return;
+    this.busy = true;
+    this.emit({ type: "busy", busy: true });
+  }
+
   private handleMessage(msg: SDKMessage): void {
     // Everything a sub-agent produces is tagged with the tool call that spawned
     // it; route it into that nested transcript instead of the main one.
@@ -1126,14 +1133,28 @@ class ClaudeChatSession implements ChatSession {
             level: "info",
             text: `Compacted context${tokens} [${how}]`,
           });
-        } else if (msg.subtype === "status" && msg.compact_result === "failed") {
-          // Compaction attempt failed — report it rather than leaving the user
-          // wondering why /compact did nothing.
-          this.emit({
-            type: "notice",
-            level: "error",
-            text: `Compaction failed${msg.compact_error ? `: ${msg.compact_error}` : ""}`,
-          });
+        } else if (msg.subtype === "status") {
+          // Compaction emits NO assistant stream — so `message_start`, the only
+          // other thing that flips busy, never fires and the session looked idle
+          // for the ~13s the CLI spent summarizing: /compact read as doing
+          // nothing, then as a hang. The status message is the sole live signal.
+          if (msg.status === "compacting") {
+            this.markBusy();
+            // Same wording as pi's compaction_start — this is the shared idiom.
+            this.emit({
+              type: "notice",
+              level: "info",
+              text: "Compacting context…",
+            });
+          }
+          if (msg.compact_result === "failed")
+            // Report it rather than leaving the user wondering why /compact did
+            // nothing (no compact_boundary follows a failure).
+            this.emit({
+              type: "notice",
+              level: "error",
+              text: `Compaction failed${msg.compact_error ? `: ${msg.compact_error}` : ""}`,
+            });
         } else if (msg.subtype === "task_started") {
           // Earliest, most explicit sub-agent signal (the lazy noteAgent above
           // covers harnesses/paths that never send it).
@@ -1375,10 +1396,7 @@ class ClaudeChatSession implements ChatSession {
         // Mark the turn streamed so its whole-message echo is ignored.
         ctx.streamed = true;
         // busy tracks the whole turn, which a sub-agent runs inside of.
-        if (!parent && !this.busy) {
-          this.busy = true;
-          this.emit({ type: "busy", busy: true });
-        }
+        if (!parent) this.markBusy();
         this.emitFor(parent, { type: "assistant-start", messageId: randomUUID() });
         break;
       }

@@ -1515,7 +1515,6 @@ export function ChatView({
   // verdict via `state.autoDecisions`, and the cards render the same countdown
   // they always have; the user can still intervene (which cancels the verdict).
 
-  const recentNotices = state.notices.slice(-3);
   // Escape hides the auto-opened menu until the draft changes again.
   const [menuDismissed, setMenuDismissed] = useState(false);
 
@@ -1554,16 +1553,34 @@ export function ChatView({
       }
     />
   );
-  const tracesFor = (messageId: string) =>
-    state.assistantTraces
-      .filter((t) => t.anchorMessageId === messageId)
-      .map((t, i) => traceBubble(t, `trace-${t.requestId}-${t.at}-${i}`));
-  // An unanchored trace predates every message (posted into an empty
-  // transcript), so it leads. Nothing renders *after* the messages: a trace
+  // Traces and notices both hang off the turn they belong to, so they're
+  // emitted together, in arrival order. Passing `undefined` yields the
+  // unanchored ones, which predate every message (posted/reported into an empty
+  // transcript) and so lead. Nothing renders *after* the messages: anything
   // parked at the end would stay there while every later message slid in above
   // it — the reducer keeps anchors pointing at live turns, and one whose turn
   // has aged out of history goes with it.
-  const leadingTraces = state.assistantTraces.filter((t) => !t.anchorMessageId);
+  const inlineAfter = (messageId: string | undefined) =>
+    [
+      ...state.assistantTraces
+        .filter((t) => t.anchorMessageId === messageId)
+        .map((t, i) => ({
+          at: t.at,
+          node: traceBubble(t, `trace-${t.requestId}-${t.at}-${i}`),
+        })),
+      ...state.notices
+        .filter((n) => n.anchorMessageId === messageId)
+        .map((n, i) => ({
+          at: n.at,
+          node: (
+            <div key={`notice-${n.at}-${i}`} className={`chat-notice ${n.level}`}>
+              {n.text}
+            </div>
+          ),
+        })),
+    ]
+      .sort((a, b) => a.at - b.at)
+      .map((x) => x.node);
 
   // Typing `/foo` (the whole composer, no space yet) is a live command query: it
   // opens the menu and prefix-filters it. `/resume` and `/rewind` are the
@@ -1818,9 +1835,7 @@ export function ChatView({
             {exited ? "Session ended." : "Send a prompt to get started."}
           </div>
         )}
-        {leadingTraces.map((t, i) =>
-          traceBubble(t, `trace-${t.requestId}-${t.at}-${i}`),
-        )}
+        {inlineAfter(undefined)}
         {state.messages.map((m) => (
           <Fragment key={m.id}>
             <Bubble
@@ -1829,13 +1844,13 @@ export function ChatView({
                 canRewind && m.role === "user" ? () => openRewind(m) : undefined
               }
             />
-            {tracesFor(m.id)}
+            {inlineAfter(m.id)}
           </Fragment>
         ))}
         {state.streaming && (
           <Fragment key={state.streaming.id}>
             <Bubble message={state.streaming} streaming />
-            {tracesFor(state.streaming.id)}
+            {inlineAfter(state.streaming.id)}
           </Fragment>
         )}
         {state.queued.map((text, i) => (
@@ -1856,11 +1871,6 @@ export function ChatView({
               })
             }
           />
-        ))}
-        {recentNotices.map((n, i) => (
-          <div key={`${n.at}-${i}`} className={`chat-notice ${n.level}`}>
-            {n.text}
-          </div>
         ))}
       </div>
       {commandsOpen && (
