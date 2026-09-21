@@ -310,7 +310,7 @@ export class SessionManager {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    const translator = adapter.createChatTranslator!();
+    const translator = adapter.createChatTranslator!(effectiveOpts);
     const session: Session = {
       info,
       buffer: "",

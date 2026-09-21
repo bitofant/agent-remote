@@ -38,8 +38,8 @@ export function createPiAdapter(cfg: HarnessConfig): HarnessAdapter {
       if (opts.resume) args.push("--session-id", opts.resume);
       return { command: cfg.command, args };
     },
-    createChatTranslator(): ChatTranslator {
-      return new PiRpcTranslator();
+    createChatTranslator(opts: SessionOptions): ChatTranslator {
+      return new PiRpcTranslator(opts.cwd);
     },
   };
 }
@@ -105,6 +105,8 @@ interface PiModel {
 }
 
 class PiRpcTranslator implements ChatTranslator {
+  /** Session cwd — only for locating pi's project-scoped settings. */
+  constructor(private readonly cwd = "") {}
   private lineBuffer = "";
   /** Current model as a composite `provider/id`, or null until pi says.
    * Held here because pi's `models` event carries the current selection and the
@@ -358,7 +360,7 @@ class PiRpcTranslator implements ChatTranslator {
           return [
             {
               type: "models",
-              models: piModels(line.data.models),
+              models: piModels(line.data.models, readEnabledPatterns(this.cwd)),
               current: this.currentModel,
             },
           ];
@@ -506,9 +508,20 @@ function piOptions(options: string[] | undefined): ChatUiOption[] | undefined {
 // string, so the menu id is the composite `provider/id` — which is also pi's own
 // `--model provider/id` syntax. It splits at the FIRST slash: a provider name
 // never contains one, while ids routinely do ("deepseek-ai/DeepSeek-V4-Pro").
-// The provider is part of the *label* too, because one catalog serves the same
-// model from several providers (baseten's and a local vLLM's DeepSeek differ
-// only by who runs them).
+// The provider rides in `ChatModel.group`, not the label: the UI gives a
+// grouped catalog its own provider box, so a suffix would just be redundant
+// (and it's what made labels long enough to overflow the header).
+
+// Providers that run on this machine. Listed first because they're free and
+// always reachable; everything else follows alphabetically. Knowing which
+// provider names are local is pi vocabulary, so it stays here — the UI only
+// ever replays the order this array produces.
+const LOCAL_PROVIDERS = ["vllm", "ollama", "llamacpp", "lmstudio"];
+
+function providerRank(provider: string): number {
+  const i = LOCAL_PROVIDERS.indexOf(provider);
+  return i === -1 ? LOCAL_PROVIDERS.length : i;
+}
 
 /** Composite menu id for a pi model, or null if it can't be addressed. */
 export function piModelId(m: PiModel): string | null {
@@ -524,6 +537,106 @@ export function parsePiModelId(
   return { provider: id.slice(0, slash), modelId: id.slice(slash + 1) };
 }
 
+// --- enabled/disabled sections ----------------------------------------------
+//
+// pi's TUI narrows `/model` to `enabledModels` (settings) — a curation layer its
+// RPC never exposes (see AGENTS.md). We show the whole catalog but split each
+// provider into Enabled/Disabled, mirroring `resolveModelScopeFromModels`.
+// A mis-match is cosmetic (the model still lists and still works), which is why
+// approximating pi's matcher is an acceptable trade where *filtering* wasn't.
+
+export const SECTION_ENABLED = "Enabled";
+export const SECTION_DISABLED = "Disabled";
+
+/** pi appends an optional `:<thinkingLevel>` to a pattern; it doesn't select. */
+const THINKING_LEVELS = new Set([
+  "off", "minimal", "low", "medium", "high", "xhigh", "max",
+]);
+
+function stripThinking(pattern: string): string {
+  const colon = pattern.lastIndexOf(":");
+  if (colon === -1) return pattern;
+  return THINKING_LEVELS.has(pattern.slice(colon + 1).toLowerCase())
+    ? pattern.slice(0, colon)
+    : pattern;
+}
+
+/** minimatch subset: `*`/`?` stop at `/` (so `anthropic/*` can't span one),
+ * `**` spans. Enough for the documented `anthropic/*` / `*sonnet*` forms. */
+function globToRe(glob: string): RegExp {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        re += ".*";
+        i++;
+      } else re += "[^/]*";
+    } else if (c === "?") re += "[^/]";
+    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`, "i");
+}
+
+const isGlob = (p: string) => /[*?[]/.test(p);
+const ref = (m: PiModel) => `${m.provider}/${m.id}`.toLowerCase();
+
+/** Models one `enabledModels` pattern selects, following pi's precedence:
+ * canonical `provider/id` → bare `id` (only when unambiguous) → glob over both. */
+function matchPattern(pattern: string, models: PiModel[]): PiModel[] {
+  const p = stripThinking(pattern).trim().toLowerCase();
+  if (!p) return [];
+  const canonical = models.filter((m) => ref(m) === p);
+  if (canonical.length === 1) return canonical;
+  if (canonical.length > 1) return []; // pi rejects an ambiguous reference
+  if (!isGlob(p)) {
+    const byId = models.filter((m) => (m.id ?? "").toLowerCase() === p);
+    return byId.length === 1 ? byId : [];
+  }
+  const re = globToRe(p);
+  return models.filter((m) => re.test(ref(m)) || re.test((m.id ?? "").toLowerCase()));
+}
+
+/** Composite ids of every model pi's `enabledModels` patterns select. */
+export function enabledModelIds(
+  patterns: string[] | undefined,
+  models: PiModel[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const pattern of patterns ?? [])
+    for (const m of matchPattern(pattern, models)) {
+      const id = piModelId(m);
+      if (id) ids.add(id);
+    }
+  return ids;
+}
+
+/** `enabledModels` as pi resolves it: the project file replaces the global one
+ * wholesale (settings deep-merge, but arrays override). Best-effort — an
+ * unreadable/absent file just means "no curation", i.e. one Enabled-less list. */
+export function readEnabledPatterns(cwd: string): string[] | undefined {
+  // No cwd = no session context (pure tests build the adapter bare); never
+  // reach for the developer's own settings from there.
+  if (!cwd) return undefined;
+  const read = (path: string): string[] | undefined => {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+        enabledModels?: unknown;
+      };
+      const list = parsed.enabledModels;
+      return Array.isArray(list) && list.every((p) => typeof p === "string")
+        ? (list as string[])
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return (
+    read(join(cwd, ".pi", "settings.json")) ??
+    read(join(homedir(), ".pi", "agent", "settings.json"))
+  );
+}
+
 /** Tooltip detail: context window and whether the model reasons. */
 function piModelDescription(m: PiModel): string {
   const bits: string[] = [];
@@ -532,20 +645,42 @@ function piModelDescription(m: PiModel): string {
   return bits.join(" · ");
 }
 
-/** pi's model catalog as menu entries, in pi's own order (already grouped by
- * provider). Entries pi can't address are dropped rather than guessed at. */
-export function piModels(models: PiModel[]): ChatModel[] {
-  const entries: ChatModel[] = [];
+/** pi's model catalog as menu entries: local providers first, then the rest
+ * alphabetically, and within each provider the `enabledModels` ones first.
+ * Entries pi can't address are dropped rather than guessed at. */
+export function piModels(
+  models: PiModel[],
+  enabledPatterns?: string[],
+): ChatModel[] {
+  const enabled = enabledModelIds(enabledPatterns, models);
+  // No curation configured → no sections at all, rather than calling every
+  // model "Disabled" (pi would show them all too).
+  const sectioned = enabled.size > 0;
+  const entries: (ChatModel & { group: string; rank: number })[] = [];
   for (const m of models) {
     const id = piModelId(m);
     if (!id) continue;
+    const on = enabled.has(id);
     entries.push({
       id,
-      label: `${m.name || m.id} (${m.provider})`,
+      label: m.name || (m.id as string),
       description: piModelDescription(m),
+      group: m.provider as string,
+      rank: sectioned && !on ? 1 : 0,
+      ...(sectioned
+        ? { section: on ? SECTION_ENABLED : SECTION_DISABLED }
+        : {}),
     });
   }
-  return entries;
+  // Stable, so a provider's models keep the order pi listed them in.
+  return entries
+    .sort(
+      (a, b) =>
+        providerRank(a.group) - providerRank(b.group) ||
+        a.group.localeCompare(b.group) ||
+        a.rank - b.rank,
+    )
+    .map(({ rank: _rank, ...m }) => m);
 }
 
 function messageRole(message: PiLine["message"]): string | undefined {

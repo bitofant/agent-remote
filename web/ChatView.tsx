@@ -15,6 +15,7 @@ import type {
   AssistantTrace,
   ChatImageRef,
   ChatMessage,
+  ChatModel,
   ChatPart,
   ChatState,
   ChatUiRequest,
@@ -1265,6 +1266,10 @@ export function ChatView({
   // per-session, so unlike `/resume` nothing is lifted into App.
   const [rewindPickerOpen, setRewindPickerOpen] = useState(false);
   const [rewindTarget, setRewindTarget] = useState<ChatMessage | null>(null);
+  // Model switcher: which group (pi: provider) the second box is listing. Only
+  // a filter — switching it lists other models but selects none, so browsing
+  // away never fires a `set-model` the user didn't ask for.
+  const [browseGroup, setBrowseGroup] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1732,6 +1737,36 @@ export function ChatView({
     insertAtCursor("/");
   };
 
+  // Model switcher. A harness that groups its catalog (pi, by provider) gets a
+  // group box + a model box; an ungrouped one keeps the single flat menu.
+  // Group order is the order they first appear — the harness owns it.
+  const modelGroups = useMemo(() => {
+    const out: string[] = [];
+    for (const m of state.models)
+      if (m.group && !out.includes(m.group)) out.push(m.group);
+    return out;
+  }, [state.models]);
+  const currentGroup =
+    state.models.find((m) => m.id === state.currentModel)?.group ?? null;
+  // Follow the session's own model unless the user is browsing elsewhere.
+  const shownGroup = browseGroup ?? currentGroup ?? modelGroups[0] ?? null;
+  const shownModels = shownGroup
+    ? state.models.filter((m) => m.group === shownGroup)
+    : state.models;
+  // Blank while browsing another group: none of the listed models is the live
+  // one, and showing the first as selected would be a lie.
+  const modelValue = shownModels.some((m) => m.id === state.currentModel)
+    ? (state.currentModel ?? "")
+    : "";
+  // Second-level headings within the box (pi: Enabled/Disabled). Entries arrive
+  // already contiguous by section, so a run-grouping preserves harness order.
+  const modelSections: { section?: string; models: ChatModel[] }[] = [];
+  for (const m of shownModels) {
+    const last = modelSections[modelSections.length - 1];
+    if (last && last.section === m.section) last.models.push(m);
+    else modelSections.push({ section: m.section, models: [m] });
+  }
+
   // Memoized so expanding a tool bubble doesn't re-render every other one.
   const agentsCtx = useMemo(
     () => ({
@@ -1752,15 +1787,30 @@ export function ChatView({
         state.modes.length > 0 ||
         state.commands.some((c) => c.name === "usage")) && (
         <div className="chat-header">
+          {modelGroups.length > 0 && (
+            <label className="chat-model">
+              <span>Provider</span>
+              <select
+                value={shownGroup ?? ""}
+                onChange={(e) => setBrowseGroup(e.target.value)}
+              >
+                {modelGroups.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {state.models.length > 0 && (
             <label className="chat-model">
               <span>Model</span>
               <select
-                value={state.currentModel ?? ""}
+                value={modelValue}
                 /* The closed select is width-capped, so a long label is
                    clipped — keep the full one reachable on hover. */
                 title={
-                  state.models.find((m) => m.id === state.currentModel)?.label ??
+                  shownModels.find((m) => m.id === modelValue)?.label ??
                   state.currentModel ??
                   undefined
                 }
@@ -1771,6 +1821,8 @@ export function ChatView({
                   })
                 }
               >
+                {/* Browsing another group: nothing here is live yet. */}
+                {!modelValue && <option value="">Select model…</option>}
                 {/* If the current model isn't in the list, show it anyway. */}
                 {state.currentModel &&
                   !state.models.some((m) => m.id === state.currentModel) && (
@@ -1778,11 +1830,20 @@ export function ChatView({
                       {state.currentModel}
                     </option>
                   )}
-                {state.models.map((m) => (
-                  <option key={m.id} value={m.id} title={m.description}>
-                    {m.label}
-                  </option>
-                ))}
+                {modelSections.map((s, i) => {
+                  const options = s.models.map((m) => (
+                    <option key={m.id} value={m.id} title={m.description}>
+                      {m.label}
+                    </option>
+                  ));
+                  return s.section ? (
+                    <optgroup key={s.section} label={s.section}>
+                      {options}
+                    </optgroup>
+                  ) : (
+                    <Fragment key={i}>{options}</Fragment>
+                  );
+                })}
               </select>
             </label>
           )}

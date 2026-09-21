@@ -566,6 +566,16 @@ export interface ChatModel {
   id: string;
   label: string;
   description?: string;
+  /** Optional grouping key (pi: the provider). When any model carries one the
+   * UI splits the switcher into a group box + a model box, so a large catalog
+   * stays navigable. Group *order* is the order groups first appear in
+   * `models` — the harness owns it, since only it knows what its groups mean
+   * (e.g. which providers are local). Omitted → one flat menu. */
+  group?: string;
+  /** Optional second-level heading *within* a group (pi: Enabled/Disabled, from
+   * its `enabledModels` curation), rendered as an `<optgroup>`. Like `group`,
+   * section order is first-appearance order and the harness owns the wording. */
+  section?: string;
 }
 
 /** A permission/behaviour mode the session can switch between at runtime

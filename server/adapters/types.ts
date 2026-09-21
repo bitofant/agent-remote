@@ -102,7 +102,7 @@ export interface HarnessAdapter {
   createEventParser?(): SessionEventParser;
   /** Optional: present when this harness runs as a structured chat session
    * (ui: "chat", piped stdio) via a translator over manager-owned stdio. */
-  createChatTranslator?(): ChatTranslator;
+  createChatTranslator?(opts: SessionOptions): ChatTranslator;
   /** Optional: present when this harness runs as a chat session but owns its own
    * process/SDK (ui: "chat"). Takes precedence over createChatTranslator. */
   createChatSession?(opts: SessionOptions): ChatSession;

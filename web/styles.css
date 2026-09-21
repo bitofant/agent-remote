@@ -2899,7 +2899,10 @@ button.auto-press::after {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  /* A grouped catalog adds a second box (provider + model), which on a phone
+     no longer fits beside the usage button — wrap rather than overflow. */
+  flex-wrap: wrap;
+  gap: 6px 10px;
   padding: 6px 10px;
   background: var(--panel);
 }
@@ -2910,6 +2913,9 @@ button.auto-press::after {
   gap: 6px;
   font-size: 12px;
   color: var(--muted);
+  /* Overrides the flex default (auto), or the select can't shrink below its
+     widest option and the row overflows instead of ellipsizing. */
+  min-width: 0;
 }
 /* Replaces the native dropdown arrow lost to appearance:none. A mask (not a
    background-image) so the glyph is filled with a palette colour and follows
@@ -2937,11 +2943,11 @@ button.auto-press::after {
   padding: 4px 22px 4px 8px;
   font-size: 13px;
   cursor: pointer;
-  /* A select sizes to its widest option, and the header is a non-wrapping flex
-     row — so a harness with long model names (pi qualifies every entry with its
-     provider) would push the usage button off a narrow screen. Only the closed
-     state is clipped; the open dropdown still shows each label in full. */
+  /* A select sizes to its widest option, so one long model name (pi lists
+     dozens) would otherwise set the whole box's width. Only the closed state is
+     clipped; the open dropdown still shows each label in full. */
   max-width: min(260px, 42vw);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

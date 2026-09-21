@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatEvent } from "../../shared/protocol.js";
@@ -41,12 +41,19 @@ d("pi model switcher (live)", () => {
       const menu = await driver.waitFor(isModels);
       expect(menu.models.length).toBeGreaterThan(0);
       // Every entry must be addressable back to pi's (provider, modelId) pair,
-      // and carry a label naming the provider that serves it.
+      // and be grouped under the provider that serves it.
       for (const m of menu.models) {
         const target = parsePiModelId(m.id);
         expect(target, `unaddressable menu id: ${m.id}`).not.toBeNull();
-        expect(m.label).toContain(target!.provider);
+        expect(m.group).toBe(target!.provider);
       }
+      // Groups are contiguous — the UI derives its provider box from the order
+      // they first appear, so a provider must never reappear later.
+      const order = menu.models.map((m) => m.group as string);
+      const firstSeen = [...new Set(order)];
+      expect(order).toEqual(
+        firstSeen.flatMap((g) => order.filter((x) => x === g)),
+      );
     } finally {
       driver.close();
     }
@@ -65,6 +72,46 @@ d("pi model switcher (live)", () => {
 
       driver.act({ type: "set-model", model: target.id });
       await driver.waitFor(changedTo(target.id));
+    } finally {
+      driver.close();
+    }
+  });
+
+  it("sections a provider into Enabled/Disabled from pi's project settings", async () => {
+    // Two phases in one cwd: learn the real catalog, then curate one of its
+    // models via a project-scoped `.pi/settings.json` and re-read it. Pins the
+    // precedence rule (project settings replace global) end-to-end, which is
+    // otherwise only inferred from pi's `deepMergeSettings` source.
+    const cwd = mkdtempSync(join(tmpdir(), "pi-model-"));
+    const first = pi!.create(cwd);
+    let target: string;
+    try {
+      target = (await first.waitFor(isModels)).models[0].id;
+    } finally {
+      first.close();
+    }
+
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ enabledModels: [target] }),
+    );
+
+    const driver = pi!.create(cwd);
+    try {
+      const menu = await driver.waitFor(isModels);
+      const chosen = menu.models.find((m) => m.id === target)!;
+      expect(chosen.section).toBe("Enabled");
+      // Everything else in that provider is Disabled, and Enabled sorts first.
+      const peers = menu.models.filter((m) => m.group === chosen.group);
+      expect(peers[0].id).toBe(target);
+      expect(peers.slice(1).every((m) => m.section === "Disabled")).toBe(true);
+      // Exactly one, which is what discriminates replace from merge: the global
+      // settings curate their own models, so merging would enable those too.
+      expect(menu.models.filter((m) => m.section === "Enabled")).toHaveLength(1);
+      expect(new Set(menu.models.map((m) => m.section))).toEqual(
+        new Set(["Enabled", "Disabled"]),
+      );
     } finally {
       driver.close();
     }
