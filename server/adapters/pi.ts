@@ -7,6 +7,7 @@ import type {
   ChatAction,
   ChatEvent,
   ChatImageRef,
+  ChatModel,
   ChatUiOption,
   ChatUiRequest,
 } from "../../shared/protocol.js";
@@ -75,7 +76,13 @@ interface PiLine {
   // response
   command?: string;
   success?: boolean;
-  data?: { commands?: { name?: string; description?: string }[] };
+  // get_commands → {commands}; get_available_models → {models}; get_state →
+  // {model,…}; set_model → the Model object itself (no wrapper — verified live).
+  data?: {
+    commands?: { name?: string; description?: string }[];
+    models?: PiModel[];
+    model?: PiModel | null;
+  } & PiModel;
   // auto_retry_start / auto_retry_end / extension_error / compaction_end
   error?: string;
   errorMessage?: string;
@@ -87,8 +94,25 @@ interface PiLine {
   willRetry?: boolean;
 }
 
+/** One pi Model object, trimmed to the fields the menu reads. pi's full shape
+ * (api/baseUrl/cost/compat/…) is deliberately left unknown. */
+interface PiModel {
+  id?: string;
+  name?: string;
+  provider?: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+}
+
 class PiRpcTranslator implements ChatTranslator {
   private lineBuffer = "";
+  /** Current model as a composite `provider/id`, or null until pi says.
+   * Held here because pi's `models` event carries the current selection and the
+   * reducer's fold overwrites it — see the out-of-order note on `init`. */
+  private currentModel: string | null = null;
+  /** Whether the user has switched model in this session. Once they have, a
+   * `get_state` reply is stale by definition and must not revert the menu. */
+  private modelChosen = false;
   /** Whether pi is currently running an agent loop; decides whether a prompt
    * must be sent with streamingBehavior (pi rejects a bare prompt mid-run).
    * Held from agent_start until agent_settled (NOT the earlier agent_end, which
@@ -99,10 +123,21 @@ class PiRpcTranslator implements ChatTranslator {
    * message_start/end are surfaced; user/toolResult messages are not). */
   private assistantOpen = false;
 
-  /** Query the available slash commands (extension commands, prompt templates,
-   * skills) once at startup so the UI can offer a `/` palette. */
+  /** Query the slash commands (extension commands, prompt templates, skills)
+   * and the model catalog + current selection once at startup, so the UI can
+   * offer a `/` palette and a model switcher.
+   *
+   * pi answers these **out of order** (verified live: a `get_state` came back
+   * ahead of a `set_model` sent before it), so nothing here may assume the
+   * replies arrive in the order asked — see `currentModel`. */
   init(): string {
-    return '{"type":"get_commands"}\n';
+    return [
+      { type: "get_commands" },
+      { type: "get_available_models" },
+      { type: "get_state" },
+    ]
+      .map((cmd) => `${JSON.stringify(cmd)}\n`)
+      .join("");
   }
 
   /** Rebuild a resumed conversation from pi's on-disk session JSONL — the RPC
@@ -178,9 +213,22 @@ class PiRpcTranslator implements ChatTranslator {
           events: [{ type: "ui-request-done", requestId: action.requestId }],
         };
       }
+      case "set-model": {
+        // pi addresses a model by provider + id, so the menu id carries both.
+        const target = parsePiModelId(action.model);
+        if (!target) return { data: "", events: [] };
+        return {
+          data: `${JSON.stringify({
+            type: "set_model",
+            provider: target.provider,
+            modelId: target.modelId,
+          })}\n`,
+          // No optimistic event: pi's reply confirms the switch (or reports
+          // "Model not found", which the generic response branch surfaces).
+          events: [],
+        };
+      }
       default:
-        // e.g. set-model: pi's RPC supports it, but this translator does not yet
-        // surface a model list to the UI, so no such action is sent. No-op.
         return { data: "", events: [] };
     }
   }
@@ -303,6 +351,26 @@ class PiRpcTranslator implements ChatTranslator {
             },
           ];
         }
+        // get_available_models reply → the model switcher's menu. Restate the
+        // current model: the `models` fold overwrites it, so a list landing
+        // after get_state would otherwise blank the selection.
+        if (line.command === "get_available_models" && line.data?.models) {
+          return [
+            {
+              type: "models",
+              models: piModels(line.data.models),
+              current: this.currentModel,
+            },
+          ];
+        }
+        // get_state reply → which model the session started on. Skipped once the
+        // user has switched: pi's replies race, so a get_state in flight when
+        // the switch landed reports the *old* model and would revert the menu.
+        if (line.command === "get_state" && line.success !== false)
+          return this.modelChanged(line.data?.model, false);
+        // set_model reply → `data` IS the Model object (not `{model}`).
+        if (line.command === "set_model" && line.success !== false)
+          return this.modelChanged(line.data, true);
         // Other command acknowledgments are uninteresting unless they failed.
         return line.success === false && line.error
           ? [{ type: "notice", level: "error", text: line.error }]
@@ -362,6 +430,21 @@ class PiRpcTranslator implements ChatTranslator {
     }
   }
 
+  /** Adopt a model pi reported. `chosen` marks it as the user's own pick, which
+   * latches out later (racing) `get_state` replies. */
+  private modelChanged(model: PiModel | null | undefined, chosen: boolean): ChatEvent[] {
+    if (chosen) this.modelChosen = true;
+    else if (this.modelChosen) return [];
+    const id = model ? piModelId(model) : null;
+    if (!id) return [];
+    // A confirmed switch is always reported, even when it lands on the model
+    // already in use: the user asked and pi answered, so the UI must settle on
+    // that. Only an unsolicited state echo is deduped.
+    if (!chosen && id === this.currentModel) return [];
+    this.currentModel = id;
+    return [{ type: "model-changed", current: id }];
+  }
+
   private translateUiRequest(line: PiLine): ChatEvent[] {
     if (!line.id) return [];
     switch (line.method) {
@@ -415,6 +498,54 @@ function piOptions(options: string[] | undefined): ChatUiOption[] | undefined {
           : ("accept" as const),
     };
   });
+}
+
+// --- model menu -------------------------------------------------------------
+//
+// pi addresses a model by (provider, id), but `ChatModel.id` is a single opaque
+// string, so the menu id is the composite `provider/id` — which is also pi's own
+// `--model provider/id` syntax. It splits at the FIRST slash: a provider name
+// never contains one, while ids routinely do ("deepseek-ai/DeepSeek-V4-Pro").
+// The provider is part of the *label* too, because one catalog serves the same
+// model from several providers (baseten's and a local vLLM's DeepSeek differ
+// only by who runs them).
+
+/** Composite menu id for a pi model, or null if it can't be addressed. */
+export function piModelId(m: PiModel): string | null {
+  return m.id && m.provider ? `${m.provider}/${m.id}` : null;
+}
+
+/** Split a composite menu id back into pi's (provider, modelId) pair. */
+export function parsePiModelId(
+  id: string,
+): { provider: string; modelId: string } | null {
+  const slash = id.indexOf("/");
+  if (slash <= 0 || slash === id.length - 1) return null;
+  return { provider: id.slice(0, slash), modelId: id.slice(slash + 1) };
+}
+
+/** Tooltip detail: context window and whether the model reasons. */
+function piModelDescription(m: PiModel): string {
+  const bits: string[] = [];
+  if (m.contextWindow) bits.push(`${Math.round(m.contextWindow / 1000)}K context`);
+  if (m.reasoning) bits.push("reasoning");
+  return bits.join(" · ");
+}
+
+/** pi's model catalog as menu entries, in pi's own order (already grouped by
+ * provider). Entries pi can't address are dropped rather than guessed at. */
+export function piModels(models: PiModel[]): ChatModel[] {
+  const entries: ChatModel[] = [];
+  for (const m of models) {
+    const id = piModelId(m);
+    if (!id) continue;
+    entries.push({
+      id,
+      label: `${m.name || m.id} (${m.provider})`,
+      description: piModelDescription(m),
+    });
+  }
+  return entries;
 }
 
 function messageRole(message: PiLine["message"]): string | undefined {
