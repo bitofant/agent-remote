@@ -2937,6 +2937,14 @@ button.auto-press::after {
   padding: 4px 22px 4px 8px;
   font-size: 13px;
   cursor: pointer;
+  /* A select sizes to its widest option, and the header is a non-wrapping flex
+     row — so a harness with long model names (pi qualifies every entry with its
+     provider) would push the usage button off a narrow screen. Only the closed
+     state is clipped; the open dropdown still shows each label in full. */
+  max-width: min(260px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-model select:focus {
   outline: none;

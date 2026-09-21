@@ -1757,6 +1757,13 @@ export function ChatView({
               <span>Model</span>
               <select
                 value={state.currentModel ?? ""}
+                /* The closed select is width-capped, so a long label is
+                   clipped — keep the full one reachable on hover. */
+                title={
+                  state.models.find((m) => m.id === state.currentModel)?.label ??
+                  state.currentModel ??
+                  undefined
+                }
                 onChange={(e) =>
                   client.chatAction(sessionId, {
                     type: "set-model",

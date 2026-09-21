@@ -126,3 +126,176 @@ describe("pi text/thinking deltas", () => {
     ]);
   });
 });
+
+// --- model switcher ---------------------------------------------------------
+//
+// pi answers `get_available_models` / `get_state` / `set_model` as `response`
+// lines. Two facts drive the shape of these tests, both observed live:
+//   - responses are NOT ordered against their requests (a `get_state` came back
+//     before an earlier `set_model`), so the translator must hold the current
+//     model itself rather than relying on arrival order;
+//   - `set_model`'s `data` IS the Model object, while `get_state`'s nests it
+//     under `data.model`.
+
+/** A pi Model object, trimmed to the fields the menu reads. */
+function model(provider: string, id: string, name?: string, extra = {}) {
+  return { id, name: name ?? id, provider, contextWindow: 200000, ...extra };
+}
+
+function modelsResponse(models: unknown[]) {
+  return {
+    type: "response",
+    command: "get_available_models",
+    success: true,
+    data: { models },
+  };
+}
+
+describe("pi model switcher", () => {
+  it("asks for the model list and current state at startup", () => {
+    const t = translator();
+    const init = t.init!();
+    expect(init).toContain('"get_available_models"');
+    expect(init).toContain('"get_state"');
+    // Each query is its own JSONL line.
+    expect(init.trimEnd().split("\n")).toHaveLength(3);
+  });
+
+  it("maps the model list to provider-qualified menu entries", () => {
+    const t = translator();
+    const events = feed(
+      t,
+      modelsResponse([
+        model("anthropic", "claude-sonnet-4-20250514", "Claude Sonnet 4"),
+        model("vllm", "Qwen3.8-Flash-Next"),
+      ]),
+    );
+    expect(events).toEqual([
+      {
+        type: "models",
+        current: null,
+        models: [
+          {
+            id: "anthropic/claude-sonnet-4-20250514",
+            label: "Claude Sonnet 4 (anthropic)",
+            description: expect.stringContaining("200K context"),
+          },
+          {
+            id: "vllm/Qwen3.8-Flash-Next",
+            label: "Qwen3.8-Flash-Next (vllm)",
+            description: expect.any(String),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps a model id that itself contains a slash addressable", () => {
+    // Provider names never contain "/", but ids routinely do — so the composite
+    // id splits at the FIRST slash only.
+    const t = translator();
+    const [listed] = feed(t, modelsResponse([model("baseten", "deepseek-ai/DeepSeek-V4-Pro")]));
+    const id = (listed as { models: { id: string }[] }).models[0].id;
+    expect(id).toBe("baseten/deepseek-ai/DeepSeek-V4-Pro");
+    expect(t.encode({ type: "set-model", model: id }).data).toBe(
+      `${JSON.stringify({
+        type: "set_model",
+        provider: "baseten",
+        modelId: "deepseek-ai/DeepSeek-V4-Pro",
+      })}\n`,
+    );
+  });
+
+  it("reports the current model from get_state", () => {
+    const t = translator();
+    expect(
+      feed(t, {
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: { model: model("vllm", "Qwen3.8-Flash-Next"), thinkingLevel: "high" },
+      }),
+    ).toEqual([{ type: "model-changed", current: "vllm/Qwen3.8-Flash-Next" }]);
+  });
+
+  it("confirms a switch from set_model's own reply", () => {
+    const t = translator();
+    expect(
+      feed(t, {
+        type: "response",
+        command: "set_model",
+        success: true,
+        data: model("vllm", "Qwen3.8-Flash-Next"),
+      }),
+    ).toEqual([{ type: "model-changed", current: "vllm/Qwen3.8-Flash-Next" }]);
+  });
+
+  it("surfaces a rejected switch as an error notice", () => {
+    const t = translator();
+    expect(
+      feed(t, {
+        type: "response",
+        command: "set_model",
+        success: false,
+        error: "Model not found: vllm/nope",
+      }),
+    ).toEqual([
+      { type: "notice", level: "error", text: "Model not found: vllm/nope" },
+    ]);
+  });
+
+  it("carries the known current model into a later list response", () => {
+    // The `models` fold overwrites currentModel wholesale, so a list arriving
+    // after get_state must restate the current model or it would blank it.
+    const t = translator();
+    feed(t, {
+      type: "response",
+      command: "get_state",
+      success: true,
+      data: { model: model("vllm", "Qwen3.8-Flash-Next") },
+    });
+    const [listed] = feed(t, modelsResponse([model("vllm", "Qwen3.8-Flash-Next")]));
+    expect(listed).toMatchObject({ current: "vllm/Qwen3.8-Flash-Next" });
+  });
+
+  it("does not let a late get_state revert a switch the user already made", () => {
+    // Observed live: pi answered a get_state before an earlier set_model.
+    const t = translator();
+    feed(t, {
+      type: "response",
+      command: "set_model",
+      success: true,
+      data: model("vllm", "Qwen3.8-Flash-Next"),
+    });
+    expect(
+      feed(t, {
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: { model: model("vllm", "RedHatAI/gemma-4-31B-it-NVFP4") },
+      }),
+    ).toEqual([]);
+  });
+
+  it("confirms a switch that lands on the model already in use", () => {
+    // Not deduped: the user asked and pi answered, so the menu must settle on
+    // that. Only an unsolicited get_state echo is dropped.
+    const t = translator();
+    const reply = {
+      type: "response",
+      command: "set_model",
+      success: true,
+      data: model("vllm", "Qwen3.8-Flash-Next"),
+    };
+    feed(t, reply);
+    expect(feed(t, reply)).toEqual([
+      { type: "model-changed", current: "vllm/Qwen3.8-Flash-Next" },
+    ]);
+  });
+
+  it("ignores a model entry missing its provider or id", () => {
+    const t = translator();
+    const [listed] = feed(t, modelsResponse([{ name: "orphan" }, model("vllm", "ok")]));
+    expect((listed as { models: unknown[] }).models).toHaveLength(1);
+  });
+});

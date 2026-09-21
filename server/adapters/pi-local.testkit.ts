@@ -79,6 +79,10 @@ export class PiDriver {
   persistable = false;
   sessionId = "";
   private turnWaiters: Array<() => void> = [];
+  private eventWaiters: Array<{
+    pred: (e: ChatEvent) => boolean;
+    resolve: (e: never) => void;
+  }> = [];
   private unsubscribe: () => void;
 
   constructor(
@@ -104,6 +108,11 @@ export class PiDriver {
       onChatEvent: (id, event) => {
         if (id !== this.sessionId) return;
         this.events.push(event);
+        this.eventWaiters = this.eventWaiters.filter((w) => {
+          if (!w.pred(event)) return true;
+          w.resolve(event as never);
+          return false;
+        });
         if (event.type === "ui-request" && event.request.kind === "select") {
           this.manager.chatAction(this.sessionId, {
             type: "ui-response",
@@ -127,6 +136,22 @@ export class PiDriver {
 
   act(action: ChatAction): void {
     this.manager.chatAction(this.sessionId, action);
+  }
+
+  /** Resolve with the first chat event matching `pred` — including ones already
+   * received, since a reply to pi's startup handshake can land before a test
+   * gets to wait for it. */
+  waitFor<T extends ChatEvent>(
+    pred: (e: ChatEvent) => e is T,
+    timeoutMs = 20_000,
+  ): Promise<T> {
+    const seen = this.events.find(pred);
+    if (seen) return Promise.resolve(seen);
+    return withTimeout(
+      new Promise<T>((resolve) => this.eventWaiters.push({ pred, resolve })),
+      timeoutMs,
+      "pi did not emit the awaited event in time",
+    );
   }
 
   close(): void {
