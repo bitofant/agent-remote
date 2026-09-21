@@ -6,7 +6,12 @@
 //       message as a `notice` ChatEvent (the handling we added), so the UI
 //       marks the boundary instead of silently dropping history. This asserts
 //       OUR code and doesn't depend on the model.
-//   (b) Softer/secondary — the model still recalls a fact planted before the
+//   (b) Deterministic — compaction is announced WHILE it runs: the CLI emits no
+//       assistant stream at all for it (verified: `status:"compacting"`, then
+//       ~13s of silence, then the boundary), so without mapping that status the
+//       session looks idle throughout and /compact reads as "nothing happened,
+//       now it's hung". Asserts busy:true + an opening notice.
+//   (c) Softer/secondary — the model still recalls a fact planted before the
 //       compaction, proving the summary carried context forward. This depends
 //       on a lossy, model-generated summary, so it can flake on a small local
 //       model (accepted as a best-effort check).
@@ -48,7 +53,9 @@ describe.skipIf(!local || !up)("claude-local: compact a chat session", () => {
 
     // Trigger manual compaction: /compact runs and returns (busy:false), and
     // the SDK's compact_boundary becomes a notice via the adapter.
+    const before = d.events.length;
     await d.prompt("/compact", 90_000);
+    const turn = d.events.slice(before);
 
     // (a) Deterministic: the backend surfaced the compaction boundary as a
     // notice — the adapter behaviour we added, independent of the model.
@@ -62,7 +69,26 @@ describe.skipIf(!local || !up)("claude-local: compact a chat session", () => {
       "compaction notice missing from ChatState",
     ).toBe(true);
 
-    // (b) Softer/secondary: after compaction the running history is a lossy,
+    // (b) Deterministic: the turn reported itself as working. Compaction
+    // produces no assistant message, so `message_start` (the only other thing
+    // that flips busy) never fires — this can only come from the status map.
+    expect(
+      turn.some((e) => e.type === "busy" && e.busy === true),
+      "compaction never reported busy — the UI would look idle while it ran",
+    ).toBe(true);
+    // ...announced before the boundary, not only after it.
+    const opening = turn.findIndex(
+      (e) => e.type === "notice" && e.text.startsWith("Compacting context"),
+    );
+    const closing = turn.findIndex(
+      (e) => e.type === "notice" && e.text.startsWith("Compacted context"),
+    );
+    expect(opening, "no notice when compaction started").toBeGreaterThanOrEqual(0);
+    expect(opening, "compaction announced only after it finished").toBeLessThan(
+      closing,
+    );
+
+    // (c) Softer/secondary: after compaction the running history is a lossy,
     // model-generated summary — assert the model still recalls the planted
     // codeword from it (may flake on a small local model).
     await d.prompt(

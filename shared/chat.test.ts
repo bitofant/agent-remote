@@ -216,6 +216,61 @@ describe("applyChatEvent", () => {
     expect(state.notices[state.notices.length - 1].text).toBe("notice 24");
   });
 
+  it("anchors a notice to the turn it arrived during", () => {
+    const state = reduce([
+      {
+        type: "user-message",
+        message: {
+          id: "u1",
+          role: "user",
+          parts: [{ type: "text", text: "hi" }],
+          createdAt: 0,
+        },
+      },
+      { type: "notice", level: "info", text: "early" },
+      { type: "assistant-start", messageId: "a1" },
+      { type: "notice", level: "info", text: "mid-turn" },
+      { type: "assistant-end" },
+    ]);
+    // Not pinned to the end: each keeps the place it happened, so later turns
+    // render below it.
+    expect(state.notices.map((n) => n.anchorMessageId)).toEqual(["u1", "a1"]);
+  });
+
+  it("leaves a notice that predates every message unanchored", () => {
+    const state = reduce([{ type: "notice", level: "error", text: "boom" }]);
+    expect(state.notices[0].anchorMessageId).toBeUndefined();
+  });
+
+  it("rewind drops notices about dropped turns, keeps unanchored ones", () => {
+    const state = reduce([
+      { type: "notice", level: "info", text: "at startup" },
+      {
+        type: "user-message",
+        message: {
+          id: "u1",
+          role: "user",
+          parts: [{ type: "text", text: "one" }],
+          createdAt: 0,
+        },
+      },
+      { type: "assistant-start", messageId: "a1" },
+      { type: "assistant-end" },
+      {
+        type: "user-message",
+        message: {
+          id: "u2",
+          role: "user",
+          parts: [{ type: "text", text: "two" }],
+          createdAt: 0,
+        },
+      },
+      { type: "notice", level: "info", text: "about u2" },
+      { type: "rewind", messageId: "u2" },
+    ]);
+    expect(state.notices.map((n) => n.text)).toEqual(["at startup"]);
+  });
+
   it("adds, de-duplicates, and clears ui-requests", () => {
     const req = {
       id: "r1",

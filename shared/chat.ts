@@ -324,11 +324,21 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
       };
 
     case "notice":
+      // Anchored like a trace, so it keeps its place in the transcript instead
+      // of being pinned under it: a compaction/resume line must stay where it
+      // happened, with later turns rendering below it.
       return {
         ...state,
         notices: [
           ...state.notices,
-          { level: event.level, text: event.text, at: Date.now() },
+          {
+            level: event.level,
+            text: event.text,
+            at: Date.now(),
+            anchorMessageId:
+              state.streaming?.id ??
+              state.messages[state.messages.length - 1]?.id,
+          },
         ].slice(-MAX_NOTICES),
       };
 
@@ -421,7 +431,7 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
       // The harness has truncated its own context back to just before this
       // prompt; mirror that here. Everything in flight belonged to the dropped
       // turns, so it all goes — session-level state (models/modes/commands/
-      // capabilities/notices/assistant config) is unaffected by a rewind.
+      // capabilities/assistant config) is unaffected by a rewind.
       const idx = state.messages.findIndex((m) => m.id === event.messageId);
       if (idx === -1) return state;
       const messages = state.messages.slice(0, idx);
@@ -439,6 +449,12 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
         rewindPreview: null,
         assistantTraces: state.assistantTraces.filter(
           (t) => t.anchorMessageId !== undefined && kept.has(t.anchorMessageId),
+        ),
+        // A notice about a dropped turn goes with it; one that predates every
+        // message (session start) still leads the surviving transcript.
+        notices: state.notices.filter(
+          (n) =>
+            n.anchorMessageId === undefined || kept.has(n.anchorMessageId),
         ),
         agents: reachableAgents(messages, state.agents),
       };
