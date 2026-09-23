@@ -13,6 +13,7 @@ import type {
   AgentRun,
   AssistantDecision,
   AssistantTrace,
+  ChatEffort,
   ChatImageRef,
   ChatMessage,
   ChatModel,
@@ -1005,6 +1006,107 @@ function UsageIcon() {
   );
 }
 
+// Gauge glyph for the effort button; the needle sweeps left → right with the
+// level's position in the harness's (least → most) list. -1 = unknown/default.
+function EffortIcon({ level }: { level: number }) {
+  const deg = level < 0 ? 0 : -80 + 160 * level;
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M2 12a6 6 0 0 1 12 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <line
+        x1="8"
+        y1="12"
+        x2="8"
+        y2="6.5"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        transform={`rotate(${deg} 8 12)`}
+      />
+      <circle cx="8" cy="12" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Reasoning-effort picker: an icon button opening a menu of the current model's
+// levels. The harness owns the list (and a "default" row, if it has one).
+function EffortMenu({
+  efforts,
+  current,
+  onPick,
+}: {
+  efforts: ChatEffort[];
+  current: string | null;
+  onPick: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  const selected = efforts.find((e) => e.id === current);
+  // Needle position over the real levels only (a "default" row isn't one).
+  const levels = efforts.filter((e) => e.id !== "default");
+  const idx = selected ? levels.indexOf(selected) : -1;
+  const level = idx < 0 ? -1 : levels.length > 1 ? idx / (levels.length - 1) : 1;
+  const title = `Reasoning effort: ${selected?.label ?? "unknown"}`;
+  return (
+    <div className="chat-effort-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className={`chat-usage-btn${open ? " open" : ""}`}
+        title={title}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <EffortIcon level={level} />
+      </button>
+      {open && (
+        <div className="chat-effort-menu" role="menu" aria-label="Reasoning effort">
+          <div className="chat-effort-title">Reasoning effort</div>
+          {efforts.map((e) => (
+            <button
+              key={e.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={e.id === current}
+              className={`chat-effort-item${e.id === current ? " selected" : ""}`}
+              title={e.description}
+              onClick={() => {
+                setOpen(false);
+                if (e.id !== current) onPick(e.id);
+              }}
+            >
+              <span className="chat-effort-check">{e.id === current ? "✓" : ""}</span>
+              {e.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Utilization → severity class (drives the bar color: calm → warn → hot).
 function usageLevel(pct: number): string {
   if (pct >= 90) return "hot";
@@ -1784,6 +1886,7 @@ export function ChatView({
       style={{ display: active ? "flex" : "none" }}
     >
       {(state.models.length > 0 ||
+        state.efforts.length > 0 ||
         state.modes.length > 0 ||
         state.commands.some((c) => c.name === "usage")) && (
         <div className="chat-header">
@@ -1846,6 +1949,15 @@ export function ChatView({
                 })}
               </select>
             </label>
+          )}
+          {state.efforts.length > 0 && (
+            <EffortMenu
+              efforts={state.efforts}
+              current={state.currentEffort}
+              onPick={(effort) =>
+                client.chatAction(sessionId, { type: "set-effort", effort })
+              }
+            />
           )}
           {state.modes.length > 0 && (
             <label className="chat-model">

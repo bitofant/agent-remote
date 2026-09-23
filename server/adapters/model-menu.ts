@@ -18,6 +18,8 @@
 //     enterprise catalog lists both. It gets its own pruning group (so both survive)
 //     and sorts after the plain row (so the plain one is the default pick).
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
+import type { ChatEffort } from "../../shared/protocol.js";
+import { effortOption } from "./effort.js";
 
 // Family ordering (smallest → largest). Also the set of recognized families.
 export const KNOWN_MODEL_ORDER = ["haiku", "sonnet", "opus", "fable", "mythos"];
@@ -164,4 +166,36 @@ export function pickDefault(
 function compare(a: number[], b: number[]): number {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
   return 0;
+}
+
+/** Effort id meaning "no override" — clears the flag so the CLI's configured
+ * effort (settings `effortLevel`, else its per-model default) applies. */
+export const DEFAULT_EFFORT = "default";
+
+/** Effort picker for `model`: its `supportedEffortLevels` behind a Default row.
+ * `chosen` is the user's override (undefined = Default); an override the model
+ * doesn't list reads as unknown (null) — the CLI silently downgrades it, and it
+ * reports no effective level we could show instead. */
+export function effortMenu(
+  model: ModelInfo | undefined,
+  chosen: string | undefined,
+): { efforts: ChatEffort[]; current: string | null } {
+  const levels = model?.supportsEffort ? (model.supportedEffortLevels ?? []) : [];
+  if (!levels.length) return { efforts: [], current: null };
+  return {
+    efforts: [
+      {
+        id: DEFAULT_EFFORT,
+        label: "Default",
+        description: "Claude Code's configured effort",
+      },
+      ...levels.map(effortOption),
+    ],
+    current:
+      chosen === undefined
+        ? DEFAULT_EFFORT
+        : (levels as string[]).includes(chosen)
+          ? chosen
+          : null,
+  };
 }

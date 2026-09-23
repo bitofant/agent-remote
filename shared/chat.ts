@@ -100,6 +100,8 @@ export function emptyChatState(): ChatState {
     currentModel: null,
     modes: [],
     currentMode: null,
+    efforts: [],
+    currentEffort: null,
     commands: [],
     usage: null,
     promptSuggestions: [],
@@ -353,6 +355,12 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 
     case "mode-changed":
       return { ...state, currentMode: event.current };
+
+    case "efforts":
+      return { ...state, efforts: event.efforts, currentEffort: event.current };
+
+    case "effort-changed":
+      return { ...state, currentEffort: event.current };
 
     case "commands":
       return { ...state, commands: event.commands };

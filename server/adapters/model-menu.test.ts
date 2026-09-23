@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  effortMenu,
   menuLabel,
   menuModels,
   pickDefault,
@@ -269,5 +270,39 @@ describe("menuModels", () => {
       "claude-sonnet-4-6",
       "claude-opus-4-8",
     ]);
+  });
+});
+
+describe("effortMenu", () => {
+  const opus = {
+    ...m("opus", "Opus"),
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] as (
+      | "low" | "medium" | "high" | "xhigh" | "max"
+    )[],
+  };
+
+  it("lists the model's levels behind a Default row", () => {
+    const { efforts, current } = effortMenu(opus, undefined);
+    expect(efforts.map((e) => e.id)).toEqual([
+      "default", "low", "medium", "high", "xhigh", "max",
+    ]);
+    expect(efforts[4].label).toBe("Extra high");
+    expect(current).toBe("default");
+  });
+
+  it("selects the user's override", () => {
+    expect(effortMenu(opus, "xhigh").current).toBe("xhigh");
+  });
+
+  it("reads an override the model doesn't list as unknown", () => {
+    const small = { ...opus, supportedEffortLevels: ["low", "high"] as ("low" | "high")[] };
+    expect(effortMenu(small, "max").current).toBeNull();
+  });
+
+  it("offers no picker for a model without effort support", () => {
+    expect(effortMenu(m("haiku"), undefined)).toEqual({ efforts: [], current: null });
+    expect(effortMenu({ ...opus, supportsEffort: false }, undefined).efforts).toEqual([]);
+    expect(effortMenu(undefined, undefined).efforts).toEqual([]);
   });
 });

@@ -12,6 +12,7 @@ import type {
   ChatUiRequest,
 } from "../../shared/protocol.js";
 import { promptParts } from "../../shared/chat.js";
+import { effortOption } from "./effort.js";
 import type {
   ChatTranslator,
   HarnessAdapter,
@@ -82,7 +83,10 @@ interface PiLine {
     commands?: { name?: string; description?: string }[];
     models?: PiModel[];
     model?: PiModel | null;
+    thinkingLevel?: string;
   } & PiModel;
+  // thinking_level_changed
+  level?: string;
   // auto_retry_start / auto_retry_end / extension_error / compaction_end
   error?: string;
   errorMessage?: string;
@@ -102,6 +106,8 @@ interface PiModel {
   provider?: string;
   contextWindow?: number;
   reasoning?: boolean;
+  /** Level → provider value; `null` removes a level, xhigh/max need an entry. */
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 class PiRpcTranslator implements ChatTranslator {
@@ -115,6 +121,12 @@ class PiRpcTranslator implements ChatTranslator {
   /** Whether the user has switched model in this session. Once they have, a
    * `get_state` reply is stale by definition and must not revert the menu. */
   private modelChosen = false;
+  /** Thinking levels the current model offers (empty = no picker) + the level.
+   * Held for the same reason as `currentModel`: the replies race. */
+  private effortLevels: string[] = [];
+  private currentEffort: string | null = null;
+  /** Once pi has pushed `thinking_level_changed`, a get_state level is stale. */
+  private effortSeen = false;
   /** Whether pi is currently running an agent loop; decides whether a prompt
    * must be sent with streamingBehavior (pi rejects a bare prompt mid-run).
    * Held from agent_start until agent_settled (NOT the earlier agent_end, which
@@ -230,6 +242,13 @@ class PiRpcTranslator implements ChatTranslator {
           events: [],
         };
       }
+      case "set-effort":
+        return {
+          data: `${JSON.stringify({ type: "set_thinking_level", level: action.effort })}\n`,
+          // No optimistic event: pi pushes thinking_level_changed when it
+          // changes, and a clamped no-op correctly leaves the menu alone.
+          events: [],
+        };
       default:
         return { data: "", events: [] };
     }
@@ -368,14 +387,34 @@ class PiRpcTranslator implements ChatTranslator {
         // get_state reply → which model the session started on. Skipped once the
         // user has switched: pi's replies race, so a get_state in flight when
         // the switch landed reports the *old* model and would revert the menu.
-        if (line.command === "get_state" && line.success !== false)
-          return this.modelChanged(line.data?.model, false);
+        if (line.command === "get_state" && line.success !== false) {
+          const events = this.modelChanged(line.data?.model, false);
+          if (!this.effortSeen && typeof line.data?.thinkingLevel === "string")
+            this.currentEffort = line.data.thinkingLevel;
+          // The model half is latched by modelChanged; only a model we adopted
+          // may set the level list.
+          if (!this.modelChosen && line.data?.model)
+            events.push(...this.effortsFor(line.data.model));
+          return events;
+        }
         // set_model reply → `data` IS the Model object (not `{model}`).
         if (line.command === "set_model" && line.success !== false)
-          return this.modelChanged(line.data, true);
+          return [
+            ...this.modelChanged(line.data, true),
+            ...(line.data ? this.effortsFor(line.data) : []),
+          ];
         // Other command acknowledgments are uninteresting unless they failed.
         return line.success === false && line.error
           ? [{ type: "notice", level: "error", text: line.error }]
+          : [];
+
+      case "thinking_level_changed":
+        if (typeof line.level !== "string") return [];
+        this.effortSeen = true;
+        this.currentEffort = line.level;
+        // No picker shown → nothing to update.
+        return this.effortLevels.length
+          ? [{ type: "effort-changed", current: line.level }]
           : [];
 
       case "auto_retry_start":
@@ -445,6 +484,22 @@ class PiRpcTranslator implements ChatTranslator {
     if (!chosen && id === this.currentModel) return [];
     this.currentModel = id;
     return [{ type: "model-changed", current: id }];
+  }
+
+  /** Level list for `model`, emitted only when it changes. A model without
+   * reasoning offers just "off" — no choice, so no picker. */
+  private effortsFor(model: PiModel): ChatEvent[] {
+    const all = piThinkingLevels(model);
+    const levels = all.length > 1 ? all : [];
+    if (levels.join() === this.effortLevels.join()) return [];
+    this.effortLevels = levels;
+    return [
+      {
+        type: "efforts",
+        efforts: levels.map(effortOption),
+        current: this.currentEffort,
+      },
+    ];
   }
 
   private translateUiRequest(line: PiLine): ChatEvent[] {
@@ -526,6 +581,20 @@ function providerRank(provider: string): number {
 /** Composite menu id for a pi model, or null if it can't be addressed. */
 export function piModelId(m: PiModel): string | null {
   return m.id && m.provider ? `${m.provider}/${m.id}` : null;
+}
+
+/** Mirrors pi-ai's `getSupportedThinkingLevels`, from the Model object pi
+ * already sends — saves a `get_available_thinking_levels` round trip per switch
+ * (a translator can't issue one from a reply anyway). */
+const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+export function piThinkingLevels(m: PiModel): string[] {
+  if (!m.reasoning) return ["off"];
+  return PI_THINKING_LEVELS.filter((level) => {
+    const mapped = m.thinkingLevelMap?.[level];
+    if (mapped === null) return false;
+    if (level === "xhigh" || level === "max") return mapped !== undefined;
+    return true;
+  });
 }
 
 /** Split a composite menu id back into pi's (provider, modelId) pair. */

@@ -10,6 +10,7 @@ import {
   listSubagents,
   query,
   type SessionMessage,
+  type EffortLevel,
   type ModelInfo,
   type PermissionMode,
   type PermissionResult,
@@ -41,7 +42,13 @@ import type {
   HarnessAdapter,
   SessionOptions,
 } from "./types.js";
-import { menuLabel, menuModels, pickDefault } from "./model-menu.js";
+import {
+  DEFAULT_EFFORT,
+  effortMenu,
+  menuLabel,
+  menuModels,
+  pickDefault,
+} from "./model-menu.js";
 
 // Runtime permission-mode toggle (curated subset of PermissionMode, omits
 // bypassPermissions/dontAsk). `id` is passed to query.setPermissionMode.
@@ -343,6 +350,10 @@ class ClaudeChatSession implements ChatSession {
   /** Current model/mode, so a relaunch resumes with the user's picks. */
   private model?: string;
   private mode: PermissionMode = DEFAULT_MODE;
+  /** Effort override (undefined = the CLI's configured default). */
+  private effort?: EffortLevel;
+  /** Full catalog, for the per-model effort levels on a switch. */
+  private catalog: ModelInfo[] = [];
   /** Ids of every `user-message` we've emitted, in order (live + replayed).
    * A rewind target is one of these; its position is the fallback way to find
    * the matching transcript entry when the exact uuid isn't known. */
@@ -428,6 +439,7 @@ class ClaudeChatSession implements ChatSession {
         // Switchable at runtime via set-mode → setPermissionMode.
         permissionMode: this.mode,
         model: this.model ?? SEED_MODEL,
+        ...(this.effort ? { effort: this.effort } : {}),
         // Snapshot files before edits so a rewind can offer to restore them
         // (Query.rewindFiles is gated on this).
         enableFileCheckpointing: true,
@@ -605,6 +617,11 @@ class ClaudeChatSession implements ChatSession {
       );
   }
 
+  private emitEfforts(model: string | undefined): void {
+    const info = this.catalog.find((m) => m.value === model);
+    this.emit({ type: "efforts", ...effortMenu(info, this.effort) });
+  }
+
   private async loadControlInfo(q: Query): Promise<void> {
     try {
       const [models, commands] = await Promise.all([
@@ -639,6 +656,8 @@ class ClaudeChatSession implements ChatSession {
         })),
         current: current?.value ?? null,
       });
+      this.catalog = models;
+      this.emitEfforts(current?.value);
       this.emit({
         type: "commands",
         commands: commands.map((c: SlashCommand) => ({
@@ -760,9 +779,11 @@ class ClaudeChatSession implements ChatSession {
         this.model = action.model === "default" ? undefined : action.model;
         this.q
           ?.setModel(action.model === "default" ? undefined : action.model)
-          .then(() =>
-            this.emit({ type: "model-changed", current: action.model }),
-          )
+          .then(() => {
+            this.emit({ type: "model-changed", current: action.model });
+            // Levels are per model.
+            this.emitEfforts(action.model);
+          })
           .catch((e: Error) =>
             this.emit({
               type: "notice",
@@ -774,6 +795,27 @@ class ClaudeChatSession implements ChatSession {
       case "set-mode":
         this.applyMode(action.mode as PermissionMode);
         break;
+      case "set-effort": {
+        const effort =
+          action.effort === DEFAULT_EFFORT
+            ? undefined
+            : (action.effort as EffortLevel);
+        // null clears the flag layer → back to the configured default.
+        this.q
+          ?.applyFlagSettings({ effortLevel: effort ?? null })
+          .then(() => {
+            this.effort = effort;
+            this.emit({ type: "effort-changed", current: action.effort });
+          })
+          .catch((e: Error) =>
+            this.emit({
+              type: "notice",
+              level: "error",
+              text: `Effort switch failed: ${e.message}`,
+            }),
+          );
+        break;
+      }
       case "usage":
         void this.reportUsage();
         break;
