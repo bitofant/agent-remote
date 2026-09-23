@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ChatEvent, ChatModel } from "../../shared/protocol.js";
 import type { ChatTranslator } from "./types.js";
-import { createPiAdapter, enabledModelIds, piModels } from "./pi.js";
+import {
+  createPiAdapter,
+  enabledModelIds,
+  piModels,
+  piThinkingLevels,
+} from "./pi.js";
 
 // Pure translator tests: drive pi RPC lines through `push()` and assert the
 // normalized ChatEvents, with no process/tokens. Covers the retry/settle
@@ -316,6 +321,95 @@ describe("pi model switcher", () => {
     const t = translator();
     const [listed] = feed(t, modelsResponse([{ name: "orphan" }, model("vllm", "ok")]));
     expect((listed as { models: unknown[] }).models).toHaveLength(1);
+  });
+});
+
+describe("pi thinking level (effort picker)", () => {
+  const reasoner = (extra = {}) =>
+    model("vllm", "think", undefined, { reasoning: true, ...extra });
+  const state = (m: unknown, thinkingLevel?: string) => ({
+    type: "response",
+    command: "get_state",
+    success: true,
+    data: { model: m, thinkingLevel },
+  });
+  const ids = (e: ChatEvent) =>
+    (e as { efforts: { id: string }[] }).efforts.map((x) => x.id);
+
+  it("mirrors pi's getSupportedThinkingLevels", () => {
+    expect(piThinkingLevels({})).toEqual(["off"]);
+    expect(piThinkingLevels({ reasoning: true })).toEqual([
+      "off", "minimal", "low", "medium", "high",
+    ]);
+    // xhigh/max only when mapped; a null mapping removes any level.
+    expect(
+      piThinkingLevels({
+        reasoning: true,
+        thinkingLevelMap: { minimal: null, xhigh: "x", max: null },
+      }),
+    ).toEqual(["off", "low", "medium", "high", "xhigh"]);
+  });
+
+  it("offers the current model's levels with get_state's level selected", () => {
+    const t = translator();
+    const events = feed(t, state(reasoner(), "medium"));
+    const efforts = events.find((e) => e.type === "efforts")!;
+    expect(ids(efforts)).toEqual(["off", "minimal", "low", "medium", "high"]);
+    expect(efforts).toMatchObject({ current: "medium" });
+  });
+
+  it("offers no picker for a model without reasoning", () => {
+    const t = translator();
+    expect(feed(t, state(model("vllm", "plain"), "off")).map((e) => e.type)).toEqual([
+      "model-changed",
+    ]);
+  });
+
+  it("encodes set-effort as set_thinking_level, without an optimistic echo", () => {
+    const t = translator();
+    expect(t.encode({ type: "set-effort", effort: "low" })).toEqual({
+      data: `${JSON.stringify({ type: "set_thinking_level", level: "low" })}\n`,
+      events: [],
+    });
+  });
+
+  it("follows thinking_level_changed", () => {
+    const t = translator();
+    feed(t, state(reasoner(), "medium"));
+    expect(feed(t, { type: "thinking_level_changed", level: "low" })).toEqual([
+      { type: "effort-changed", current: "low" },
+    ]);
+  });
+
+  it("does not let a late get_state revert a level pi already reported", () => {
+    // Observed live: thinking_level_changed arrived ahead of an earlier get_state.
+    const t = translator();
+    feed(t, { type: "thinking_level_changed", level: "low" });
+    const efforts = feed(t, state(reasoner(), "high")).find((e) => e.type === "efforts");
+    expect(efforts).toMatchObject({ current: "low" });
+  });
+
+  it("swaps the level list when a switch lands on another model", () => {
+    const t = translator();
+    feed(t, state(reasoner(), "high"));
+    const events = feed(t, {
+      type: "response",
+      command: "set_model",
+      success: true,
+      data: model("openai", "gpt", undefined, {
+        reasoning: true,
+        thinkingLevelMap: { xhigh: "xhigh" },
+      }),
+    });
+    expect(ids(events.find((e) => e.type === "efforts")!)).toContain("xhigh");
+    // Switching to a non-reasoning model hides the picker.
+    const off = feed(t, {
+      type: "response",
+      command: "set_model",
+      success: true,
+      data: model("vllm", "plain"),
+    });
+    expect(off.find((e) => e.type === "efforts")).toMatchObject({ efforts: [] });
   });
 });
 

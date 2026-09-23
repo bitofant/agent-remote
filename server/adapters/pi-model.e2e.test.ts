@@ -77,6 +77,26 @@ d("pi model switcher (live)", () => {
     }
   });
 
+  it("offers the model's thinking levels and switches on request", async () => {
+    const driver = session();
+    try {
+      const menu = await driver.waitFor(
+        (e: ChatEvent): e is Extract<ChatEvent, { type: "efforts" }> =>
+          e.type === "efforts" && e.efforts.length > 0,
+      );
+      // pi always knows its level, and it's one of the offered ones.
+      expect(menu.efforts.map((e) => e.id)).toContain(menu.current);
+      const target = menu.efforts.find((e) => e.id !== menu.current)!;
+      driver.act({ type: "set-effort", effort: target.id });
+      // Confirmed by pi's own thinking_level_changed, not an optimistic echo.
+      await driver.waitFor(
+        (e: ChatEvent) => e.type === "effort-changed" && e.current === target.id,
+      );
+    } finally {
+      driver.close();
+    }
+  });
+
   it("sections a provider into Enabled/Disabled from pi's project settings", async () => {
     // Two phases in one cwd: learn the real catalog, then curate one of its
     // models via a project-scoped `.pi/settings.json` and re-read it. Pins the

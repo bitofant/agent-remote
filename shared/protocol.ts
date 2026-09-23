@@ -586,6 +586,15 @@ export interface ChatMode {
   description?: string;
 }
 
+/** A reasoning-effort level the current model accepts (claude: effort, pi:
+ * thinking level). Ordered least → most effort; the harness owns the list,
+ * which changes with the model. */
+export interface ChatEffort {
+  id: string;
+  label: string;
+  description?: string;
+}
+
 /** A slash command the session exposes (invoked by sending its text as a
  * prompt beginning with `/`). */
 export interface ChatCommand {
@@ -807,6 +816,10 @@ export interface ChatState {
   modes: ChatMode[];
   /** Id of the current mode, or null if unknown/unsupported. */
   currentMode: string | null;
+  /** Reasoning-effort levels the current model accepts (empty = no picker). */
+  efforts: ChatEffort[];
+  /** Id of the current effort, or null if unknown. */
+  currentEffort: string | null;
   /** Slash commands the session exposes (empty if none/unsupported). */
   commands: ChatCommand[];
   /** Latest `/usage` snapshot for the usage indicator, or null until fetched /
@@ -878,6 +891,10 @@ export type ChatEvent =
   | { type: "modes"; modes: ChatMode[]; current: string | null }
   /** The current permission mode changed (e.g. via `set-mode`). */
   | { type: "mode-changed"; current: string }
+  /** Effort levels for the current model + the current one (init / model switch). */
+  | { type: "efforts"; efforts: ChatEffort[]; current: string | null }
+  /** The current effort changed (e.g. via `set-effort`, or clamped by a switch). */
+  | { type: "effort-changed"; current: string | null }
   /** Available slash commands (sent on init; may be re-sent if they change). */
   | { type: "commands"; commands: ChatCommand[] }
   /** A refreshed `/usage` snapshot (in response to a `usage` action). */
@@ -949,6 +966,7 @@ export type ChatAction =
     }
   | { type: "set-model"; model: string }
   | { type: "set-mode"; mode: string }
+  | { type: "set-effort"; effort: string }
   /** Fetch a fresh `/usage` snapshot; the adapter replies with a `usage` event.
    * No-op for harnesses that don't report usage. */
   | { type: "usage" }
