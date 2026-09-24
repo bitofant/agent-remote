@@ -88,13 +88,13 @@ export function FolderPicker({
   }, [selected?.path]);
   useEffect(() => inputRef.current?.focus(), []);
 
-  // We only know a folder is missing once its parent is listed; until then stay
-  // optimistic rather than blocking Add on a request in flight.
+  // We only know a folder is missing once its parent is listed. Missing isn't
+  // blocking: the server mkdirs it on add.
   const dirListing = listings[absDir];
   const missing = partial
     ? !!dirListing?.entries && !siblings.some((e) => e.name === partial)
     : !!dirListing?.error;
-  const canAdd = !!text.trim() && !missing;
+  const canAdd = !!text.trim();
 
   const complete = (entry: Entry) => {
     setText(asTyped(entry.path));
@@ -102,12 +102,15 @@ export function FolderPicker({
   };
   const submit = () => {
     if (canAdd) onAdd(text.trim());
-    else if (selected) complete(selected); // typed a partial: finish it instead
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") return onClose();
-    if (e.key === "Enter") return submit();
+    if (e.key === "Enter") {
+      // A partial with a match completes (like Tab); only an unmatched one creates.
+      if (missing && selected) return complete(selected);
+      return submit();
+    }
     if (e.key === "Tab") {
       if (!selected) return;
       e.preventDefault();
@@ -214,7 +217,7 @@ export function FolderPicker({
             onKeyDown={onKeyDown}
           />
           <button className="picker-add" disabled={!canAdd} onClick={submit}>
-            Add
+            {missing ? "Create" : "Add"}
           </button>
         </div>
         <div className="resume-dialog-body picker-tree">
@@ -225,7 +228,11 @@ export function FolderPicker({
           </div>
           {rows(root, 1)}
         </div>
-        {missing && <div className="picker-status">No such folder.</div>}
+        {missing && (
+          <div className="picker-status">
+            {selected ? "No such folder — Enter completes, Create makes it." : "No such folder — it will be created."}
+          </div>
+        )}
       </div>
     </div>
   );

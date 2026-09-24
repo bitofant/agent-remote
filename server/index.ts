@@ -1,6 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { homedir } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -722,6 +722,8 @@ wss.on("connection", (ws: WebSocket, user: string) => {
           break;
         case "addFolder": {
           const path = normalizeFolder(msg.path);
+          // Typing a new path creates it; before the upsert so a failed mkdir adds nothing.
+          mkdirSync(path, { recursive: true });
           lastActiveFolder = path;
           upsertFolder(path);
           broadcastFolders();
