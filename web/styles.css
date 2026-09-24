@@ -800,7 +800,7 @@ body {
 
 .picker-status {
   padding: 4px 14px 10px;
-  color: var(--danger);
+  color: var(--muted);
   font-size: 12px;
 }
 
