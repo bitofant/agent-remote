@@ -5,7 +5,8 @@
 // it lives in the backend, so it runs with no browser open.
 //
 // The flow, in the session's launch folder:
-//   1. branch  — if on the integration branch, cut `<user>/<llm-slug>`
+//   1. branch  — if on the integration branch, cut `<user>/<llm-slug>`;
+//                else put an unpushed agent-cut branch under `<user>/`
 //   2. commit  — `git add -A` + an LLM-written one-line subject
 //   3. push    — `git push -u origin <branch>`
 //   4. PR      — drive a real `pi /pr` session (server/prAgent.ts)
@@ -25,10 +26,12 @@ import {
   gh,
   git,
   hasDiffVsBase,
+  hasUpstream,
   isDirty,
   isRepo,
   mainBranch,
   openPrForBranch,
+  prefixedBranch,
   sanitizeBranchName,
   sanitizeCommitMessage,
   stagedDiff,
@@ -102,6 +105,9 @@ export async function runAutoPr(
   let working = branch;
   if (onMain) {
     working = await cutBranch(ctx, base, instructions);
+    if (!working) return;
+  } else if (working) {
+    working = await prefixBranch(ctx, working);
     if (!working) return;
   }
 
@@ -207,6 +213,25 @@ async function cutBranch(
     return null;
   }
   note("note", `Created branch ${name}`, `off ${base}`);
+  return name;
+}
+
+/** Put a branch the agent cut itself under `<prefix>/` before it's pushed —
+ * else the push strands an unprefixed remote branch. A branch that already
+ * tracks a remote is left alone: its name may carry an open PR. Returns the
+ * branch to use, or null if the rename failed. */
+async function prefixBranch(ctx: RunContext, branch: string): Promise<string | null> {
+  const { folder, note, failed } = ctx;
+  const target = prefixedBranch(branch, await branchPrefix(folder));
+  if (!target || (await hasUpstream(folder, branch))) return branch;
+  let name = target;
+  for (let n = 2; await branchExists(folder, name); n++) name = `${target}-${n}`;
+  const rename = await git(folder, ["branch", "-m", branch, name]);
+  if (!rename.ok) {
+    failed(`Could not rename ${branch} to ${name}`, rename);
+    return null;
+  }
+  note("note", `Renamed branch ${branch} to ${name}`);
   return name;
 }
 
