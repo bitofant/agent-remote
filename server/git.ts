@@ -218,6 +218,17 @@ export async function branchPrefix(cwd: string): Promise<string> {
   return derivePrefix(name.stdout.trim(), email.stdout.trim(), osUser);
 }
 
+/** `<prefix>/<branch>` for a branch not already under the prefix, else null. */
+export function prefixedBranch(branch: string, prefix: string): string | null {
+  return branch.startsWith(`${prefix}/`) ? null : `${prefix}/${branch}`;
+}
+
+/** Has this branch been pushed (tracks an upstream)? */
+export async function hasUpstream(cwd: string, branch: string): Promise<boolean> {
+  const r = await git(cwd, ["rev-parse", "--abbrev-ref", `${branch}@{upstream}`]);
+  return r.ok && r.stdout.trim().length > 0;
+}
+
 /** Squeeze an LLM-proposed branch name into the allowed alphabet: lowercase
  * alphanumerics and dashes only, bounded length. Returns null when nothing
  * usable survives, so the caller falls back to a deterministic name. */

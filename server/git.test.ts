@@ -3,10 +3,24 @@ import {
   derivePrefix,
   fallbackSlug,
   parseOpenPr,
+  prefixedBranch,
   sanitizeBranchName,
   sanitizeCommitMessage,
   truncateDiff,
 } from "./git.js";
+
+describe("prefixedBranch", () => {
+  it("prefixes an agent-cut branch", () => {
+    expect(prefixedBranch("osx-capture-fixes", "joran")).toBe("joran/osx-capture-fixes");
+  });
+  it("leaves an already-prefixed branch alone", () => {
+    expect(prefixedBranch("joran/osx-capture-fixes", "joran")).toBeNull();
+  });
+  it("prefixes a branch under someone else's namespace", () => {
+    expect(prefixedBranch("feature/x", "joran")).toBe("joran/feature/x");
+    expect(prefixedBranch("joranx/y", "joran")).toBe("joran/joranx/y");
+  });
+});
 
 describe("derivePrefix", () => {
   it("uses the first name, ASCII-folded", () => {
