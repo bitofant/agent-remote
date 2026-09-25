@@ -85,6 +85,13 @@ done
 LLM_BASE_URL="$(ask "  $provider base URL (OpenAI-compatible)" "$default_url")"
 LLM_MODEL="$(ask "  Model name" "")"
 
+# --- auto PR ---------------------------------------------------------------
+# The harness session auto-PR starts to draft/open the PR, and what it's told.
+
+echo
+AUTOPR_HARNESS="$(ask "Auto-PR: harness that opens the PR (claude|pi|…)" "pi")"
+AUTOPR_INSTRUCTIONS="$(ask "  Instructions sent to it (slash command or text)" "/pr")"
+
 # --- users -----------------------------------------------------------------
 # Enabled usernames. Registering an account is allowed for anyone, but it stays
 # unusable until its name appears here.
@@ -122,6 +129,10 @@ cat > "$CONFIG_FILE" <<EOF
     "provider": "$(json_escape "$provider")",
     "baseUrl": "$(json_escape "$LLM_BASE_URL")",
     "model": "$(json_escape "$LLM_MODEL")"
+  },
+  "autoPr": {
+    "harness": "$(json_escape "$AUTOPR_HARNESS")",
+    "instructions": "$(json_escape "$AUTOPR_INSTRUCTIONS")"
   },
   "users": [$USERS_JSON]
 }

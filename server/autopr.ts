@@ -74,7 +74,7 @@ export async function runAutoPr(
   config?: AutoPrConfig,
 ): Promise<void> {
   const harnessId = config?.harness ?? "pi";
-  const command = config?.command ?? "/pr";
+  const command = config?.instructions?.trim() || config?.command?.trim() || "/pr";
   const { manager, sessionId, folder, note, failed } = ctx;
 
   const settings = manager.chatState(sessionId)?.assistant.autoPr;
@@ -155,7 +155,10 @@ export async function runAutoPr(
         note(
           "note",
           "Drafting the pull request",
-          `in a ${harnessId} ${command} session`,
+          // Free-text instructions can be long; only a slash command names the session well.
+          /^\/\S+$/.test(command)
+            ? `in a ${harnessId} ${command} session`
+            : `in a ${harnessId} session`,
           { session: id },
         );
       },
