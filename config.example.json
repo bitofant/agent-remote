@@ -29,7 +29,7 @@
   },
   "autoPr": {
     "harness": "pi",
-    "command": "/pr"
+    "instructions": "/pr"
   },
   "server": {
     "port": 4000

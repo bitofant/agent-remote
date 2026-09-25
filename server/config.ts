@@ -25,7 +25,9 @@ export interface LlmConfig {
 export interface AutoPrConfig {
   /** Harness id to start for the PR session (default "pi"). */
   harness?: string;
-  /** First prompt sent to it (default "/pr"). */
+  /** First prompt sent to it — a slash command or free text (default "/pr"). */
+  instructions?: string;
+  /** @deprecated legacy name for `instructions`. */
   command?: string;
 }
 
