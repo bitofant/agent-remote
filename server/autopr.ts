@@ -72,6 +72,9 @@ export function decideFlow(input: {
 export async function runAutoPr(
   ctx: RunContext,
   config?: AutoPrConfig,
+  /** Router-driven: a clean tree means there was nothing to submit, so keep the
+   * loop going instead of dead-ending (never for "Run now"). */
+  opts: { continueIfNothing?: boolean } = {},
 ): Promise<void> {
   const harnessId = config?.harness ?? "pi";
   const command = config?.instructions?.trim() || config?.command?.trim() || "/pr";
@@ -98,6 +101,7 @@ export async function runAutoPr(
   if (plan === "nothing") {
     note("note", "Nothing to open a PR for", "the tree is clean");
     await returnToBase(ctx, base);
+    if (opts.continueIfNothing) await runContinuity(ctx, { afterPr: false });
     return;
   }
 
