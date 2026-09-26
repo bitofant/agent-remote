@@ -2,10 +2,11 @@
 // moment — the turn ending — so the decision belongs to neither: this
 // server-global subscriber owns the hook and routes between them.
 //
-//   turn settles → shouldRouteTurn → buildTurnDigest → llm.routeTurn
-//                    → "auto-pr"    → server/autopr.ts     runAutoPr
-//                    → "continuity" → server/continuity.ts runContinuity
-//                    → "none"       → stop
+//   turn settles → shouldRouteTurn → buildTurnDigest
+//     → llm.routeTurn (PR stage, if auto-PR on)   → "auto-pr" → runAutoPr
+//     → llm.routeTurn (continuity stage, if on)   → "continuity" → runContinuity
+//     → otherwise stop
+// Auto-PR is asked first so finished work is submitted before the loop moves on.
 //
 // It also owns everything the two runners share: the single-flight lock (a
 // session is never PR-ing and continuing at once), the anchor pinning their
@@ -218,49 +219,58 @@ export function attachTurnRouter(
       return;
     }
 
-    // Fail-open only where it always was: auto-PR has never required the
-    // endpoint, so an unroutable turn still gets its PR. Continuity can't run
-    // without the endpoint at all (it has no prompt to send).
-    let chosen: "auto-pr" | "continuity" | "none";
-    let reason: string | undefined;
-    let trace: LlmTrace | undefined;
-    const verdict = llmStatus().available
-      ? await routeTurn(digest, {
-          canPr,
-          canContinue,
-          prInstructions: settings.autoPr.instructions,
-          continuityInstructions: settings.continuity.instructions,
-        })
-      : null;
-    if (verdict) {
-      chosen = verdict.route;
-      reason = verdict.reason || undefined;
-      trace = verdict.trace;
-    } else {
-      chosen = canPr ? "auto-pr" : "none";
-      reason = canPr
-        ? "no usable verdict — opening the PR anyway"
-        : "no usable verdict from the LLM endpoint";
-    }
+    // Auto-PR asks first: finished work is submitted (and, with autoMerge,
+    // landed) before anything continues — after a merge runAutoPr hands to
+    // continuity itself. A single three-way question let continuity win turns
+    // that were really done, so the work piled up unsubmitted. Continuity is
+    // only consulted once the PR stage has declined.
+    const available = llmStatus().available;
+    const ask = (stage: "auto-pr" | "continuity") =>
+      available
+        ? routeTurn(digest, {
+            canPr: stage === "auto-pr",
+            canContinue: stage === "continuity",
+            prInstructions: settings.autoPr.instructions,
+            continuityInstructions: settings.continuity.instructions,
+          })
+        : Promise.resolve(null);
 
-    const ctx = contextFor(
-      sessionId,
-      folder,
-      chosen === "continuity" ? "continuity" : "auto-pr",
-    );
+    if (canPr) {
+      const verdict = await ask("auto-pr");
+      // Fail-open only where it always was: auto-PR has never required the
+      // endpoint, so an unroutable turn still gets its PR.
+      const submit = verdict ? verdict.route === "auto-pr" : true;
+      const ctx = contextFor(sessionId, folder, "auto-pr");
+      ctx.note(
+        verdict ? (submit ? "allow" : "deny") : "abstain",
+        submit ? "Turn looks finished — opening a PR" : "Not ready for a PR",
+        verdict
+          ? verdict.reason || undefined
+          : "no usable verdict — opening the PR anyway",
+        // Declined by the router, not by the developer: let them overrule it.
+        { trace: verdict?.trace, offerAutoPr: !submit },
+      );
+      if (submit) {
+        await runAutoPr(ctx, config, { continueIfNothing: true });
+        return;
+      }
+    }
+    if (!canContinue) return;
+
+    // Continuity can't run without the endpoint at all (it has no prompt to send).
+    const verdict = await ask("continuity");
+    const go = verdict?.route === "continuity";
+    const ctx = contextFor(sessionId, folder, go ? "continuity" : "auto-pr");
     ctx.note(
-      verdict ? (chosen === "none" ? "deny" : "allow") : "abstain",
-      chosen === "auto-pr"
-        ? "Turn looks finished — opening a PR"
-        : chosen === "continuity"
-          ? "Turn needs a reply — continuing"
-          : "Leaving this turn alone",
-      reason,
-      // Declined by the router, not by the developer: let them overrule it.
-      { trace, offerAutoPr: canPr && chosen === "none" },
+      verdict ? (go ? "allow" : "deny") : "abstain",
+      go ? "Turn needs a reply — continuing" : "Leaving this turn alone",
+      verdict
+        ? verdict.reason || undefined
+        : "no usable verdict from the LLM endpoint",
+      // The PR stage already posted its own "Run anyways".
+      { trace: verdict?.trace, offerAutoPr: false },
     );
-    if (chosen === "auto-pr") await runAutoPr(ctx, config);
-    else if (chosen === "continuity") await runContinuity(ctx, { afterPr: false });
+    if (go) await runContinuity(ctx, { afterPr: false });
   }
 
   return manager.subscribe({
