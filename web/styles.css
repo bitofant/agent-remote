@@ -593,6 +593,38 @@ body {
   color: var(--accent);
 }
 
+/* Bulk close row (shown for >2 tabs). */
+.session-bulk {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.session-bulk button {
+  padding: 4px 10px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 12px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+
+.session-bulk button:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, var(--raised));
+}
+
+.session-bulk button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.session-bulk button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* --- Resume dialog (previously-run chat sessions for a folder) ------------ */
 
 .resume-overlay {

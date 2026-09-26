@@ -1129,6 +1129,40 @@ function Workspace({
                       </span>
                     </button>
                   ))}
+                  {tabCount > 2 && (
+                    <div className="session-bulk">
+                      <button
+                        disabled={!sessionsInFolder.some((s) => s.status === "exited")}
+                        onClick={() => {
+                          for (const s of sessionsInFolder)
+                            if (s.status === "exited") client.remove(s.id);
+                        }}
+                      >
+                        Close finished
+                      </button>
+                      <button
+                        onClick={() => {
+                          const live = sessionsInFolder.filter(
+                            (s) => s.status !== "exited",
+                          ).length;
+                          // Kills running agents + drops editor buffers: confirm first.
+                          if (
+                            (live > 0 || editorsInFolder.length > 0) &&
+                            !window.confirm(
+                              `Close all ${tabCount} sessions in this folder?` +
+                                (live > 0 ? ` ${live} still running.` : ""),
+                            )
+                          )
+                            return;
+                          for (const s of sessionsInFolder) client.remove(s.id);
+                          for (const e of editorsInFolder) closeEditor(e.id);
+                          setSelectorOpen(false);
+                        }}
+                      >
+                        Close all
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
