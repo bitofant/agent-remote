@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommandListing, CommandResolveResult } from "../shared/protocol";
 import type { Client } from "./client";
 import { COMMAND_CATALOG, COMMON_COMMANDS, type ArgNode } from "./commandCatalog";
+import { filterRanked } from "./commandMatch";
 
 // The current argument-suggestion level: static catalog nodes plus an optional
 // server-side resolver whose live results are shown alongside them.
@@ -22,9 +23,6 @@ interface Section {
   title: string;
   options: CommandOption[];
 }
-
-const prefix = (s: string, q: string) =>
-  s.toLowerCase().startsWith(q.toLowerCase());
 
 // The builder's search input holds focus (and thus the mobile keyboard). When
 // the dialog unmounts on insert, focus would fall to <body> and the keyboard
@@ -138,7 +136,7 @@ export function CommandBuilder({
       },
     ];
     return out
-      .map((s) => ({ ...s, options: s.options.filter((o) => prefix(o.name, query)) }))
+      .map((s) => ({ ...s, options: filterRanked(s.options, (o) => o.name, query) }))
       .filter((s) => s.options.length > 0);
   }, [listing, query]);
 
@@ -191,7 +189,7 @@ export function CommandBuilder({
 
   // Live (resolved) suggestions first, then the static catalog ones.
   const argMatches = useMemo(
-    () => [...dynamic, ...level.nodes].filter((a) => prefix(a.value, query)),
+    () => filterRanked([...dynamic, ...level.nodes], (a) => a.value, query),
     [dynamic, level, query],
   );
 
