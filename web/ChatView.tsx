@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
   type ReactNode,
-  type SelectHTMLAttributes,
 } from "react";
 import type {
   AgentRun,
@@ -18,7 +17,6 @@ import type {
   ChatEffort,
   ChatImageRef,
   ChatMessage,
-  ChatModel,
   ChatPart,
   ChatState,
   ChatUiRequest,
@@ -1078,32 +1076,134 @@ function ProviderIcon() {
   );
 }
 
-// A native <select> sizes to its WIDEST option (claude's catalog carries long
-// `[1m]` labels), so the closed box is a label sized to the CURRENT value, with
-// the real select stretched invisibly over it — native picker kept.
-function FitSelect({
-  shown,
+// Shared header picker. Custom menu, not <select>: same look on every platform,
+// and the chip sizes to the current value, not the widest option.
+type MenuItem = { id: string; label: string; description?: string };
+type MenuSection = { heading?: string; items: MenuItem[] };
+
+function HeaderMenu({
+  label,
   icon,
-  children,
-  ...rest
+  shown,
+  current,
+  sections,
+  onPick,
 }: {
+  label: string;
+  icon: ReactNode;
   shown: string;
-  icon?: ReactNode;
-  children: ReactNode;
-} & SelectHTMLAttributes<HTMLSelectElement>) {
+  current: string | null;
+  sections: MenuSection[];
+  onPick: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [alignRight, setAlignRight] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const close = (refocus: boolean) => {
+    setOpen(false);
+    if (refocus) btnRef.current?.focus();
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [open]);
+  // Flip right if it would overflow the viewport; focus the live item.
+  useLayoutEffect(() => {
+    if (!open) {
+      setAlignRight(false);
+      return;
+    }
+    const menu = menuRef.current;
+    if (!menu) return;
+    if (!alignRight && menu.getBoundingClientRect().right > window.innerWidth - 8)
+      setAlignRight(true);
+    const items = menu.querySelectorAll<HTMLElement>("[role=menuitemradio]");
+    (menu.querySelector<HTMLElement>("[aria-checked=true]") ?? items[0])?.focus();
+  }, [open, alignRight]);
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    const items = [
+      ...(menuRef.current?.querySelectorAll<HTMLElement>("[role=menuitemradio]") ?? []),
+    ];
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    const go = (n: number) => {
+      e.preventDefault();
+      items[Math.max(0, Math.min(items.length - 1, n))]?.focus();
+    };
+    if (e.key === "ArrowDown") go(i + 1);
+    else if (e.key === "ArrowUp") go(i - 1);
+    else if (e.key === "Home") go(0);
+    else if (e.key === "End") go(items.length - 1);
+    else if (e.key === "Escape") {
+      e.preventDefault();
+      close(true);
+    } else if (e.key === "Tab") setOpen(false);
+  };
+  const title = `${label}: ${shown}`;
   return (
-    <span className="chat-select">
-      <span className="chat-select-value" aria-hidden>
+    <div className="chat-menu-wrap" ref={wrapRef}>
+      <button
+        ref={btnRef}
+        type="button"
+        className={`chat-menu-btn${open ? " open" : ""}`}
+        title={title}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
         {icon}
-        <span className="chat-select-text">{shown}</span>
-      </span>
-      <select {...rest}>{children}</select>
-    </span>
+        <span className="chat-menu-value">{shown}</span>
+      </button>
+      {open && (
+        <div
+          ref={menuRef}
+          className={`chat-menu${alignRight ? " align-right" : ""}`}
+          role="menu"
+          aria-label={label}
+          onKeyDown={onMenuKey}
+        >
+          <div className="chat-menu-title">{label}</div>
+          {sections.map((s, si) => (
+            <Fragment key={s.heading ?? si}>
+              {s.heading && <div className="chat-menu-heading">{s.heading}</div>}
+              {s.items.map((it) => (
+                <button
+                  key={it.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={it.id === current}
+                  className={`chat-menu-item${it.id === current ? " selected" : ""}`}
+                  title={it.description}
+                  onClick={() => {
+                    close(true);
+                    if (it.id !== current) onPick(it.id);
+                  }}
+                >
+                  <span className="chat-menu-check">{it.id === current ? "✓" : ""}</span>
+                  <span className="chat-menu-label">{it.label}</span>
+                </button>
+              ))}
+            </Fragment>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-// Reasoning-effort picker: an icon button opening a menu of the current model's
-// levels. The harness owns the list (and a "default" row, if it has one).
+// Reasoning-effort picker; the gauge's needle tracks the current level.
 function EffortMenu({
   efforts,
   current,
@@ -1113,66 +1213,20 @@ function EffortMenu({
   current: string | null;
   onPick: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
   const selected = efforts.find((e) => e.id === current);
   // Needle position over the real levels only (a "default" row isn't one).
   const levels = efforts.filter((e) => e.id !== "default");
   const idx = selected ? levels.indexOf(selected) : -1;
   const level = idx < 0 ? -1 : levels.length > 1 ? idx / (levels.length - 1) : 1;
-  const title = `Reasoning effort: ${selected?.label ?? "unknown"}`;
   return (
-    <div className="chat-effort-wrap" ref={wrapRef}>
-      <button
-        type="button"
-        className={`chat-effort-btn${open ? " open" : ""}`}
-        title={title}
-        aria-label={title}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <EffortIcon level={level} />
-        <span className="chat-select-text">{selected?.label ?? "Effort"}</span>
-      </button>
-      {open && (
-        <div className="chat-effort-menu" role="menu" aria-label="Reasoning effort">
-          <div className="chat-effort-title">Reasoning effort</div>
-          {efforts.map((e) => (
-            <button
-              key={e.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={e.id === current}
-              className={`chat-effort-item${e.id === current ? " selected" : ""}`}
-              title={e.description}
-              onClick={() => {
-                setOpen(false);
-                if (e.id !== current) onPick(e.id);
-              }}
-            >
-              <span className="chat-effort-check">{e.id === current ? "✓" : ""}</span>
-              {e.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <HeaderMenu
+      label="Reasoning effort"
+      icon={<EffortIcon level={level} />}
+      shown={selected?.label ?? "unknown"}
+      current={current}
+      sections={[{ items: efforts }]}
+      onPick={onPick}
+    />
   );
 }
 
@@ -1936,13 +1990,20 @@ export function ChatView({
     state.modes.find((m) => m.id === state.currentMode)?.label ??
     state.currentMode ??
     "";
-  // Second-level headings within the box (pi: Enabled/Disabled). Entries arrive
-  // already contiguous by section, so a run-grouping preserves harness order.
-  const modelSections: { section?: string; models: ChatModel[] }[] = [];
-  for (const m of shownModels) {
+  // Sections (pi: Enabled/Disabled) arrive contiguous; run-grouping keeps harness order.
+  const modelSections: MenuSection[] = [];
+  // Current model missing from the catalog: list it anyway.
+  if (
+    state.currentModel &&
+    !state.models.some((m) => m.id === state.currentModel)
+  )
+    modelSections.push({
+      items: [{ id: state.currentModel, label: state.currentModel }],
+    });
+  for (const [i, m] of shownModels.entries()) {
     const last = modelSections[modelSections.length - 1];
-    if (last && last.section === m.section) last.models.push(m);
-    else modelSections.push({ section: m.section, models: [m] });
+    if (last && i > 0 && last.heading === m.section) last.items.push(m);
+    else modelSections.push({ heading: m.section, items: [m] });
   }
 
   // Memoized so expanding a tool bubble doesn't re-render every other one.
@@ -1967,65 +2028,26 @@ export function ChatView({
         state.commands.some((c) => c.name === "usage")) && (
         <div className="chat-header">
           {modelGroups.length > 0 && (
-            <label className="chat-model">
-              <FitSelect
-                icon={<ProviderIcon />}
-                aria-label="Provider"
-                title={`Provider: ${shownGroup ?? ""}`}
-                shown={shownGroup ?? ""}
-                value={shownGroup ?? ""}
-                onChange={(e) => setBrowseGroup(e.target.value)}
-              >
-                {modelGroups.map((g) => (
-                  <option key={g} value={g}>
-                    {g}
-                  </option>
-                ))}
-              </FitSelect>
-            </label>
+            <HeaderMenu
+              label="Provider"
+              icon={<ProviderIcon />}
+              shown={shownGroup ?? ""}
+              current={shownGroup}
+              sections={[{ items: modelGroups.map((g) => ({ id: g, label: g })) }]}
+              onPick={setBrowseGroup}
+            />
           )}
           {state.models.length > 0 && (
-            <label className="chat-model">
-              <FitSelect
-                icon={<ModelIcon />}
-                aria-label="Model"
-                value={modelValue}
-                shown={modelShown}
-                /* The closed box is width-capped, so a long label is
-                   clipped — keep the full one reachable on hover. */
-                title={`Model: ${modelShown}`}
-                onChange={(e) =>
-                  client.chatAction(sessionId, {
-                    type: "set-model",
-                    model: e.target.value,
-                  })
-                }
-              >
-                {/* Browsing another group: nothing here is live yet. */}
-                {!modelValue && <option value="">Select model…</option>}
-                {/* If the current model isn't in the list, show it anyway. */}
-                {state.currentModel &&
-                  !state.models.some((m) => m.id === state.currentModel) && (
-                    <option value={state.currentModel}>
-                      {state.currentModel}
-                    </option>
-                  )}
-                {modelSections.map((s, i) => {
-                  const options = s.models.map((m) => (
-                    <option key={m.id} value={m.id} title={m.description}>
-                      {m.label}
-                    </option>
-                  ));
-                  return s.section ? (
-                    <optgroup key={s.section} label={s.section}>
-                      {options}
-                    </optgroup>
-                  ) : (
-                    <Fragment key={i}>{options}</Fragment>
-                  );
-                })}
-              </FitSelect>
-            </label>
+            <HeaderMenu
+              label="Model"
+              icon={<ModelIcon />}
+              shown={modelShown}
+              current={modelValue || null}
+              sections={modelSections}
+              onPick={(model) =>
+                client.chatAction(sessionId, { type: "set-model", model })
+              }
+            />
           )}
           {state.efforts.length > 0 && (
             <EffortMenu
@@ -2037,27 +2059,16 @@ export function ChatView({
             />
           )}
           {state.modes.length > 0 && (
-            <label className="chat-model">
-              <FitSelect
-                icon={<ModeIcon />}
-                aria-label="Permission mode"
-                title={`Mode: ${modeShown}`}
-                value={state.currentMode ?? ""}
-                shown={modeShown}
-                onChange={(e) =>
-                  client.chatAction(sessionId, {
-                    type: "set-mode",
-                    mode: e.target.value,
-                  })
-                }
-              >
-                {state.modes.map((m) => (
-                  <option key={m.id} value={m.id} title={m.description}>
-                    {m.label}
-                  </option>
-                ))}
-              </FitSelect>
-            </label>
+            <HeaderMenu
+              label="Permission mode"
+              icon={<ModeIcon />}
+              shown={modeShown}
+              current={state.currentMode}
+              sections={[{ items: state.modes }]}
+              onPick={(mode) =>
+                client.chatAction(sessionId, { type: "set-mode", mode })
+              }
+            />
           )}
           {state.commands.some((c) => c.name === "usage") && (
             <div className="chat-usage-wrap">
