@@ -95,6 +95,9 @@ export interface HarnessAdapter {
    * skips such harnesses so it never double-generates; harnesses without native
    * suggestions get one synthesized from the transcript instead. */
   readonly nativePromptSuggestions?: boolean;
+  /** Optional: this harness's model labels are raw ids, so the harness-agnostic
+   * namer (server/modelNames.ts) generates readable display names via the LLM. */
+  readonly llmModelNames?: boolean;
   /** Build the CLI invocation for a new session. */
   invocation(opts: SessionOptions): HarnessInvocation;
   /** Optional: create a parser that extracts session events from this harness's

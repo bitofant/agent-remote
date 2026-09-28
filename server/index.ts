@@ -20,6 +20,8 @@ import {
   getUserView,
   setUserView,
   closeDb,
+  getModelNames,
+  setModelNames,
 } from "./db.js";
 import { recordChatRenders, forgetChatRenders } from "./chatLog.js";
 import { listCommands, resolveCommand, RESOLVER_IDS } from "./commands.js";
@@ -50,6 +52,7 @@ import {
 } from "./system/sampler.js";
 import { attachAssistant } from "./assistant.js";
 import { attachSuggestions } from "./suggestions.js";
+import { attachModelNames } from "./modelNames.js";
 import { attachTurnRouter } from "./turnRouter.js";
 import { attachContinuity } from "./continuity.js";
 import type {
@@ -88,6 +91,11 @@ attachAssistant(manager);
 // composer-chip suggestion from the transcript after each turn. See
 // server/suggestions.ts. Best-effort; no-op when the LLM endpoint is down.
 attachSuggestions(manager, adapters);
+
+// LLM-generated readable model names for harnesses with raw-id catalogs (pi).
+// Persisted per catalog, so names survive restarts until the list changes.
+// See server/modelNames.ts.
+attachModelNames(manager, adapters, { get: getModelNames, set: setModelNames });
 
 // Where a settled turn goes: the LLM routes it to auto-PR (branch/commit/push,
 // open the PR by driving a real `pi /pr` session, and with `auto merge`

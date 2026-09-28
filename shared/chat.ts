@@ -98,6 +98,7 @@ export function emptyChatState(): ChatState {
     notices: [],
     models: [],
     currentModel: null,
+    modelNames: {},
     modes: [],
     currentMode: null,
     efforts: [],
@@ -349,6 +350,9 @@ export function applyChatEvent(state: ChatState, event: ChatEvent): ChatState {
 
     case "model-changed":
       return { ...state, currentModel: event.current };
+
+    case "model-names":
+      return { ...state, modelNames: event.names };
 
     case "modes":
       return { ...state, modes: event.modes, currentMode: event.current };

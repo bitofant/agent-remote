@@ -811,6 +811,10 @@ export interface ChatState {
   models: ChatModel[];
   /** Id of the currently selected model, or null if unknown/unsupported. */
   currentModel: string | null;
+  /** LLM-generated display names by model id (server/modelNames.ts), for
+   * harnesses whose catalog labels are raw ids. Kept apart from `models` so a
+   * re-sent catalog doesn't drop them; the UI shows the raw label beneath. */
+  modelNames: Record<string, string>;
   /** Permission/behaviour modes the session can switch between (empty if the
    * harness doesn't report any). */
   modes: ChatMode[];
@@ -887,6 +891,8 @@ export type ChatEvent =
   | { type: "models"; models: ChatModel[]; current: string | null }
   /** The current model changed (e.g. via `set-model` or a fallback). */
   | { type: "model-changed"; current: string }
+  /** Readable display names for the current catalog (replaces `modelNames`). */
+  | { type: "model-names"; names: Record<string, string> }
   /** Available permission modes + the current one (sent on session init). */
   | { type: "modes"; modes: ChatMode[]; current: string | null }
   /** The current permission mode changed (e.g. via `set-mode`). */

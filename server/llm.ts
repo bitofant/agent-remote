@@ -26,6 +26,8 @@ const EVAL_TIMEOUT_MS = 30_000;
 // Mode run after a turn has already ended, so latency just widens the pause
 // before the countdown starts.
 const BACKGROUND_TIMEOUT_MS = 60_000;
+// Naming a whole catalog (dozens of models) is a long reply; nobody waits on it.
+const MODEL_NAMES_TIMEOUT_MS = 120_000;
 /** Every LLM request is retried once — they fail transiently (a contended
  * endpoint drops or times out a request that succeeds moments later) and most
  * callers have no fallback beyond giving up. Lives in `chat` rather than per
@@ -636,6 +638,43 @@ export async function suggestNextPrompt(
     if (suggestions.length >= MAX_SUGGESTIONS) break;
   }
   return suggestions;
+}
+
+const MODEL_NAMES_SYSTEM = [
+  "You write short, human-readable display names for the entries of an AI",
+  "model picker. Each entry has an `id` (`provider/model-id`, the full raw",
+  "name) and the provider's `label`. Write a concise name a developer would",
+  "recognise: model family + version (e.g. `RedHatAI/gemma-4-31B-it-NVFP4` →",
+  "`Gemma 4`). Drop org/repo prefixes, file suffixes and boilerplate like",
+  "`-it`/`-instruct`, parameter counts and quantization tags. You see the",
+  "WHOLE catalog: names must be UNIQUE within each provider. ONLY when two",
+  "entries of one provider would otherwise get the same name, add just enough",
+  "to tell them apart (size, quantization, variant — e.g. `Gemma 4 (NVFP4)` vs",
+  "`Gemma 4 (FP8)`); a model with no such twin gets NO size/quant suffix. A label",
+  "that is already a clean name may be kept. Max 32 characters each.",
+  'Reply with ONLY JSON: {"names": {"<id>": "<display name>", ...}}.',
+].join(" ");
+
+/** Readable display names for a model catalog, keyed by id. One call over the
+ * whole catalog so quants/sizes of one family can be told apart. Best-effort:
+ * `{}` on any failure; callers must still validate (see modelNames.ts). */
+export async function suggestModelNames(
+  models: { id: string; label: string; provider?: string }[],
+): Promise<Record<string, unknown>> {
+  if (!status.available || !status.model || models.length === 0) return {};
+  try {
+    const reply = await chat(
+      MODEL_NAMES_SYSTEM,
+      JSON.stringify(models),
+      MODEL_NAMES_TIMEOUT_MS,
+    );
+    const names = parseJsonObject(reply.content)?.names;
+    return names && typeof names === "object"
+      ? (names as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 /** Judge a pending UI request. Returns a normalized decision, or

@@ -470,6 +470,12 @@ export class SessionManager {
       this.applyChat(session, { type: "prompt-suggestion", suggestions });
   }
 
+  /** Fold LLM-generated model display names (server/modelNames.ts). */
+  postModelNames(sessionId: string, names: Record<string, string>): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.chat) this.applyChat(session, { type: "model-names", names });
+  }
+
   /** Arm Continuity Mode's composed prompt on a chat session — the composer's
    * countdown ring. The backend does the actual sending; no-op for non-chat/
    * absent sessions. */

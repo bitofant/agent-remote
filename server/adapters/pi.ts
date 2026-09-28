@@ -32,6 +32,8 @@ export function createPiAdapter(cfg: HarnessConfig): HarnessAdapter {
     // pi resumes via a caller-chosen `--session-id`: the session layer mints one
     // (also our resume key) and threads it in through `opts.resume`.
     resumable: true,
+    // Catalog labels are raw served ids (`RedHatAI/gemma-4-31B-it-NVFP4`).
+    llmModelNames: true,
     invocation(opts: SessionOptions): { command: string; args: string[] } {
       const args = ["--mode", "rpc"];
       // `--session-id` creates the session if missing and reloads it (restoring

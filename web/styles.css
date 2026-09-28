@@ -3063,6 +3063,12 @@ button.auto-press::after {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.chat-menu-detail {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--muted);
+}
 
 /* --- usage / limits indicator -------------------------------------------- */
 
