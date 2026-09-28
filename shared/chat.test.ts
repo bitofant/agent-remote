@@ -302,6 +302,17 @@ describe("applyChatEvent", () => {
     expect(state.currentModel).toBe("sonnet");
   });
 
+  it("replaces model display names and keeps them across a re-sent catalog", () => {
+    const models = [{ id: "vllm/a", label: "Org/a-it-NVFP4" }];
+    const state = reduce([
+      { type: "models", models, current: null },
+      { type: "model-names", names: { "vllm/a": "A", "vllm/b": "B" } },
+      { type: "model-names", names: { "vllm/a": "A (FP8)" } },
+      { type: "models", models, current: "vllm/a" },
+    ]);
+    expect(state.modelNames).toEqual({ "vllm/a": "A (FP8)" });
+  });
+
   it("anchors an AI-mode trace to the streaming turn, surviving finalization", () => {
     // Trace fires mid-turn (while the assistant message with the tool is
     // streaming); it must anchor to that message id and keep it after the turn

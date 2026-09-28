@@ -15,6 +15,7 @@ import type {
   AssistantDecision,
   AssistantTrace,
   ChatEffort,
+  ChatModel,
   ChatImageRef,
   ChatMessage,
   ChatPart,
@@ -1078,7 +1079,8 @@ function ProviderIcon() {
 
 // Shared header picker. Custom menu, not <select>: same look on every platform,
 // and the chip sizes to the current value, not the widest option.
-type MenuItem = { id: string; label: string; description?: string };
+// `detail`: small second line (e.g. the raw model id under its display name).
+type MenuItem = { id: string; label: string; detail?: string; description?: string };
 type MenuSection = { heading?: string; items: MenuItem[] };
 
 function HeaderMenu({
@@ -1192,7 +1194,12 @@ function HeaderMenu({
                   }}
                 >
                   <span className="chat-menu-check">{it.id === current ? "✓" : ""}</span>
-                  <span className="chat-menu-label">{it.label}</span>
+                  <span className="chat-menu-label">
+                    {it.label}
+                    {it.detail && (
+                      <span className="chat-menu-detail">{it.detail}</span>
+                    )}
+                  </span>
                 </button>
               ))}
             </Fragment>
@@ -1983,8 +1990,18 @@ export function ChatView({
   const modelValue = shownModels.some((m) => m.id === state.currentModel)
     ? (state.currentModel ?? "")
     : "";
+  // LLM display name when there is one; the raw label moves to the detail line.
+  const modelItem = (m: ChatModel): MenuItem => {
+    const name = state.modelNames?.[m.id];
+    return name && name !== m.label
+      ? { id: m.id, label: name, detail: m.label, description: m.description }
+      : m;
+  };
   const modelShown = modelValue
-    ? (shownModels.find((m) => m.id === modelValue)?.label ?? modelValue)
+    ? (() => {
+        const m = shownModels.find((x) => x.id === modelValue);
+        return m ? modelItem(m).label : modelValue;
+      })()
     : "Select model…";
   const modeShown =
     state.modes.find((m) => m.id === state.currentMode)?.label ??
@@ -2002,8 +2019,8 @@ export function ChatView({
     });
   for (const [i, m] of shownModels.entries()) {
     const last = modelSections[modelSections.length - 1];
-    if (last && i > 0 && last.heading === m.section) last.items.push(m);
-    else modelSections.push({ heading: m.section, items: [m] });
+    if (last && i > 0 && last.heading === m.section) last.items.push(modelItem(m));
+    else modelSections.push({ heading: m.section, items: [modelItem(m)] });
   }
 
   // Memoized so expanding a tool bubble doesn't re-render every other one.

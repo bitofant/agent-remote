@@ -113,6 +113,16 @@ db.exec(
    )`,
 );
 
+// LLM model display names, keyed by a hash of the whole catalog (+ prompt
+// version) — names depend on the catalog, so any change is a miss. Few rows.
+db.exec(
+  `CREATE TABLE IF NOT EXISTS model_names (
+     catalog_key TEXT PRIMARY KEY,
+     names TEXT NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+);
+
 const listStmt = db.prepare(
   "SELECT path, last_used_at AS lastUsedAt FROM folders ORDER BY last_used_at DESC",
 );
@@ -532,6 +542,35 @@ export function setUserView(owner: string, view: ViewState): void {
     sessionId: view.sessionId ?? null,
     updatedAt: Date.now(),
   });
+}
+
+const getModelNamesStmt = db.prepare(
+  "SELECT names FROM model_names WHERE catalog_key = ?",
+);
+const setModelNamesStmt = db.prepare(
+  `INSERT INTO model_names (catalog_key, names, updated_at) VALUES (?, ?, ?)
+   ON CONFLICT(catalog_key) DO UPDATE SET
+     names = excluded.names, updated_at = excluded.updated_at`,
+);
+// Only recent catalogs are worth keeping.
+const pruneModelNamesStmt = db.prepare(
+  `DELETE FROM model_names WHERE catalog_key NOT IN
+     (SELECT catalog_key FROM model_names ORDER BY updated_at DESC LIMIT 20)`,
+);
+
+export function getModelNames(key: string): Record<string, string> | undefined {
+  const row = getModelNamesStmt.get(key) as { names: string } | undefined;
+  if (!row) return undefined;
+  try {
+    return JSON.parse(row.names) as Record<string, string>;
+  } catch {
+    return undefined;
+  }
+}
+
+export function setModelNames(key: string, names: Record<string, string>): void {
+  setModelNamesStmt.run(key, JSON.stringify(names), Date.now());
+  pruneModelNamesStmt.run();
 }
 
 // --- shutdown --------------------------------------------------------------
