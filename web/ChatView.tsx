@@ -8,6 +8,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
+  type SelectHTMLAttributes,
 } from "react";
 import type {
   AgentRun,
@@ -1034,6 +1036,72 @@ function EffortIcon({ level }: { level: number }) {
   );
 }
 
+// Header glyphs: an icon stands in for the old "Model"/"Mode"/"Provider" labels.
+function ModelIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="6.25" y="6.25" width="3.5" height="3.5" rx="0.5" fill="currentColor" />
+      <path
+        d="M6 1v2.5M10 1v2.5M6 12.5V15M10 12.5V15M1 6h2.5M1 10h2.5M12.5 6H15M12.5 10H15"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ModeIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M8 1.5 2.5 3.5v4c0 3.3 2.3 5.9 5.5 7 3.2-1.1 5.5-3.7 5.5-7v-4Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="m5.6 8 1.7 1.7 3.2-3.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ProviderIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="4.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <rect x="2" y="9" width="12" height="4.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="4.8" cy="4.75" r="0.9" fill="currentColor" />
+      <circle cx="4.8" cy="11.25" r="0.9" fill="currentColor" />
+    </svg>
+  );
+}
+
+// A native <select> sizes to its WIDEST option (claude's catalog carries long
+// `[1m]` labels), so the closed box is a label sized to the CURRENT value, with
+// the real select stretched invisibly over it — native picker kept.
+function FitSelect({
+  shown,
+  icon,
+  children,
+  ...rest
+}: {
+  shown: string;
+  icon?: ReactNode;
+  children: ReactNode;
+} & SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <span className="chat-select">
+      <span className="chat-select-value" aria-hidden>
+        {icon}
+        <span className="chat-select-text">{shown}</span>
+      </span>
+      <select {...rest}>{children}</select>
+    </span>
+  );
+}
+
 // Reasoning-effort picker: an icon button opening a menu of the current model's
 // levels. The harness owns the list (and a "default" row, if it has one).
 function EffortMenu({
@@ -1072,7 +1140,7 @@ function EffortMenu({
     <div className="chat-effort-wrap" ref={wrapRef}>
       <button
         type="button"
-        className={`chat-usage-btn${open ? " open" : ""}`}
+        className={`chat-effort-btn${open ? " open" : ""}`}
         title={title}
         aria-label={title}
         aria-haspopup="menu"
@@ -1080,6 +1148,7 @@ function EffortMenu({
         onClick={() => setOpen((o) => !o)}
       >
         <EffortIcon level={level} />
+        <span className="chat-select-text">{selected?.label ?? "Effort"}</span>
       </button>
       {open && (
         <div className="chat-effort-menu" role="menu" aria-label="Reasoning effort">
@@ -1860,6 +1929,13 @@ export function ChatView({
   const modelValue = shownModels.some((m) => m.id === state.currentModel)
     ? (state.currentModel ?? "")
     : "";
+  const modelShown = modelValue
+    ? (shownModels.find((m) => m.id === modelValue)?.label ?? modelValue)
+    : "Select model…";
+  const modeShown =
+    state.modes.find((m) => m.id === state.currentMode)?.label ??
+    state.currentMode ??
+    "";
   // Second-level headings within the box (pi: Enabled/Disabled). Entries arrive
   // already contiguous by section, so a run-grouping preserves harness order.
   const modelSections: { section?: string; models: ChatModel[] }[] = [];
@@ -1892,8 +1968,11 @@ export function ChatView({
         <div className="chat-header">
           {modelGroups.length > 0 && (
             <label className="chat-model">
-              <span>Provider</span>
-              <select
+              <FitSelect
+                icon={<ProviderIcon />}
+                aria-label="Provider"
+                title={`Provider: ${shownGroup ?? ""}`}
+                shown={shownGroup ?? ""}
                 value={shownGroup ?? ""}
                 onChange={(e) => setBrowseGroup(e.target.value)}
               >
@@ -1902,21 +1981,19 @@ export function ChatView({
                     {g}
                   </option>
                 ))}
-              </select>
+              </FitSelect>
             </label>
           )}
           {state.models.length > 0 && (
             <label className="chat-model">
-              <span>Model</span>
-              <select
+              <FitSelect
+                icon={<ModelIcon />}
+                aria-label="Model"
                 value={modelValue}
-                /* The closed select is width-capped, so a long label is
+                shown={modelShown}
+                /* The closed box is width-capped, so a long label is
                    clipped — keep the full one reachable on hover. */
-                title={
-                  shownModels.find((m) => m.id === modelValue)?.label ??
-                  state.currentModel ??
-                  undefined
-                }
+                title={`Model: ${modelShown}`}
                 onChange={(e) =>
                   client.chatAction(sessionId, {
                     type: "set-model",
@@ -1947,7 +2024,7 @@ export function ChatView({
                     <Fragment key={i}>{options}</Fragment>
                   );
                 })}
-              </select>
+              </FitSelect>
             </label>
           )}
           {state.efforts.length > 0 && (
@@ -1961,9 +2038,12 @@ export function ChatView({
           )}
           {state.modes.length > 0 && (
             <label className="chat-model">
-              <span>Mode</span>
-              <select
+              <FitSelect
+                icon={<ModeIcon />}
+                aria-label="Permission mode"
+                title={`Mode: ${modeShown}`}
                 value={state.currentMode ?? ""}
+                shown={modeShown}
                 onChange={(e) =>
                   client.chatAction(sessionId, {
                     type: "set-mode",
@@ -1976,7 +2056,7 @@ export function ChatView({
                     {m.label}
                   </option>
                 ))}
-              </select>
+              </FitSelect>
             </label>
           )}
           {state.commands.some((c) => c.name === "usage") && (
