@@ -2348,30 +2348,41 @@ button.auto-press::after {
 
 /* AI-assistant config dialog (reuses the resume-dialog shell). */
 .assistant-dialog-body {
-  gap: 4px; /* sections carry their own padding */
-  padding: 14px;
+  gap: 8px;
+  padding: 10px;
 }
-/* Checklist section: an enable checkbox whose head row is its label. Sections
-   never collapse. No fill — they're grouped by spacing and the enabled tint, so
-   the body's --raised controls still rise off the dialog's --panel (there is no
-   fourth elevation step to nest into). */
+/* Checklist section: one box holding the enable toggle AND its options, so a
+   sub-option can never read as belonging to the next section. The fill is a
+   faint tint off --panel (not a fourth elevation step), so the body's --raised
+   controls still rise off it; enabled sections take the accent tint. Padding 4
+   keeps the --r-md controls concentric inside the --r-lg box. */
 .assistant-section {
   display: flex;
   flex-direction: column;
+  padding: 4px;
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
+}
+.assistant-section[data-on="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
 }
 .assistant-section-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
+  gap: 8px;
+}
+.assistant-section-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
   border-radius: var(--r-md);
   cursor: pointer;
 }
-.assistant-section-head:hover {
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
-}
-.assistant-section[data-on="true"] .assistant-section-head {
-  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+.assistant-section-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .assistant-section-label {
   flex: 1;
@@ -2379,17 +2390,19 @@ button.auto-press::after {
   font-size: 13px;
   font-weight: 600;
 }
-/* Indented to align under the label text (8px head pad + 13px box + 10px gap). */
+/* Options stay editable while off, just visibly inactive. */
 .assistant-section-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 6px 8px 10px 31px;
+  gap: 4px;
+}
+.assistant-section[data-on="false"] .assistant-section-body {
+  opacity: 0.6;
 }
 /* Secondary action inside a section body (Run now). Filled, never outlined. */
 .assistant-run {
-  align-self: flex-start;
-  padding: 6px 12px;
+  flex: none;
+  padding: 4px 10px;
   border-radius: var(--r-md);
   background: var(--raised);
   color: var(--accent);
@@ -2415,24 +2428,51 @@ button.auto-press::after {
 .assistant-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
+/* Label left, the section's sub-options right — one row, no floating boxes. */
 .assistant-field-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 0 6px;
+  min-height: 26px;
 }
 .assistant-field-label {
   font-size: 12px;
   color: var(--muted);
 }
-/* Blanket-accept shortcut: label first, box on the right of the row. */
-.assistant-allow-all {
+.assistant-field-extra {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+/* Sub-option: label text first, control on the right edge. */
+.assistant-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: var(--muted);
-  gap: 6px;
+  cursor: pointer;
 }
+.assistant-range {
+  width: 84px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+/* Fixed width so the row doesn't jitter while dragging. */
+.assistant-range-value {
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
 .assistant-instructions {
   width: 100%;
   box-sizing: border-box;
@@ -2457,7 +2497,7 @@ button.auto-press::after {
    .chat-menu-btn, deliberately not a second implementation of the arrow. */
 .assistant-select {
   position: relative;
-  align-self: flex-start;
+  align-self: center;
 }
 .assistant-select::after {
   content: "";
@@ -2479,9 +2519,9 @@ button.auto-press::after {
   color: var(--text);
   border-radius: var(--r-md);
   /* Right padding clears the wrapper's arrow. */
-  padding: 6px 24px 6px 10px;
+  padding: 3px 22px 3px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
 }
 .assistant-select select:hover {
