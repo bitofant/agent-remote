@@ -3,6 +3,8 @@ import {
   ALLOW_EVERYTHING,
   applyChatEvent,
   assistantNeedsLlm,
+  autoActionDelayMs,
+  AUTO_DELAY_MAX_SCALE,
   deriveAssistantEnabled,
   emptyChatState,
   isAllowEverything,
@@ -1114,5 +1116,29 @@ describe("assistant settings", () => {
       },
     ]);
     expect(state.assistantTraces[0].anchorMessageId).toBe("m9");
+  });
+});
+
+describe("autoActionDelayMs", () => {
+  it("keeps the 2s…10s curve at 100%", () => {
+    expect(autoActionDelayMs(0)).toBe(2000);
+    expect(autoActionDelayMs(681 / 2)).toBe(6000);
+    expect(autoActionDelayMs(100_000)).toBe(10_000);
+    expect(autoActionDelayMs(100_000, 1)).toBe(10_000);
+  });
+  it("scales the whole curve — floor and cap alike", () => {
+    expect(autoActionDelayMs(0, 2)).toBe(4000);
+    expect(autoActionDelayMs(100_000, 2)).toBe(20_000);
+    expect(autoActionDelayMs(0, 0.5)).toBe(1000);
+    expect(autoActionDelayMs(100_000, 0.5)).toBe(5000);
+  });
+  it("0% applies at once", () => {
+    expect(autoActionDelayMs(0, 0)).toBe(0);
+    expect(autoActionDelayMs(100_000, 0)).toBe(0);
+  });
+  it("clamps junk scales instead of trusting the client", () => {
+    expect(autoActionDelayMs(100_000, 99)).toBe(10_000 * AUTO_DELAY_MAX_SCALE);
+    expect(autoActionDelayMs(100_000, -1)).toBe(0);
+    expect(autoActionDelayMs(100_000, Number.NaN)).toBe(10_000);
   });
 });

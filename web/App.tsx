@@ -19,6 +19,8 @@ import type {
 } from "../shared/protocol";
 import {
   ALLOW_EVERYTHING,
+  AUTO_DELAY_MAX_SCALE,
+  AUTO_DELAY_TYPICAL_SEC,
   assistantNeedsLlm,
   deriveAssistantEnabled,
   isAllowEverything,
@@ -683,23 +685,52 @@ function Workspace({
     pushAssistant(next, debounce);
   }
 
-  const assistantSection = (key: SectionKey, label: string, body: ReactNode) => {
+  const assistantSection = (
+    key: SectionKey,
+    label: string,
+    body: ReactNode,
+    action?: ReactNode,
+  ) => {
     const on = assistantDraft[key].enabled;
     return (
       <div className="assistant-section" data-on={on}>
         {/* Sections never collapse — the head is a plain label for its box. */}
-        <label className="assistant-section-head">
-          <input
-            type="checkbox"
-            checked={on}
-            onChange={(e) => patchSection(key, { enabled: e.target.checked })}
-          />
-          <span className="assistant-section-label">{label}</span>
-        </label>
+        <div className="assistant-section-head">
+          <label className="assistant-section-toggle">
+            <input
+              type="checkbox"
+              checked={on}
+              onChange={(e) => patchSection(key, { enabled: e.target.checked })}
+            />
+            <span className="assistant-section-label">{label}</span>
+          </label>
+          {action}
+        </div>
         <div className="assistant-section-body">{body}</div>
       </div>
     );
   };
+
+  // Shown as the typical wait (100% = 5s), stored as a factor on the curve.
+  const permissionsTypicalWait =
+    (assistantDraft.permissions.delayScale ?? 1) * AUTO_DELAY_TYPICAL_SEC;
+
+  /** A sub-option checkbox, right-aligned in the instructions row. */
+  const assistantOption = (
+    text: string,
+    checked: boolean,
+    onChange: (v: boolean) => void,
+    title?: string,
+  ) => (
+    <label className="assistant-opt" title={title}>
+      {text}
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    </label>
+  );
 
   /** The instructions box shared by every section. */
   const assistantInstructions = (
@@ -716,12 +747,12 @@ function Workspace({
         >
           {label}
         </label>
-        {extra}
+        {extra && <div className="assistant-field-extra">{extra}</div>}
       </div>
       <textarea
         id={`assistant-instructions-${key}`}
         className="assistant-instructions"
-        rows={3}
+        rows={2}
         placeholder={placeholder}
         value={assistantDraft[key].instructions}
         onChange={(e) =>
@@ -1402,102 +1433,107 @@ function Workspace({
                       assistantInstructions(
                         "permissions",
                         "e.g. only allow bash calls for git tooling",
-                        /* Shortcut for the blanket-accept instruction; ticking it
-                           just writes the phrase, so typing it works too. */
-                        <label
-                          className="assistant-check assistant-allow-all"
-                          title="Accept every permission request without consulting the LLM"
-                        >
-                          allow everything
-                          <input
-                            type="checkbox"
-                            checked={isAllowEverything(
+                        <>
+                          {/* Scales the whole grace-window curve; shown as the
+                              typical card's wait. Debounced: a drag fires per
+                              step. */}
+                          <label
+                            className="assistant-opt"
+                            title="How long a typical auto-accept waits for you to step in — small requests wait less, big ones more. 0s applies at once."
+                          >
+                            wait
+                            <input
+                              type="range"
+                              className="assistant-range"
+                              min={0}
+                              max={AUTO_DELAY_TYPICAL_SEC * AUTO_DELAY_MAX_SCALE}
+                              step={0.5}
+                              value={permissionsTypicalWait}
+                              onChange={(e) =>
+                                patchSection(
+                                  "permissions",
+                                  {
+                                    delayScale:
+                                      Number(e.target.value) /
+                                      AUTO_DELAY_TYPICAL_SEC,
+                                  },
+                                  true,
+                                )
+                              }
+                            />
+                            <span className="assistant-range-value">
+                              {permissionsTypicalWait}s
+                            </span>
+                          </label>
+                          {/* Shortcut for the blanket-accept instruction; ticking
+                              it just writes the phrase, so typing it works too. */}
+                          {assistantOption(
+                            "allow everything",
+                            isAllowEverything(
                               assistantDraft.permissions.instructions,
-                            )}
-                            onChange={(e) =>
+                            ),
+                            (v) =>
                               patchSection("permissions", {
-                                instructions: e.target.checked
-                                  ? ALLOW_EVERYTHING
-                                  : "",
-                              })
-                            }
-                          />
-                        </label>,
+                                instructions: v ? ALLOW_EVERYTHING : "",
+                              }),
+                            "Accept every permission request without consulting the LLM",
+                          )}
+                        </>,
                       ),
                     )}
                     {assistantSection(
                       "questions",
                       "Questions assistant",
-                      <>
-                        {assistantInstructions(
-                          "questions",
-                          "e.g. always prefer the option that adds tests",
-                        )}
-                        <label className="assistant-check">
-                          <input
-                            type="checkbox"
-                            checked={assistantDraft.questions.onlyIfSure}
-                            onChange={(e) =>
-                              patchSection("questions", {
-                                onlyIfSure: e.target.checked,
-                              })
-                            }
-                          />
-                          only answer if sure
-                        </label>
-                      </>,
+                      assistantInstructions(
+                        "questions",
+                        "e.g. always prefer the option that adds tests",
+                        assistantOption(
+                          "only if sure",
+                          assistantDraft.questions.onlyIfSure,
+                          (v) => patchSection("questions", { onlyIfSure: v }),
+                          "Leave the question for you unless the answer is clear",
+                        ),
+                      ),
                     )}
                     {assistantSection(
                       "autoPr",
                       "Auto PR",
-                      <>
-                        {assistantInstructions(
-                          "autoPr",
-                          "e.g. target the develop branch, prefix the title with the ticket id",
-                        )}
-                        <label className="assistant-check">
-                          <input
-                            type="checkbox"
-                            checked={assistantDraft.autoPr.autoMerge}
-                            onChange={(e) =>
-                              patchSection("autoPr", {
-                                autoMerge: e.target.checked,
-                              })
-                            }
-                          />
-                          auto merge
-                        </label>
-                        <button
-                          className="assistant-run"
-                          onClick={() => {
-                            if (activeSessionId === null) return;
-                            // Flush first: the backend runs against the SAVED
-                            // settings, so a just-typed instruction would be lost.
-                            flushAssistant();
-                            client.chatAction(activeSessionId, {
-                              type: "run-auto-pr",
-                            });
-                            setAssistantDialogOpen(false);
-                          }}
-                        >
-                          Run now
-                        </button>
-                      </>,
+                      assistantInstructions(
+                        "autoPr",
+                        "e.g. target the develop branch, prefix the title with the ticket id",
+                        assistantOption(
+                          "auto merge",
+                          assistantDraft.autoPr.autoMerge,
+                          (v) => patchSection("autoPr", { autoMerge: v }),
+                          "Squash-merge the PR and return to the main branch",
+                        ),
+                      ),
+                      <button
+                        className="assistant-run"
+                        onClick={() => {
+                          if (activeSessionId === null) return;
+                          // Flush first: the backend runs against the SAVED
+                          // settings, so a just-typed instruction would be lost.
+                          flushAssistant();
+                          client.chatAction(activeSessionId, {
+                            type: "run-auto-pr",
+                          });
+                          setAssistantDialogOpen(false);
+                        }}
+                      >
+                        Run now
+                      </button>,
                     )}
                     {assistantSection(
                       "continuity",
                       "Continuity mode",
-                      <>
-                        <div className="assistant-field">
-                          <label
-                            className="assistant-field-label"
-                            htmlFor="assistant-new-session"
-                          >
-                            Start new session
-                          </label>
-                          <div className="assistant-select">
+                      assistantInstructions(
+                        "continuity",
+                        "e.g. pick the next task from TODO.md, plan it thoroughly, then implement it",
+                        <label className="assistant-opt">
+                          new session
+                          <span className="assistant-select">
                             <select
-                              id="assistant-new-session"
                               value={assistantDraft.continuity.newSession}
                               onChange={(e) =>
                                 patchSection("continuity", {
@@ -1506,19 +1542,14 @@ function Workspace({
                                 })
                               }
                             >
-                              <option value="never">Never</option>
-                              <option value="after-pr">After PR</option>
-                              <option value="always">Always</option>
+                              <option value="never">never</option>
+                              <option value="after-pr">after PR</option>
+                              <option value="always">always</option>
                             </select>
-                          </div>
-                        </div>
-                        {assistantInstructions(
-                          "continuity",
-                          "e.g. pick the next task from TODO.md, plan it thoroughly, then implement it",
-                          undefined,
-                          "Prompt instructions",
-                        )}
-                      </>,
+                          </span>
+                        </label>,
+                        "Prompt instructions",
+                      ),
                     )}
                   </div>
                 </div>

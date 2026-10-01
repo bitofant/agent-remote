@@ -648,7 +648,10 @@ export interface AssistantSettings {
    * client, so it can't drift from the checklist. */
   enabled: boolean;
   /** Auto-answer tool permission prompts (`select`/`confirm`). */
-  permissions: AssistantCapability;
+  permissions: AssistantCapability & {
+    /** Factor (0–2) on the whole auto-accept grace-window curve; absent → 1. */
+    delayScale?: number;
+  };
   /** Auto-answer AskUserQuestion dialogs (`questions`). */
   questions: AssistantCapability & {
     /** Abstain unless the right option is unambiguous. */

@@ -20,12 +20,7 @@ import type {
   ChatUiRequest,
 } from "../shared/protocol.js";
 import { evaluate, llmStatus } from "./llm.js";
-import { isAllowEverything } from "../shared/chat.js";
-
-// Same grace-delay curve the UI used: 2s (trivial card) … 10s (a screenful),
-// scaled by how much there is to review — the window in which a connected human
-// can still take over before the assistant applies its verdict.
-const AUTO_ACTION_REF_CHARS = 681;
+import { autoActionDelayMs, isAllowEverything } from "../shared/chat.js";
 
 // Trace text for blanket-accept (no LLM was queried, but the transcript still
 // shows an auditable bubble per auto-acceptance).
@@ -33,11 +28,6 @@ const ALLOW_EVERYTHING_REASON = '"allow everything" mode';
 const ALLOW_EVERYTHING_PROMPT =
   'No LLM was consulted: assistant instructions are "allow everything", so every permission request is accepted automatically.';
 const ALLOW_EVERYTHING_RESPONSE = '{"allow": true}';
-
-function autoActionDelayMs(chars: number): number {
-  const ratio = Math.min(1, chars / AUTO_ACTION_REF_CHARS);
-  return Math.round((2 + 8 * ratio) * 1000);
-}
 
 function requestContentChars(req: ChatUiRequest): number {
   if (req.kind === "questions") return JSON.stringify(req.questions ?? []).length;
@@ -135,7 +125,12 @@ export function attachAssistant(manager: SessionManager): () => void {
       if (!want) return;
 
       handled.add(req.id);
-      const delayMs = autoActionDelayMs(requestContentChars(req));
+      // Grace window scales with card size; permission cards honour the
+      // user's scale, questions keep the default.
+      const delayMs = autoActionDelayMs(
+        requestContentChars(req),
+        isPermission ? settings.permissions.delayScale : undefined,
+      );
 
       // Broadcast a verdict and schedule its application after the grace window
       // (shared by the LLM path and blanket-accept).

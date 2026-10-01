@@ -48,6 +48,25 @@ export function isAllowEverything(instructions: string | undefined): boolean {
   );
 }
 
+/** Auto-accept grace window: 2s (trivial card) … 10s (a screenful) — the time
+ * a watching human gets to take over — times a user-set scale
+ * (`permissions.delayScale`, 0–2). Scales the whole curve, floor included;
+ * clamped here since it's client-set. */
+export const AUTO_DELAY_MAX_SCALE = 2;
+/** What the UI shows as the 100% wait: roughly a typical permission card's,
+ * not the cap. Display anchor only — the curve below is what's applied. */
+export const AUTO_DELAY_TYPICAL_SEC = 5;
+/** Content size that earns the full window (~a screenful of tool args). */
+const AUTO_ACTION_REF_CHARS = 681;
+
+export function autoActionDelayMs(chars: number, scale?: number): number {
+  const k = Number.isFinite(scale)
+    ? Math.min(AUTO_DELAY_MAX_SCALE, Math.max(0, scale!))
+    : 1;
+  const ratio = Math.min(1, Math.max(0, chars) / AUTO_ACTION_REF_CHARS);
+  return Math.round((2 + 8 * ratio) * k * 1000);
+}
+
 /** The master switch is derived, never stored independently: AI mode is on iff
  * some capability is. The manager recomputes it on every `set-assistant` so a
  * client can't desync it from the checklist. */
