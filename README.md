@@ -76,12 +76,15 @@ Planned:
 ```bash
 npm install
 ./config-gen.sh      # generates config.json (gitignored)
+npm run add-user     # creates a login and enables it in config.json
 npm run dev          # single-port dev server with hot reload
 ```
 
 Then open the printed local URL (default <http://localhost:4000>) in your
-browser. The app is login-gated — create an account on first visit, sign in,
-and launch a session from the sidebar.
+browser. The app is login-gated — sign in with the account from `npm run add-user`
+and launch a session from the sidebar. Web registration is closed by default
+(`"registration": "open"` in `config.json` re-enables it); login attempts are
+rate-limited per IP and per username.
 
 For a production run:
 

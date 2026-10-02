@@ -41,5 +41,9 @@
       "inputPerM": 3,
       "outputPerM": 15
     }
-  }
+  },
+  "users": [
+    "alice"
+  ],
+  "registration": "closed"
 }

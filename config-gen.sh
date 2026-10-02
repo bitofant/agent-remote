@@ -93,11 +93,17 @@ AUTOPR_HARNESS="$(ask "Auto-PR: harness that opens the PR (claude|pi|…)" "pi")
 AUTOPR_INSTRUCTIONS="$(ask "  Instructions sent to it (slash command or text)" "/pr")"
 
 # --- users -----------------------------------------------------------------
-# Enabled usernames. Registering an account is allowed for anyone, but it stays
-# unusable until its name appears here.
+# Enabled usernames. Accounts are normally created with `npm run add-user`,
+# which also adds the name here. Web registration is closed unless opened below
+# (and even then an account stays unusable until its name appears here).
 
 echo
-USERS_RAW="$(ask "Enabled usernames (comma-separated)" "")"
+USERS_RAW="$(ask "Enabled usernames (comma-separated; npm run add-user also adds them)" "")"
+if [ "$(ask_yn "Allow open web registration? (not recommended)" "n")" = "true" ]; then
+  REGISTRATION="open"
+else
+  REGISTRATION="closed"
+fi
 USERS_JSON=""
 IFS=',' read -ra _users <<< "$USERS_RAW"
 for u in "${_users[@]}"; do
@@ -134,9 +140,11 @@ cat > "$CONFIG_FILE" <<EOF
     "harness": "$(json_escape "$AUTOPR_HARNESS")",
     "instructions": "$(json_escape "$AUTOPR_INSTRUCTIONS")"
   },
-  "users": [$USERS_JSON]
+  "users": [$USERS_JSON],
+  "registration": "$REGISTRATION"
 }
 EOF
 
 echo
 echo "Wrote $CONFIG_FILE."
+echo "Create a login with: npm run add-user"

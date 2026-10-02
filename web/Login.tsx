@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { login, register } from "./auth";
+import { useEffect, useState } from "react";
+import { fetchRegistration, login, register } from "./auth";
 
 type Mode = "login" | "register";
 
@@ -11,6 +11,11 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [canRegister, setCanRegister] = useState(false);
+
+  useEffect(() => {
+    void fetchRegistration().then((r) => setCanRegister(r === "open"));
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,22 +55,24 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
     <div className="login">
       <form className="login-card" onSubmit={submit}>
         <h1>agent-remote</h1>
-        <div className="login-tabs">
-          <button
-            type="button"
-            className={mode === "login" ? "active" : ""}
-            onClick={() => switchMode("login")}
-          >
-            Log in
-          </button>
-          <button
-            type="button"
-            className={mode === "register" ? "active" : ""}
-            onClick={() => switchMode("register")}
-          >
-            Register
-          </button>
-        </div>
+        {canRegister && (
+          <div className="login-tabs">
+            <button
+              type="button"
+              className={mode === "login" ? "active" : ""}
+              onClick={() => switchMode("login")}
+            >
+              Log in
+            </button>
+            <button
+              type="button"
+              className={mode === "register" ? "active" : ""}
+              onClick={() => switchMode("register")}
+            >
+              Register
+            </button>
+          </div>
+        )}
 
         <label className="field-label">Username</label>
         <input

@@ -25,6 +25,17 @@ export async function fetchMe(): Promise<string | null> {
   return typeof data.username === "string" ? data.username : null;
 }
 
+/** Whether web signup is offered; "closed" on any failure (the safe reading). */
+export async function fetchRegistration(): Promise<"open" | "closed"> {
+  try {
+    const res = await fetch("/api/auth-info");
+    const data = await res.json();
+    return data.registration === "open" ? "open" : "closed";
+  } catch {
+    return "closed";
+  }
+}
+
 export function login(username: string, password: string): Promise<AuthResult> {
   return postAuth("/api/login", { username, password });
 }

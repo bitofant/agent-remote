@@ -10,6 +10,7 @@
     "build": "vite build",
     "start": "tsx server/index.ts",
     "chat-log-report": "tsx scripts/chat-log-report.ts",
+    "add-user": "tsx scripts/add-user.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
