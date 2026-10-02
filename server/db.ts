@@ -455,6 +455,21 @@ export function deleteAuthSession(token: string): void {
   deleteAuthSessionStmt.run(token);
 }
 
+const setPasswordStmt = db.prepare(
+  "UPDATE users SET password_hash = ? WHERE username = ?",
+);
+const deleteUserSessionsStmt = db.prepare(
+  "DELETE FROM auth_sessions WHERE username = ?",
+);
+
+/** Replace a password and log that user out everywhere. */
+export function setUserPassword(username: string, passwordHash: string): void {
+  db.transaction(() => {
+    setPasswordStmt.run(passwordHash, username);
+    deleteUserSessionsStmt.run(username);
+  })();
+}
+
 // --- uploads (image attachments) -------------------------------------------
 
 export interface UploadRow {
