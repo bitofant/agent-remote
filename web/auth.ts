@@ -50,3 +50,10 @@ export function register(
 export async function logout(): Promise<void> {
   await fetch("/api/logout", { method: "POST" });
 }
+
+export function changePassword(
+  current: string,
+  next: string,
+): Promise<AuthResult> {
+  return postAuth("/api/change-password", { current, next });
+}

@@ -7,6 +7,7 @@ import {
   deleteAuthSession,
   getAuthSession,
   getUser,
+  setUserPassword,
 } from "./db.js";
 import { hashPassword, verifyPassword } from "./password.js";
 import { clientIp, FailureLimiter } from "./rateLimit.js";
@@ -258,6 +259,60 @@ export async function handleAuthRoute(
       res,
       200,
       { username: creds.username },
+      { "set-cookie": sessionCookie(req, token, SESSION_TTL_MS / 1000) },
+    );
+    return true;
+  }
+
+  if (req.method === "POST" && url === "/api/change-password") {
+    const username = authedUser(req, config);
+    if (!username) {
+      sendJson(res, 401, { message: "Not logged in." });
+      return true;
+    }
+    const data = (await readJsonBody(req).catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    const current = data?.current;
+    const next = data?.next;
+    if (
+      typeof current !== "string" ||
+      typeof next !== "string" ||
+      !current ||
+      !next ||
+      current.length > MAX_FIELD_LEN ||
+      next.length > MAX_FIELD_LEN
+    ) {
+      sendJson(res, 400, { message: "Current and new password are required." });
+      return true;
+    }
+    // Same limiters as login: a stolen cookie mustn't make this a guessing oracle.
+    const ip = clientIp(req);
+    const wait = Math.max(
+      loginByIp.retryAfterMs(ip),
+      loginByUser.retryAfterMs(username),
+    );
+    if (wait > 0) {
+      tooMany(res, wait);
+      return true;
+    }
+    loginByIp.fail(ip);
+    loginByUser.fail(username);
+    if (!(await verifyPassword(current, getUser(username)?.passwordHash))) {
+      sendJson(res, 401, { message: "Current password is incorrect." });
+      return true;
+    }
+    loginByIp.succeed(ip);
+    loginByUser.succeed(username);
+    // Logs out every session (incl. this one), then re-issues this one's.
+    setUserPassword(username, await hashPassword(next));
+    const token = randomBytes(32).toString("hex");
+    createAuthSession(token, username, Date.now() + SESSION_TTL_MS);
+    sendJson(
+      res,
+      200,
+      { message: "Password changed. Other devices have been logged out." },
       { "set-cookie": sessionCookie(req, token, SESSION_TTL_MS / 1000) },
     );
     return true;

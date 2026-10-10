@@ -102,18 +102,81 @@ body {
   gap: 12px;
 }
 
-.logout-button {
+.settings {
+  position: relative;
+}
+
+.settings-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   background: transparent;
   border-radius: var(--r-md);
   color: var(--muted);
-  font-size: 11px;
-  padding: 4px 8px;
   cursor: pointer;
 }
 
-.logout-button:hover {
+.settings-button:hover,
+.settings-button[aria-expanded="true"] {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 10%, var(--raised));
+}
+
+.settings-button:focus-visible,
+.settings-menu button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Floats over the --panel sidebar, so it rises to --raised. */
+.settings-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  padding: 4px;
+  border-radius: var(--r-lg);
+  background: var(--raised);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-user {
+  padding: 6px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-menu button {
+  text-align: left;
+  padding: 7px 8px;
+  background: transparent;
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-menu button:hover {
+  background: color-mix(in srgb, var(--accent) 15%, var(--raised));
+}
+
+.settings-dialog {
+  max-width: 360px;
+}
+
+.settings-dialog-body {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
 }
 
 /* --- login / register gate ----------------------------------------------- */

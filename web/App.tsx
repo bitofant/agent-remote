@@ -46,6 +46,7 @@ import { CommandBuilder } from "./CommandBuilder";
 import { FolderPicker } from "./FolderPicker";
 import { Login } from "./Login";
 import { fetchMe, logout } from "./auth";
+import { ChangePasswordDialog, SettingsMenu } from "./Settings";
 import { displayPath, folderName } from "./paths";
 import { relativeTime } from "./time";
 
@@ -300,6 +301,7 @@ function Workspace({
   );
   // Off-canvas sidebar drawer (mobile only; ignored on desktop via CSS).
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   // System state page. Hash-gated like the theme editor (this app has no
   // router), so a reload keeps it — deliberately NOT in the server-persisted
   // ViewState, which would hide the folder you were working in on other devices.
@@ -806,7 +808,8 @@ function Workspace({
       resumeDialogOpen ||
       assistantDialogOpen ||
       selectorOpen ||
-      folderPickerOpen
+      folderPickerOpen ||
+      passwordDialogOpen
     )
       return;
     const onKey = (e: KeyboardEvent) => {
@@ -825,6 +828,7 @@ function Workspace({
     assistantDialogOpen,
     selectorOpen,
     folderPickerOpen,
+    passwordDialogOpen,
   ]);
 
   return (
@@ -850,13 +854,14 @@ function Workspace({
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
           <h1>agent-remote</h1>
-          <button
-            className="logout-button"
-            onClick={handleLogout}
-            title={`Log out ${username}`}
-          >
-            Log out
-          </button>
+          <SettingsMenu
+            username={username}
+            onChangePassword={() => {
+              setPasswordDialogOpen(true);
+              setSidebarOpen(false);
+            }}
+            onLogout={handleLogout}
+          />
         </div>
 
         {/* Above Folders: it's about the box, not about any one project. */}
@@ -1564,6 +1569,12 @@ function Workspace({
           </Suspense>
         )}
       </main>
+      {passwordDialogOpen && (
+        <ChangePasswordDialog
+          username={username}
+          onClose={() => setPasswordDialogOpen(false)}
+        />
+      )}
       {/* App-level, not inside <main>: adding a folder must work with none open. */}
       {folderPickerOpen && (
         <FolderPicker
