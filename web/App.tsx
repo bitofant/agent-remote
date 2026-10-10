@@ -46,7 +46,7 @@ import { CommandBuilder } from "./CommandBuilder";
 import { FolderPicker } from "./FolderPicker";
 import { Login } from "./Login";
 import { fetchMe, logout } from "./auth";
-import { ChangePasswordDialog, SettingsMenu } from "./Settings";
+import { SettingsButton, SettingsPage } from "./Settings";
 import { displayPath, folderName } from "./paths";
 import { relativeTime } from "./time";
 
@@ -66,6 +66,14 @@ interface EditorTab {
 // Must match `emptyChatState()`: every capability starts off (so the derived
 // master switch starts off too), with their sub-options pre-set to what a user
 // who ticks one usually wants — blanket-accept permissions, auto-merge for PRs.
+type Page = "system" | "settings";
+const pageFromHash = (): Page | null =>
+  window.location.hash === "#system"
+    ? "system"
+    : window.location.hash === "#settings"
+      ? "settings"
+      : null;
+
 const DEFAULT_ASSISTANT: AssistantSettings = {
   enabled: false,
   permissions: { enabled: false, instructions: ALLOW_EVERYTHING },
@@ -301,13 +309,12 @@ function Workspace({
   );
   // Off-canvas sidebar drawer (mobile only; ignored on desktop via CSS).
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
-  // System state page. Hash-gated like the theme editor (this app has no
-  // router), so a reload keeps it — deliberately NOT in the server-persisted
-  // ViewState, which would hide the folder you were working in on other devices.
-  const [systemOpen, setSystemOpen] = useState(
-    () => window.location.hash === "#system"
-  );
+  // Folder-independent pages (System state, Settings). Hash-gated like the
+  // theme editor (this app has no router), so a reload keeps it — deliberately
+  // NOT in the server-persisted ViewState, which would hide the folder you were
+  // working in on other devices.
+  const [page, setPage] = useState<Page | null>(() => pageFromHash());
+  const systemOpen = page === "system";
   const keyboard = useKeyboard();
   const [ctrlMode, setCtrlMode] = useState<CtrlMode>("off");
   const [keyGroup, setKeyGroup] = useState<KeyGroup>("keys");
@@ -498,11 +505,11 @@ function Workspace({
   // (not pushState): the page is a toggle, not a history entry, and it must not
   // fire hashchange back at useThemeEditorOpen.
   useEffect(() => {
-    const want = systemOpen ? "#system" : "";
+    const want = page ? `#${page}` : "";
     if (window.location.hash === "#theme") return; // theme editor owns the hash
     if (window.location.hash === want) return;
     window.history.replaceState(null, "", want || window.location.pathname);
-  }, [systemOpen]);
+  }, [page]);
 
   const openFolder = (path: string) => {
     // Viewing doesn't reorder the list — recency is driven by input activity
@@ -510,8 +517,8 @@ function Workspace({
     setActiveFolder(path);
     setSelectorOpen(false);
     setSidebarOpen(false);
-    // Picking a folder leaves the system page: one way in, one way out.
-    setSystemOpen(false);
+    // Picking a folder leaves the system/settings page: one way in, one way out.
+    setPage(null);
   };
 
   const submitNewFolder = (path: string) => {
@@ -808,8 +815,7 @@ function Workspace({
       resumeDialogOpen ||
       assistantDialogOpen ||
       selectorOpen ||
-      folderPickerOpen ||
-      passwordDialogOpen
+      folderPickerOpen
     )
       return;
     const onKey = (e: KeyboardEvent) => {
@@ -828,7 +834,6 @@ function Workspace({
     assistantDialogOpen,
     selectorOpen,
     folderPickerOpen,
-    passwordDialogOpen,
   ]);
 
   return (
@@ -854,13 +859,12 @@ function Workspace({
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="sidebar-header">
           <h1>agent-remote</h1>
-          <SettingsMenu
-            username={username}
-            onChangePassword={() => {
-              setPasswordDialogOpen(true);
+          <SettingsButton
+            active={page === "settings"}
+            onOpen={() => {
+              setPage("settings");
               setSidebarOpen(false);
             }}
-            onLogout={handleLogout}
           />
         </div>
 
@@ -870,7 +874,7 @@ function Workspace({
             <button
               className="folder-item-open"
               onClick={() => {
-                setSystemOpen(true);
+                setPage("system");
                 // As openFolder: on mobile the drawer covers what we opened.
                 setSidebarOpen(false);
               }}
@@ -902,7 +906,7 @@ function Workspace({
               // so the highlight has to exclude it explicitly — otherwise the
               // sidebar shows two active rows at once.
               className={`folder-item ${
-                f.path === activeFolder && !systemOpen ? "active" : ""
+                f.path === activeFolder && !page ? "active" : ""
               }`}
             >
               <button
@@ -932,7 +936,7 @@ function Workspace({
             live in these components. */}
         <div
           className="main-view"
-          style={systemOpen ? { display: "none" } : undefined}
+          style={page ? { display: "none" } : undefined}
         >
         {activeFolder === null ? (
           <div className="empty-state">
@@ -1568,13 +1572,10 @@ function Workspace({
             <SystemState />
           </Suspense>
         )}
+        {page === "settings" && (
+          <SettingsPage username={username} onLogout={handleLogout} />
+        )}
       </main>
-      {passwordDialogOpen && (
-        <ChangePasswordDialog
-          username={username}
-          onClose={() => setPasswordDialogOpen(false)}
-        />
-      )}
       {/* App-level, not inside <main>: adding a folder must work with none open. */}
       {folderPickerOpen && (
         <FolderPicker
